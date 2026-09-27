@@ -253,6 +253,30 @@ describe("dial reset when a detection result lands on step 2 (#2588)", () => {
     expect(await launch()).toEqual({ initialMarginBps: 1538, lpCollateral: "1000000000" });
   });
 
+  // Launch while the pool scan is still pending, the launch fails, then the scan
+  // lands and rebuilds the config at a higher tier. Retry resumes the same market,
+  // so it must send what the first attempt sent.
+  it("Retry resends the failed launch's values when the pools land in between", async () => {
+    const sentParams = (p: { initialMarginBps: number; tradingFeeBps: number; lpCollateral: bigint; initialPriceE6: bigint }) =>
+      ({ initialMarginBps: p.initialMarginBps, tradingFeeBps: p.tradingFeeBps, lpCollateral: String(p.lpCollateral), initialPriceE6: String(p.initialPriceE6) });
+    // The pool quotes a different price from the resolve route, so a price that
+    // moved between the attempts would show up too.
+    dexPairs = DEXSCREENER_BODY.pairs.map((p) => ({ ...p, priceUsd: "0.0131" }));
+    await paste();
+    gateResolve.release(); await flush();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /continue/i })); });
+    await waitFor(() => expect(onStep2()).toBe(true));
+    await act(async () => { fireEvent.mouseDown(launchBtn()); }); await flush();
+    const first = sentParams(create.mock.calls[0][0]);
+    expect(first).toMatchObject({ initialMarginBps: 2000, tradingFeeBps: 20, initialPriceE6: "12400" }); // low tier, resolve price
+    createState = { ...IDLE, step: 2, error: "blockhash expired", slabAddress: POOL };
+    view!.rerender(<CreateMarketWizard />); await flush();
+    gateDex.release(); await flush(); // medium tier: 1538 bps, 10 bps fee
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /retry step/i })); }); await flush();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(sentParams(create.mock.calls[1][0])).toEqual(first);
+  });
+
   // A new token resets both dials to its own defaults.
   it("Back and a new mint re-apply the defaults", async () => {
     await paste();

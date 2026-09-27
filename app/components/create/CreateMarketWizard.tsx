@@ -256,9 +256,18 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
     return () => { cancelled = true; };
   }, [publicKey, connection]);
 
+  // Once a launch has started (or failed, with Retry pending), Retry resumes the
+  // same market: InitMarket already fixed margin, fee and price on chain, and
+  // later steps reuse the wizard's fee, collateral and price. Detection landing
+  // in between must not move any of them. Nothing launches without a price, so
+  // freezing adminPrice here cannot bring back the #2552 hang. A ref rather than
+  // a dep, so the effect still re-runs on exactly config and adminPrice.
+  const launchInFlightRef = useRef(false);
+  launchInFlightRef.current = createState.loading || createState.step > 0 || !!createState.error;
+
   // Apply auto-detected defaults to the dials (fee, margin, collateral, price)
   useEffect(() => {
-    if (!quickLaunch.config) return;
+    if (!quickLaunch.config || launchInFlightRef.current) return;
     setWizard((prev) => ({
       ...prev,
       tradingFeeBps: quickLaunch.config!.tradingFeeBps,

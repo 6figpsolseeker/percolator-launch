@@ -53,6 +53,10 @@ interface WizardState {
   lpCollateral: string;
   insuranceAmount: string;
   adminPrice: string | null;
+  // #2588: set only by the user turning the dial. Detection that lands on step 2
+  // (resolve price, pool scan) never overwrites a dial the user set.
+  marginSetByUser: boolean;
+  lpSetByUser: boolean;
 }
 
 const DEFAULT_STATE: WizardState = {
@@ -72,6 +76,8 @@ const DEFAULT_STATE: WizardState = {
   lpCollateral: "",
   insuranceAmount: "100",
   adminPrice: null,
+  marginSetByUser: false,
+  lpSetByUser: false,
 };
 
 /**
@@ -143,6 +149,8 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
           tokenMeta: parsed.tokenMeta ?? null,
           // initialMint prop overrides persisted mint
           mintAddress: initialMint ?? parsed.mintAddress ?? "",
+          marginSetByUser: false,
+          lpSetByUser: false,
         };
       }
     } catch {
@@ -261,10 +269,10 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
       // raw 1000 or a plain floor of 1500 would display 6.5x while actually creating
       // a 6.67x market. Round-tripping bps → leverage → bps lands on 1538 bps, which
       // IS 6.5x. Same class of lie as the old "10x" readout; closed here.
-      initialMarginBps: leverageToMarginBps(
-        marginBpsToLeverage(quickLaunch.config!.initialMarginBps),
-      ),
-      lpCollateral: quickLaunch.config!.lpCollateral,
+      initialMarginBps: prev.marginSetByUser
+        ? prev.initialMarginBps
+        : leverageToMarginBps(marginBpsToLeverage(quickLaunch.config!.initialMarginBps)),
+      lpCollateral: prev.lpSetByUser ? prev.lpCollateral : quickLaunch.config!.lpCollateral,
       // Apply detected oracle price as adminPrice (used if oracle ends up admin)
       adminPrice: pickInitialPrice(prev.adminPrice, quickLaunch.adminPrice, quickLaunch.config?.initialPrice),
     }));
@@ -659,6 +667,8 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
       dexPool: null,
       oracleType: "admin",
       oracleFeed: "",
+      marginSetByUser: false,
+      lpSetByUser: false,
     }));
     // Reset network validation only on a genuine address change.
     setMintExistsOnNetwork(false);
@@ -691,11 +701,11 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
   }, []);
 
   const setInitialMarginBps = useCallback((bps: number) => {
-    setWizard((prev) => ({ ...prev, initialMarginBps: bps }));
+    setWizard((prev) => ({ ...prev, initialMarginBps: bps, marginSetByUser: true }));
   }, []);
 
   const setLpCollateral = useCallback((val: string) => {
-    setWizard((prev) => ({ ...prev, lpCollateral: val }));
+    setWizard((prev) => ({ ...prev, lpCollateral: val, lpSetByUser: true }));
   }, []);
 
   const setInsuranceAmount = useCallback((val: string) => {

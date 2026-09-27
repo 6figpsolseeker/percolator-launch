@@ -474,6 +474,53 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
         "cannot price it. A market launched now would never be listed or priced. " +
         "Pick a token that trades on a supported pool.");
 
+  /**
+   * The oracle fields the wizard must hold for the detected oracle. Written by
+   * applyOracleAndAdvance AND re-synced on step 2 (effect below): the resolve
+   * lookup routinely lands after the advance, and a one-time snapshot left the
+   * wizard on the "admin" placeholder while `registrable` above (which reads
+   * quickLaunch live) enabled the launch. That shipped pool-backed tokens as
+   * unpriced admin markets (#2582). One derivation, written in both places.
+   */
+  const detectedOracle = useMemo(() => {
+    switch (resolvedOracleType) {
+      case "pyth":
+        return { oracleType: "pyth" as const, oracleFeed: quickLaunch.pythFeedId! };
+      case "keeper":
+      case "hyperp_ema":
+        return {
+          oracleType: resolvedOracleType,
+          oracleFeed: quickLaunch.dexPoolAddress!,
+          dexPool: quickLaunch.poolInfo ?? null,
+        };
+      default:
+        return { oracleType: "admin" as const, oracleFeed: "" };
+    }
+  }, [resolvedOracleType, quickLaunch.pythFeedId, quickLaunch.dexPoolAddress, quickLaunch.poolInfo]);
+
+  // Once create() has started, the wizard's oracle fields describe the slab on
+  // chain and handleRetry must reuse them, so the sync stops.
+  const launchStarted = createState.loading || createState.step > 0 || !!createState.error;
+  // Shared by the sync and the launch gate so both compare the same fields.
+  // Comparing oracleType alone leaves a one-commit window where the type
+  // matches but the stored pool is stale.
+  const matchesDetected = useCallback(
+    (w: WizardState) =>
+      w.oracleType === detectedOracle.oracleType &&
+      w.oracleFeed === detectedOracle.oracleFeed &&
+      (!("dexPool" in detectedOracle) || w.dexPool === detectedOracle.dexPool),
+    [detectedOracle],
+  );
+  useEffect(() => {
+    if (wizard.step !== 2 || launchStarted || quickLaunch.oracleResolving) return;
+    setWizard((prev) => (matchesDetected(prev) ? prev : { ...prev, ...detectedOracle }));
+  }, [wizard.step, launchStarted, quickLaunch.oracleResolving, detectedOracle, matchesDetected]);
+
+  // Launch only with a SETTLED lookup that the wizard has actually applied.
+  // Not part of allValid: handleRetry must keep working off the slab's original
+  // config even if detection re-runs mid-flow.
+  const oracleSettled = !quickLaunch.oracleResolving && matchesDetected(wizard);
+
 
   const allValid =
     // Never let an unregistrable market reach the launch button.
@@ -484,9 +531,11 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
     (skipTokenBalanceCheck || (hasTokens && hasSufficientTokensForSeed)) &&
     (mockBypass || hasSufficientSol);
 
-  const launchDisabled = !allValid || !publicKey;
+  const launchDisabled = !allValid || !oracleSettled || !publicKey;
   const launchDisabledReason: string | undefined = !publicKey
     ? "Connect wallet"
+    : !oracleSettled
+      ? "Resolving price feed"
     : !registrable
       ? (notRegistrableReason ?? "This token cannot be priced")
     : !step1Valid
@@ -568,47 +617,16 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
   // captured the moment the user leaves the token step.
   const applyOracleAndAdvance = useCallback(() => {
     setCompletedSteps((prev) => new Set(prev).add(1));
-    setWizard((prev) => {
-      const base = { ...prev, step: 2 as WizardStep };
-      if (quickLaunch.oracleType === "pyth" && quickLaunch.pythFeedId) {
-        return {
-          ...base,
-          oracleType: "pyth" as const,
-          oracleFeed: quickLaunch.pythFeedId,
-          adminPrice: pickInitialPrice(prev.adminPrice, quickLaunch.adminPrice, quickLaunch.config?.initialPrice),
-        };
-      }
-      // PERC-470: Hyperp EMA — auto-detected DEX pool as oracle (mainnet only)
-      // On devnet: DEX pool detected → use keeper oracle instead (AUTH_MARK, keeper pushes from mainnet)
-      if (quickLaunch.oracleType === "hyperp_ema" && quickLaunch.dexPoolAddress) {
-        // Devnet playground: keeper oracle delegates oracle_authority to our keeper service
-        // which reads the mainnet DEX pool and pushes prices via PushAuthMark.
-        if (isDevnet) {
-          return {
-            ...base,
-            oracleType: "keeper" as const,
-            oracleFeed: quickLaunch.dexPoolAddress,
-            adminPrice: pickInitialPrice(prev.adminPrice, quickLaunch.adminPrice, quickLaunch.config?.initialPrice),
-            dexPool: quickLaunch.poolInfo ?? null,
-          };
-        }
-        return {
-          ...base,
-          oracleType: "hyperp_ema" as const,
-          oracleFeed: quickLaunch.dexPoolAddress,
-          adminPrice: pickInitialPrice(prev.adminPrice, quickLaunch.adminPrice, quickLaunch.config?.initialPrice),
-          dexPool: quickLaunch.poolInfo ?? null,
-        };
-      }
-      // Admin oracle — devnet-only or unknown token
-      return {
-        ...base,
-        oracleType: "admin" as const,
-        oracleFeed: "",
-        adminPrice: pickInitialPrice(prev.adminPrice, quickLaunch.adminPrice, quickLaunch.config?.initialPrice),
-      };
-    });
-  }, [quickLaunch, isDevnet]);
+    // PERC-470: a detected DEX pool maps to hyperp_ema on mainnet and to
+    // "keeper" on devnet (oracle_authority delegated to the keeper, which reads
+    // the mainnet pool and pushes via PushAuthMark). See detectedOracle.
+    setWizard((prev) => ({
+      ...prev,
+      ...detectedOracle,
+      step: 2 as WizardStep,
+      adminPrice: pickInitialPrice(prev.adminPrice, quickLaunch.adminPrice, quickLaunch.config?.initialPrice),
+    }));
+  }, [detectedOracle, quickLaunch.adminPrice, quickLaunch.config]);
 
   // Auto-advance: step 1 → step 2 the moment the token resolves and detection settles.
   // Only fires once per mount — a subsequent edit to the mint requires an explicit
@@ -704,7 +722,7 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
 
   // Launch market (or resume from a stuck slab when resumeFromStep is set)
   const handleLaunch = () => {
-    if (!allValid || !publicKey) return;
+    if (!allValid || !oracleSettled || !publicKey) return;
     const { oracleFeed, priceE6 } = getOracleFeedAndPrice();
     // PERC-470 security: block hyperp launch without valid DEX price
     if (wizard.oracleType === "hyperp_ema" && priceE6 === 0n) {
@@ -957,8 +975,9 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
   }
 
   // Pre-flight readouts for the Control Room panel
-  const oracleLabel =
-    wizard.oracleType === "pyth" && wizard.pythFeed
+  const oracleLabel = !oracleSettled
+    ? "Resolving…"
+    : wizard.oracleType === "pyth" && wizard.pythFeed
       ? wizard.pythFeed.name
       : wizard.oracleType === "hyperp_ema" && wizard.dexPool
         ? `${wizard.dexPool.pairLabel} (${wizard.dexPool.dexId})`

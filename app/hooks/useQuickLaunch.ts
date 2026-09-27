@@ -51,6 +51,13 @@ export interface QuickLaunchResult {
    * this flag lets the wizard explain WHICH of the two happened.
    */
   oracleResolveFailed: boolean;
+  /**
+   * True until the oracle lookup for THIS mint has settled (succeeded, failed,
+   * or can never start because token metadata failed). While true, `oracleType`
+   * is the "admin" placeholder, not a detection result, and must not be
+   * launched with. Bounded by the resolve fetch's 8s timeout.
+   */
+  oracleResolving: boolean;
 }
 
 /**
@@ -72,6 +79,10 @@ export function useQuickLaunch(mint: string | null): QuickLaunchResult {
   const [adminPrice, setAdminPrice] = useState<string | null>(null);
   const [dexPoolAddress, setDexPoolAddress] = useState<string | null>(null);
   const [oracleResolveFailed, setOracleResolveFailed] = useState(false);
+  // The mint whose oracle lookup has settled. Keyed by mint, not a boolean, so
+  // the render between a mint change and the effects that reset state already
+  // reads as "resolving" rather than as the previous mint's result.
+  const [oracleSettledFor, setOracleSettledFor] = useState<string | null>(null);
 
   // Oracle resolution: call /api/oracle/resolve/[mint] after token meta loads.
   // If Pyth feed found → pyth oracle; else → admin oracle with best available price.
@@ -81,6 +92,7 @@ export function useQuickLaunch(mint: string | null): QuickLaunchResult {
     setAdminPrice(null);
     setDexPoolAddress(null);
     setOracleResolveFailed(false);
+    setOracleSettledFor(null);
     if (!mint || mint.length < 32 || !tokenMeta) return;
 
     let cancelled = false;
@@ -133,11 +145,13 @@ export function useQuickLaunch(mint: string | null): QuickLaunchResult {
           setPythFeedId(null);
           setOracleResolveFailed(true);
         }
+        setOracleSettledFor(mint);
       } catch {
         if (!cancelled) {
           setOracleType("admin");
           setPythFeedId(null);
           setOracleResolveFailed(true);
+          setOracleSettledFor(mint);
         }
       }
     })();
@@ -163,7 +177,12 @@ export function useQuickLaunch(mint: string | null): QuickLaunchResult {
           setTokenMeta({ name: meta.name, symbol: meta.symbol, decimals: meta.decimals });
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Invalid mint");
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Invalid mint");
+          // No metadata means the oracle lookup never starts; don't report it
+          // as pending forever.
+          setOracleSettledFor(mint);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -268,5 +287,6 @@ export function useQuickLaunch(mint: string | null): QuickLaunchResult {
     adminPrice,
     dexPoolAddress,
     oracleResolveFailed,
+    oracleResolving: !!mint && mint.length >= 32 && oracleSettledFor !== mint,
   };
 }

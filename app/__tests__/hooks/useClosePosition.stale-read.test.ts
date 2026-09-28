@@ -53,6 +53,8 @@ vi.mock("@/lib/priceStore/priceStore", () => ({
 }));
 vi.mock("@/lib/mock-mode", () => ({ isMockMode: () => false }));
 vi.mock("@/lib/mock-trade-data", () => ({ isMockSlab: () => false }));
+// The close limit is built from the engine's effective_price, read fresh.
+vi.mock("@/lib/v18-wire", () => ({ fetchAssetEffectivePriceE6: async () => 81_170_000n }));
 vi.mock("@/lib/errorMessages", () => ({
   humanizeError: (m: string) => m,
   withTransientRetry: async (fn: () => Promise<unknown>) => fn(),

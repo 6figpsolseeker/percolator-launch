@@ -18,6 +18,9 @@ import { isMockSlab } from "@/lib/mock-trade-data";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
 import { invalidatePortfolio } from "@/lib/portfolio-invalidation";
 import { diagnoseTradeRejection } from "@/lib/tradeRejectDiagnosis";
+import { sanitizePriceE6 } from "@/lib/oraclePrice";
+import { fetchAssetEffectivePriceE6 } from "@/lib/v18-wire";
+import { computeLimitPriceE6 } from "@/lib/slippage";
 
 export interface ClosePositionResult {
   signature: string | null;
@@ -310,16 +313,24 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
           return { signature: null };
         }
 
-        // Read the current mark price NON-reactively, at call time — not via
-        // the useLivePrice() hook (same rationale as useTrade.ts: this hook
-        // is called from PositionPanel/ClosePositionModal at top level, so a
-        // reactive subscription here would re-render those components on
-        // every price tick just to source a value only used inside this
-        // callback). useTrade derives limit_price_e6 from livePriceE6 and
-        // throws SlippageError when the live mark is unavailable —
-        // short-circuit here so the user sees the real reason immediately.
-        const { priceE6: livePriceE6 } = getLivePriceSnapshot(slabAddress);
-        if (livePriceE6 == null) {
+        // The close's slippage limit is built from the engine's effective_price
+        // (lib/v18-wire.ts), read fresh at submit — the price the fill settles
+        // at and the matcher prices exec from. NOT the site feed: left to
+        // useTrade, a feed-derived limit was refused outright by its GH#2525
+        // gate once feed and chain disagreed >2%, and even ungated a short's
+        // close (buy at feed x 1.05) sat below the fill whenever the feed ran
+        // low, so it reverted. NOT markEwmaE6 either: that keeper-pushed mark
+        // can lead effective_price by far more than the band during a catch-up.
+        // Passing the limit explicitly skips useTrade's feed gate — correctly,
+        // it guards feed-derived limits. Started here so the RPC overlaps the
+        // caps reads below. A bad feed must never trap a user in a position.
+        const effectivePriceP = isV17Market
+          ? fetchAssetEffectivePriceE6(connection, new PublicKey(slabAddress)).catch(() => 0n)
+          : null;
+
+        // Legacy v12 keeps the feed-derived path, which throws SlippageError
+        // without a live mark — short-circuit so the user sees the real reason.
+        if (!isV17Market && getLivePriceSnapshot(slabAddress).priceE6 == null) {
           throw new Error(
             "Live mark price unavailable — wait for the price feed to reconnect, then try again.",
           );
@@ -371,11 +382,31 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
           }
         }
 
+        let closeLimitPriceE6: bigint | undefined;
+        if (effectivePriceP) {
+          const effectiveE6 = sanitizePriceE6(await effectivePriceP);
+          if (effectiveE6 === 0n) {
+            // Refuse rather than fall back to the feed: a feed-derived limit is
+            // exactly what reverts or gets gated when the feed is off.
+            throw new Error(
+              "Could not read this market's on-chain price to set a safe close limit. Please try again.",
+            );
+          }
+          closeLimitPriceE6 = computeLimitPriceE6({ markE6: effectiveE6, size: closeSize });
+        }
+
         // v17: pass lpIdx=0, userIdx=0 — useTrade v17 path ignores both and
         // resolves accountA via findV17Portfolio + accountB via GPA scan.
         // v12: pass the real lpIdx and userAccount.idx as before.
         const sig = await withTransientRetry(
-          async () => trade({ lpIdx, userIdx: userAccount.idx, size: closeSize, sizes: closeLegs }),
+          async () =>
+            trade({
+              lpIdx,
+              userIdx: userAccount.idx,
+              size: closeSize,
+              sizes: closeLegs,
+              ...(closeLimitPriceE6 !== undefined && { limitPriceE6: closeLimitPriceE6 }),
+            }),
           { maxRetries: 2, delayMs: 3000 },
         );
 

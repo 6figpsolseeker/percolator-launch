@@ -117,6 +117,24 @@ export function readAssetMarketId(slabData: Uint8Array, assetIndex = 0): bigint 
   return readU64LE(slabData, off);
 }
 
+/**
+ * AssetStateV16.effective_price (u64, e6, raw engine units — no `invert`). This
+ * is the price a trade settles at, and the matcher's exec price (which the
+ * user's limit is checked against) is derived from it — NOT the keeper-pushed
+ * markEwmaE6, which can lead it by a lot during a catch-up. Offset past
+ * market_id(8) + retired_slot(8) + lifecycle(1) + raw_oracle_target_price(8);
+ * same header layout lib/v17-adl.ts documents.
+ */
+const ASSET_EFFECTIVE_PRICE_REL = 25;
+
+export function readAssetEffectivePriceE6(slabData: Uint8Array, assetIndex = 0): bigint {
+  const off = assetProfileOff(assetIndex) + V17_ASSET_ORACLE_WRAPPER_LEN + ASSET_EFFECTIVE_PRICE_REL;
+  if (slabData.length < off + 8) {
+    throw new Error(`slab too short for AssetStateV16.effective_price @ ${off}`);
+  }
+  return readU64LE(slabData, off);
+}
+
 /** Live AssetControlSequencesV16 (oracle-observation nonce + authority-epoch CAS). */
 export function readAssetControlSeqs(slabData: Uint8Array, assetIndex = 0): AssetControlSequencesV17 {
   return parseAssetControlSequencesV17(slabData, assetProfileOff(assetIndex));
@@ -157,6 +175,14 @@ export async function fetchAssetMarketId(
   assetIndex = 0,
 ): Promise<bigint> {
   return readAssetMarketId(await fetchData(connection, slab), assetIndex);
+}
+
+export async function fetchAssetEffectivePriceE6(
+  connection: Connection,
+  slab: PublicKey,
+  assetIndex = 0,
+): Promise<bigint> {
+  return readAssetEffectivePriceE6(await fetchData(connection, slab), assetIndex);
 }
 
 export async function fetchAssetControlSeqs(

@@ -382,31 +382,40 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
           }
         }
 
-        let closeLimitPriceE6: bigint | undefined;
-        if (effectivePriceP) {
-          const effectiveE6 = sanitizePriceE6(await effectivePriceP);
+        // Refuse rather than fall back to the feed: a feed-derived limit is
+        // exactly what reverts or gets gated when the feed is off. Kept under
+        // 80 chars so humanizeError shows it whole.
+        const closeLimitFrom = async (priceP: Promise<bigint>): Promise<bigint> => {
+          const effectiveE6 = sanitizePriceE6(await priceP);
           if (effectiveE6 === 0n) {
-            // Refuse rather than fall back to the feed: a feed-derived limit is
-            // exactly what reverts or gets gated when the feed is off.
-            throw new Error(
-              "Could not read this market's on-chain price to set a safe close limit. Please try again.",
-            );
+            throw new Error("Could not read the on-chain price for a safe close limit. Please try again.");
           }
-          closeLimitPriceE6 = computeLimitPriceE6({ markE6: effectiveE6, size: closeSize });
-        }
+          return computeLimitPriceE6({ markE6: effectiveE6, size: closeSize });
+        };
+        // Attempt 1 uses the read started above. A retry (blockhash expiry /
+        // 429) can be a minute later, so it re-reads rather than reuse a limit
+        // the price may have moved past.
+        let closeLimitPriceE6 = effectivePriceP ? await closeLimitFrom(effectivePriceP) : undefined;
+        let attempt = 0;
 
         // v17: pass lpIdx=0, userIdx=0 — useTrade v17 path ignores both and
         // resolves accountA via findV17Portfolio + accountB via GPA scan.
         // v12: pass the real lpIdx and userAccount.idx as before.
         const sig = await withTransientRetry(
-          async () =>
-            trade({
+          async () => {
+            if (attempt++ > 0 && closeLimitPriceE6 !== undefined) {
+              closeLimitPriceE6 = await closeLimitFrom(
+                fetchAssetEffectivePriceE6(connection, new PublicKey(slabAddress)).catch(() => 0n),
+              );
+            }
+            return trade({
               lpIdx,
               userIdx: userAccount.idx,
               size: closeSize,
               sizes: closeLegs,
               ...(closeLimitPriceE6 !== undefined && { limitPriceE6: closeLimitPriceE6 }),
-            }),
+            });
+          },
           { maxRetries: 2, delayMs: 3000 },
         );
 

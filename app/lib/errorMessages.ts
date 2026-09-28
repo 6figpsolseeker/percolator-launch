@@ -391,6 +391,9 @@ export function humanizeError(rawMsg: string, context?: "trade"): string {
   if (rawMsg.includes("Insufficient SOL")) {
     return rawMsg; // Already a clear message from our pre-flight check
   }
+  if (rawMsg.includes("on-chain price for a safe close limit")) {
+    return rawMsg; // useClosePosition pre-flight refusal: no transaction was sent
+  }
   if (rawMsg.includes("insufficient funds") || rawMsg.includes("Insufficient")) {
     return "Insufficient balance for transaction fees. Ensure you have enough SOL for fees and enough tokens for the trade.";
   }

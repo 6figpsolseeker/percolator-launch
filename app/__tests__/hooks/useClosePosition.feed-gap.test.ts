@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   useSlabState: vi.fn(),
   useUserAccount: vi.fn(),
   sendTx: vi.fn(),
+  retryOnce: { on: false },
   isV17Account: vi.fn(),
   parsePortfolioV17: vi.fn(),
   deriveMatcherDelegate: vi.fn(),
@@ -54,7 +55,19 @@ vi.mock("@/lib/matcherCaps", () => ({
 }));
 vi.mock("@/lib/errorMessages", async () => {
   const actual = await vi.importActual<typeof import("@/lib/errorMessages")>("@/lib/errorMessages");
-  return { ...actual, withTransientRetry: async (op: () => Promise<unknown>) => op() };
+  // One retry on failure when a test asks for it, like the real helper on a
+  // transient error; otherwise a single attempt.
+  return {
+    ...actual,
+    withTransientRetry: async (op: () => Promise<unknown>) => {
+      try {
+        return await op();
+      } catch (e) {
+        if (!mocks.retryOnce.on) throw e;
+        return op();
+      }
+    },
+  };
 });
 vi.mock("@/lib/tradeRejectDiagnosis", () => ({ diagnoseTradeRejection: vi.fn(async () => null) }));
 vi.mock("@/lib/v18-wire", async () => {
@@ -154,7 +167,9 @@ async function close(posQ: bigint) {
       .fn()
       // useClosePosition's fresh portfolio read
       .mockResolvedValueOnce([{ pubkey: takerPortfolio, account: { data: Buffer.from([1]) } }])
-      // useTrade: LP scan, then taker scan
+      // useTrade: LP scan, then taker scan (twice, for a retried attempt)
+      .mockResolvedValueOnce([{ pubkey: lpPortfolioPk, account: { data: lpPortfolioData() } }])
+      .mockResolvedValueOnce([{ pubkey: takerPortfolio, account: { data: Buffer.from([1]) } }])
       .mockResolvedValueOnce([{ pubkey: lpPortfolioPk, account: { data: lpPortfolioData() } }])
       .mockResolvedValueOnce([{ pubkey: takerPortfolio, account: { data: Buffer.from([1]) } }]),
     getAccountInfo: vi.fn(async (pk: PublicKey) =>
@@ -164,15 +179,17 @@ async function close(posQ: bigint) {
   mocks.useConnectionCompat.mockReturnValue({ connection });
   const { result, unmount } = renderHook(() => useClosePosition(slab));
   let error: unknown = null;
+  let shown: string | null = null;
   try {
     await act(async () => {
       await result.current.closePosition(100).catch((e) => { error = e; });
     });
+    shown = result.current.error; // what the user actually sees
   } finally {
     unmount();
   }
   const call = mocks.encodeTradeCpi.mock.calls[0]?.[0] as { limitPrice: string; sizeQ: string } | undefined;
-  return { error, limitE6: call ? BigInt(call.limitPrice) : null, sizeQ: call?.sizeQ };
+  return { error, shown, limitE6: call ? BigInt(call.limitPrice) : null, sizeQ: call?.sizeQ };
 }
 
 const CHAIN = 1_000_000n; // $1.00 on-chain (mark and effective agree)
@@ -184,6 +201,7 @@ describe("closing while the feed is 17% off the chain", () => {
     mocks.isV17Account.mockReturnValue(true);
     mocks.deriveMatcherDelegate.mockReturnValue([key(48), 254]);
     mocks.sendTx.mockResolvedValue({ signature: "sig" });
+    mocks.retryOnce.on = false;
     mocks.useWalletCompat.mockReturnValue({ publicKey: walletPk, connected: true });
     mocks.useUserAccount.mockReturnValue({ idx: 0, account: { positionSize: 0n } });
     setMark(CHAIN);
@@ -258,15 +276,32 @@ describe("closing while the feed is 17% off the chain", () => {
 
   it("effective price unreadable: refuses with a clear message, never falls back to the feed", async () => {
     effectiveE6 = null;
-    const { error } = await close(-5_000_000n);
-    expect(String(error)).toMatch(/on-chain price to set a safe close limit/);
+    const { error, shown } = await close(-5_000_000n);
+    expect(String(error)).toMatch(/on-chain price for a safe close limit/);
+    // The UI shows the whole sentence, not a truncated "Transaction failed: ..." tail.
+    expect(shown).toBe("Could not read the on-chain price for a safe close limit. Please try again.");
     expect(mocks.sendTx).not.toHaveBeenCalled();
   });
 
   it("effective price zero: same refusal", async () => {
     effectiveE6 = 0n;
-    const { error } = await close(5_000_000n);
-    expect(String(error)).toMatch(/on-chain price to set a safe close limit/);
+    const { error, shown } = await close(5_000_000n);
+    expect(String(error)).toMatch(/on-chain price for a safe close limit/);
+    expect(shown).toBe("Could not read the on-chain price for a safe close limit. Please try again.");
     expect(mocks.sendTx).not.toHaveBeenCalled();
+  });
+
+  it("retry after a transient failure re-reads the price instead of reusing the limit", async () => {
+    mocks.retryOnce.on = true;
+    mocks.sendTx
+      .mockImplementationOnce(async () => {
+        effectiveE6 = 1_100_000n; // price moves +10% before the retry
+        throw new Error("Blockhash not found");
+      })
+      .mockResolvedValue({ signature: "sig" });
+    const { error } = await close(-5_000_000n);
+    expect(error).toBeNull();
+    const limits = mocks.encodeTradeCpi.mock.calls.map((c) => BigInt((c[0] as { limitPrice: string }).limitPrice));
+    expect(limits).toEqual([1_050_000n, 1_155_000n]);
   });
 });

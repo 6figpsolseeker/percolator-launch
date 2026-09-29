@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
-import { SUPPORTED_DEX_IDS } from "@/lib/dex-constants";
+import { SUPPORTED_DEX_IDS, USD_PRICEABLE_QUOTE_MINTS } from "@/lib/dex-constants";
 import { BoundedTtlCache } from "@/lib/bounded-ttl-cache";
 
 export const dynamic = "force-dynamic";
@@ -162,6 +162,7 @@ async function fetchDexScreenerInfo(
     const pairs = json.pairs as Array<{
       priceUsd?: string;
       baseToken?: { symbol?: string };
+      quoteToken?: { address?: string };
       liquidity?: { usd?: number };
       chainId?: string;
       dexId?: string;
@@ -183,8 +184,13 @@ async function fetchDexScreenerInfo(
     // *supported* DEX — not just the most liquid pair overall. The best overall pair
     // may be on Orca/other unsupported venues, causing poolAddress to be incorrectly
     // null even when a valid PumpSwap/Raydium/Meteora pool exists lower in the list.
+    // Only a WSOL- or USD-quoted pool can be priced in USD (COLLECT's deepest
+    // pool is quoted in CARDS; its SOL pool is the one to launch on).
     const bestSupported = solPairs.find(
-      (p) => SUPPORTED_DEX_IDS.has(p.dexId?.toLowerCase() ?? "") && p.pairAddress
+      (p) =>
+        SUPPORTED_DEX_IDS.has(p.dexId?.toLowerCase() ?? "") &&
+        p.pairAddress &&
+        USD_PRICEABLE_QUOTE_MINTS.has(p.quoteToken?.address ?? "")
     ) ?? null;
     const dexId = bestSupported?.dexId?.toLowerCase() ?? null;
     let poolAddress: string | null = bestSupported?.pairAddress ?? null;

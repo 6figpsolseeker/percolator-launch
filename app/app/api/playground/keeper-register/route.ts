@@ -100,10 +100,11 @@ import {
 import { Connection, PublicKey } from "@solana/web3.js";
 import nacl from "tweetnacl";
 import * as Sentry from "@sentry/nextjs";
-import { isV17Account, parseWrapperConfigV17, parseHeader, V17_HEADER_LEN } from "@percolatorct/sdk";
+import { isV17Account, parseWrapperConfigV17, parseHeader, parseDexPool, V17_HEADER_LEN } from "@percolatorct/sdk";
 import type { RegisteredMarket } from "@/lib/playground-registered-markets";
 import { upsertRegisteredMarket } from "@/lib/playground-registered-markets";
 import { normalizeDexType, KEEPER_DEX_TYPES, type KeeperDexType } from "@/lib/dex-type";
+import { USD_PRICEABLE_QUOTE_MINTS } from "@/lib/dex-constants";
 import { getConfig, getAllProgramIds } from "@/lib/config";
 import { getServerConnection } from "@/lib/server-rpc";
 import { getServiceClient, getServerNetwork } from "@/lib/supabase";
@@ -186,11 +187,13 @@ const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL?.trim() || "https://api.main
 
 /** Classify a mainnet pool by its owner program.
  *  Returns a dexType, "unsupported" (account exists under an unknown program),
- *  "missing" (no such account on mainnet), or "rpc-failed" (couldn't check —
- *  callers fall back to the client-supplied string). One getAccountInfo call. */
+ *  "missing" (no such account on mainnet), "rpc-failed" (couldn't check —
+ *  callers fall back to the client-supplied string), or { nonUsdQuote } when a
+ *  PumpSwap/Meteora pool is quoted in a mint the keeper can't turn into USD.
+ *  One getAccountInfo call; the quote is parsed from the same bytes. */
 async function classifyPoolByOwner(
   poolAddress: string,
-): Promise<KeeperDexType | "unsupported" | "missing" | "rpc-failed"> {
+): Promise<KeeperDexType | "unsupported" | "missing" | "rpc-failed" | { nonUsdQuote: string }> {
   try {
     const conn = new Connection(MAINNET_RPC_URL, "confirmed");
     const info = await Promise.race([
@@ -198,7 +201,17 @@ async function classifyPoolByOwner(
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("mainnet RPC timeout")), 8_000)),
     ]);
     if (!info) return "missing";
-    return DEX_PROGRAM_TO_TYPE[info.owner.toBase58()] ?? "unsupported";
+    const type = DEX_PROGRAM_TO_TYPE[info.owner.toBase58()];
+    if (!type) return "unsupported";
+    // Raydium is refused by the caller with its own reason (its rule differs).
+    if (type === "raydium-clmm") return type;
+    let quoteMint: string;
+    try {
+      quoteMint = parseDexPool(type, new PublicKey(poolAddress), new Uint8Array(info.data)).quoteMint.toBase58();
+    } catch {
+      return "unsupported"; // malformed pool: never let it reach the rpc-failed fallback
+    }
+    return USD_PRICEABLE_QUOTE_MINTS.has(quoteMint) ? type : { nonUsdQuote: quoteMint };
   } catch {
     return "rpc-failed";
   }
@@ -413,6 +426,16 @@ export async function POST(req: NextRequest) {
   if (classified === "unsupported") {
     return NextResponse.json(
       { error: `dexPoolAddress is owned by an unsupported DEX program — the keeper can only price ${KEEPER_DEX_TYPES.join(", ")} pools` },
+      { status: 400 },
+    );
+  }
+  if (typeof classified === "object") {
+    return NextResponse.json(
+      {
+        error:
+          `dexPoolAddress is quoted in ${classified.nonUsdQuote}, which the keeper can't convert to USD. ` +
+          "Use a pool quoted in SOL, USDC or USDT.",
+      },
       { status: 400 },
     );
   }

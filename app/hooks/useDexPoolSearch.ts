@@ -2,7 +2,12 @@
 
 import { useEffect, useState, useRef } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { SUPPORTED_DEX_IDS, BLOCKED_DEX_IDS } from "@/lib/dex-constants";
+import {
+  SUPPORTED_DEX_IDS,
+  BLOCKED_DEX_IDS,
+  USD_PRICEABLE_QUOTE_MINTS,
+  NON_USD_QUOTE_REASON,
+} from "@/lib/dex-constants";
 
 export interface DexPoolResult {
   poolAddress: string;
@@ -42,7 +47,8 @@ export function useDexPoolSearch(mint: string | null): {
    *  as "no pools" (that would silently mis-tier a liquid token as low). */
   error: string | null;
   /** Explanation when this token HAS liquidity but only on a DEX we block for
-   *  new markets (see BLOCKED_DEX_IDS). Distinguishes "we won't list this yet"
+   *  new markets (see BLOCKED_DEX_IDS), or only in pools quoted in a token the
+   *  price feed can't convert to USD. Distinguishes "we won't list this yet"
    *  from "this token has no pools", which otherwise look identical: both
    *  produce an empty `pools` array and then a bare "no price" launch error. */
   blockedReason: string | null;
@@ -97,14 +103,14 @@ export function useDexPoolSearch(mint: string | null): {
           dexId?: string;
           pairAddress: string;
           baseToken?: { symbol?: string };
-          quoteToken?: { symbol?: string };
+          quoteToken?: { symbol?: string; address?: string };
           liquidity?: { usd?: number };
           priceUsd?: string;
         }> } = await resp.json();
         const pairs = json.pairs || [];
 
         const results: DexPoolResult[] = [];
-        /** A blocked DEX we actually saw real liquidity on — reported only if
+        /** A blocked DEX (or a non-USD quote) we actually saw real liquidity on — reported only if
          *  nothing supported turns up, so a token that also trades on Meteora
          *  is never nagged about its Raydium pool. */
         let blockedHit: string | null = null;
@@ -121,6 +127,12 @@ export function useDexPoolSearch(mint: string | null): {
 
           const liquidity = liquidityRaw;
           if (liquidity < 100) continue; // skip tiny pools
+          // Only a WSOL- or USD-quoted pool can be priced in USD; a missing
+          // address is skipped too (keeper-register re-checks on-chain).
+          if (!USD_PRICEABLE_QUOTE_MINTS.has(pair.quoteToken?.address ?? "")) {
+            blockedHit ??= NON_USD_QUOTE_REASON;
+            continue;
+          }
 
           const baseSymbol = pair.baseToken?.symbol || "?";
           const quoteSymbol = pair.quoteToken?.symbol || "?";

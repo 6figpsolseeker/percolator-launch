@@ -9,8 +9,13 @@ export function getNetwork(): Network {
   // On mainnet deployments this check is enforced before localStorage is read,
   // so an XSS payload calling localStorage.setItem("percolator-network","devnet")
   // cannot redirect a mainnet frontend to devnet config or devnet program IDs.
+  // GH#2704: the same holds the other way. A devnet build can't serve mainnet
+  // (the RPC proxy refuses mainnet routing there, GH#1945), so a stored
+  // "mainnet" would only swap in program IDs no devnet market uses. The
+  // override applies only when the deployment network is unset (local dev).
   const deploymentNet = process.env.NEXT_PUBLIC_DEFAULT_NETWORK?.trim();
   if (deploymentNet === "mainnet") return "mainnet";
+  if (deploymentNet === "devnet") return "devnet";
 
   if (typeof window !== "undefined") {
     try {
@@ -20,7 +25,6 @@ export function getNetwork(): Network {
       // localStorage may be unavailable (SSR, iframes, or test environments)
     }
   }
-  if (deploymentNet === "devnet") return "devnet";
   // Default fail-closed to mainnet; prevents devnet-only features (pre-fund, faucet)
   // from activating on misconfigured production deployments.
   // Set NEXT_PUBLIC_DEFAULT_NETWORK=devnet explicitly for devnet environments.

@@ -416,17 +416,8 @@ function TradePageInner({ slab }: { slab: string }) {
                   This slab account doesn&apos;t exist on the current devnet. The market may have been closed, or you may be looking at a mainnet market address.
                 </p>
                 <div className="mt-4 flex flex-col gap-2">
-                  <button
-                    onClick={() => {
-                      if (typeof window !== "undefined") {
-                        localStorage.setItem("percolator-network", "mainnet");
-                        window.location.reload();
-                      }
-                    }}
-                    className="w-full border border-[var(--border)] px-4 py-2 text-[11px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--text)] transition-colors duration-150"
-                  >
-                    Switch to Mainnet
-                  </button>
+                  {/* GH#2704: no "Switch to Mainnet" here. A devnet build ignores
+                      the override, and it used to strand users on mainnet IDs. */}
                   <a
                     href="/markets"
                     className="w-full border border-[var(--border)] px-4 py-2 text-[11px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--text)] transition-colors duration-150"

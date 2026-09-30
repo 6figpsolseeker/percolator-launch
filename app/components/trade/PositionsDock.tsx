@@ -232,8 +232,11 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
   // numeric fallback for the liq/margin math below but reports
   // source === "unknown" so the PnL, ROE and entry CELLS render "--" instead.
   const safePnlForEntry = isSentinelValue(account.pnl) ? 0n : account.pnl;
+  // Derive against EFFECTIVE exposure, as usePortfolio does: the on-chain `pnl`
+  // this back-solves from was accrued at the deleveraged rate. No-op on legs
+  // that never deleveraged.
   const resolvedEntry = resolveEntryPrice(
-    account.positionSize,
+    effectiveSize,
     resolvedEntryPrice,
     safePnlForEntry,
     currentPriceE6,
@@ -248,18 +251,14 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
   // Native "coin-margined" scale (see computeMarkPnl's on-chain-formula doc
   // comment) — NOT yet a collateral/USDC-denominated amount. Converted below
   // via computeMarkPnlCollateral before it's shown or compared against
-  // anything collateral-scaled (capital, margin, vault balance). The stale
-  // on-chain `account.pnl` fallback (NFT-transfer path, no cached entry) is
-  // in this SAME native scale — estimateEntryFromPnl's whole premise is that
-  // computeMarkPnl(size, derivedEntry, mark) === account.pnl — so one
-  // conversion below covers both branches.
-  const pnlNative = hasValidMark
-    ? (resolvedEntryPrice > 0n
-        // Effective, not nominal: a deleveraged leg gains/loses at
-        // `basis * a_side / a_basis` per unit of price (v16.rs:9547-9576).
-        ? computeMarkPnl(effectiveSize, resolvedEntryPrice, currentPriceE6)
-        : (isSentinelValue(account.pnl) ? 0n : account.pnl))
-    : 0n;
+  // anything collateral-scaled (capital, margin, vault balance).
+  // GH#2703: always from the RESOLVED entry (cached, or back-solved from the
+  // on-chain pnl). Raw `account.pnl` is already collateral atoms and must not
+  // go through computeMarkPnlCollateral. On source "unknown" the entry is the
+  // mark, so this is 0, and the cells show "--" behind pnlIsKnown.
+  // Effective, not nominal: a deleveraged leg gains/loses at
+  // `basis * a_side / a_basis` per unit of price (v16.rs:9547-9576).
+  const pnlNative = hasValidMark ? computeMarkPnl(effectiveSize, entryPriceE6, currentPriceE6) : 0n;
   // Collateral-equivalent PnL — the single number this row's USDC line, USD
   // line, ROE, and pool-cap check all derive from, so they can't disagree
   // with each other (or with ChartPnlBadge, which reaches the same figure

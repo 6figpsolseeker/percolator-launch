@@ -309,7 +309,7 @@ export function useDevnetFaucet(): DevnetFaucetState {
       const resp = await fetch("/api/faucet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: publicKey.toBase58() }),
+        body: JSON.stringify({ wallet: publicKey.toBase58(), type: "usdc" }),
       });
       const data = await resp.json();
       if (resp.status === 429) {

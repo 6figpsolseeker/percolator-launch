@@ -1,12 +1,13 @@
 /**
  * PERC-376: Devnet faucet endpoint
  *
- * POST /api/faucet { wallet: string, type?: "sol" | "usdc" }
+ * POST /api/faucet { wallet: string, type: "sol" | "usdc" }
  *
  * GH#1399: Unknown type values now return 400 instead of silently routing to USDC.
+ * GH#1815: type is required; a missing type returns 400.
  *
  * type="sol"  → airdrops 2 SOL via requestAirdrop on devnet public RPC
- * type="usdc" → mints 10,000 test USDC (default when type omitted)
+ * type="usdc" → mints 10,000 test USDC
  *
  * Rate-limited: 1 claim per wallet per type per 24h (tracked in Supabase auto_fund_log).
  *

@@ -82,7 +82,12 @@ describe("Header", () => {
 
   it("renders DEVNET badge as non-interactive", () => {
     render(<Header />);
-    const badge = screen.getByTitle(/devnet/i);
+    // Matched on the badge's OWN copy rather than /devnet/i. The broad pattern
+    // matched any title mentioning devnet, and the header now also carries the
+    // locked Playground tab ("Playground opens with devnet v2") -- so the query
+    // became ambiguous and threw. The assertions are unchanged; only the
+    // selector is narrowed to the element this test is actually about.
+    const badge = screen.getByTitle(/no real funds/i);
     expect(badge.tagName).not.toBe("BUTTON");
     expect(badge.className).toContain("pointer-events-none");
   });

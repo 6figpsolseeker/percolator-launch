@@ -258,6 +258,16 @@ body::before {
 }
 
 /* ─── Keyframes ─── */
+/* Playground nav tab: a slow light sweep across the locked label.
+   Long and low-contrast on purpose, so it suggests something behind the door
+   without competing with the live nav items beside it. Applied via Tailwind's
+   `motion-safe:` variant, so prefers-reduced-motion disables it. */
+@keyframes pg-sweep {
+  0%   { transform: translateX(0); }
+  55%  { transform: translateX(220%); }
+  100% { transform: translateX(220%); }
+}
+
 @keyframes shimmer {
   0% { opacity: 0.5; }
   50% { opacity: 1; }

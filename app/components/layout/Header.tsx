@@ -2,6 +2,7 @@
 
 import { FC, useEffect, useState, useRef } from "react";
 import Link from "next/link";
+import { PlaygroundNavTab } from "@/components/layout/PlaygroundNavTab";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -187,6 +188,9 @@ export const Header: FC = () => {
             )}
             <NavDropdown label="Build" items={filterForWaitlistHost(filterForNetwork(buildLinks, network), "build", isWaitlistHost)} />
             <NavDropdown label="Community" items={filterForWaitlistHost(filterForNetwork(communityLinks, network), "community", isWaitlistHost)} />
+            {/* Locked until devnet v2 opens. A button with no href, so there is
+                nothing to navigate to, middle-click, copy, or crawl. */}
+            <PlaygroundNavTab />
           </nav>
         </div>
 

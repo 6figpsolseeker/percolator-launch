@@ -218,8 +218,9 @@ describe("B24: a P3 senior claim refused with 21 is not blamed on open PnL", () 
   const e21 = new Error(`Transaction failed: {"InstructionError":[2,{"Custom":21}]}\nProgram ${resolveDevnetProgramIds().wrapper} failed: custom program error: 0x15`);
   it("P3 bound vault: neutral copy, no unrealized-PnL claim", () => {
     const m = earnErrorMessage(e21, "claim", { p3Bound: true });
-    // UX WP-1 §3.6 item 7 (supersedes COPY.earnClaimRefusedP3): calm, retried automatically.
-    expect(m).toBe("This withdrawal can't be paid out this moment. Nothing moved; your withdrawal stays ready to collect and we'll retry automatically.");
+    // UX WP-1 §3.6 item 7 (supersedes COPY.earnClaimRefusedP3): calm. Nothing resends the payout,
+    // so it says to try again rather than promising an automatic retry.
+    expect(m).toBe("This withdrawal can't be paid out this moment. Nothing moved; your withdrawal stays ready to collect. Try again in a moment.");
     expect(m).not.toMatch(/unrealized PnL|open positions|escrow/i);
   });
   it("legacy vault: in use by open trades; deposit: nothing deposited, retried", () => {

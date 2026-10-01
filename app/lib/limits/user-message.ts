@@ -272,7 +272,11 @@ export function resolveUserMessage(err: unknown, ctx: MessageContext): UserMessa
     switch (p.code) {
       case W.EngineStale:
       case W.EngineBStale:
-        return m("engine-catching-up", "wait", "Catching up", "The market is catching up with the latest prices. Your trade goes through automatically when it's ready.", { autoRetry: true });
+        return ctx.surface === "trade"
+          // Only the trade ticket waits through this and resends (sendTxWaiting); nothing reads
+          // autoRetry elsewhere, and Earn, close, deposit and withdraw do not resend.
+          ? m("engine-catching-up", "wait", "Catching up", "The market is catching up with the latest prices. Your trade goes through automatically when it's ready.", { autoRetry: true })
+          : m("engine-catching-up", "wait", "Catching up", "The market is catching up with the latest prices. Try again in a moment.");
       case W.OracleStale:
       case W.OracleInvalid:
         return m("price-wait", "wait", "Waiting for price", "Waiting for a fresh price. This usually takes a few seconds.", { autoRetry: true });
@@ -280,17 +284,21 @@ export function resolveUserMessage(err: unknown, ctx: MessageContext): UserMessa
         const h = ctx.health ?? {};
         if (h.resolved) return m("market-settled", "info", "Market settled", "Close any position and withdraw. There's nothing else to do.");
         if (ctx.surface === "earn-withdraw" && ctx.p3Bound)
-          return m("earn-payout-wait", "wait", "Payout waiting", "This withdrawal can't be paid out this moment. Nothing moved; your withdrawal stays ready to collect and we'll retry automatically.", { autoRetry: true });
+          return m("earn-payout-wait", "wait", "Payout waiting", "This withdrawal can't be paid out this moment. Nothing moved; your withdrawal stays ready to collect. Try again in a moment.");
         if (ctx.surface === "earn-withdraw")
           return m("earn-in-use", "paused", "Partly in use", "Part of this vault's money is in use by open trades right now. It becomes available as those trades close; your withdrawal stays ready to collect.");
         if (ctx.surface === "earn-deposit")
-          return m("earn-deposit-wait", "wait", "Vault updating", "This vault is updating after a market move. Nothing was deposited; we'll retry automatically.", { autoRetry: true });
+          return m("earn-deposit-wait", "wait", "Vault updating", "This vault is updating after a market move. Nothing was deposited. Try again in a moment.");
         if (h.adlReduceOnly && ctx.surface === "trade")
           return m("adl-reduce-only", "paused", "Close-only for now", "Closing works normally; new positions reopen on their own, usually within minutes.");
         if (h.lpDepleted && ctx.surface === "trade")
           return m("lp-depleted", "paused", "New positions paused", "The market has no room for new positions right now. Closing works normally.");
         if (h.lossStale) return m("price-wait", "wait", "Waiting for price", "Updating to the latest price, usually a few seconds.", { autoRetry: true });
-        return m("engine-catching-up", "wait", "Catching up", "The market is catching up with the latest prices. Your trade goes through automatically when it's ready.", { autoRetry: true });
+        return ctx.surface === "trade"
+          // Only the trade ticket waits through this and resends (sendTxWaiting); nothing reads
+          // autoRetry elsewhere, and Earn, close, deposit and withdraw do not resend.
+          ? m("engine-catching-up", "wait", "Catching up", "The market is catching up with the latest prices. Your trade goes through automatically when it's ready.", { autoRetry: true })
+          : m("engine-catching-up", "wait", "Catching up", "The market is catching up with the latest prices. Try again in a moment.");
       }
       case W.EngineInsufficientInitialMargin:
         return m("insufficient-margin", "error", "Not enough margin", "Add collateral or lower the size or leverage.");
@@ -328,11 +336,11 @@ export function resolveUserMessage(err: unknown, ctx: MessageContext): UserMessa
       case W.VaultLpReleaseRefused:
         return m("stake-nothing", "info", "Nothing to withdraw yet", "Nothing to withdraw above what Earn depositors are owed yet.");
       case W.VaultLpHarvestPending:
-        return m("earn-fees-collecting", "wait", "Collecting fees", "Collecting the vault's latest fees; we'll retry automatically.", { autoRetry: true });
+        return m("earn-fees-collecting", "wait", "Collecting fees", "Collecting the vault's latest fees. Try again in a moment.");
       case W.VaultLpValuationStale:
-        return m("earn-value-updating", "wait", "Updating value", "Updating the vault's value; we'll retry automatically.", { autoRetry: true });
+        return m("earn-value-updating", "wait", "Updating value", "Updating the vault's value. Try again in a moment.");
       case W.VaultLpSeniorDrawRequired:
-        return m("earn-booking-move", "wait", "Booking a market move", "The vault is booking a recent market move; we'll retry automatically.", { autoRetry: true });
+        return m("earn-booking-move", "wait", "Booking a market move", "The vault is booking a recent market move. Try again in a moment.");
       case W.VaultLpRedeemNeedsRecall:
         return m("earn-in-use", "paused", "Partly in use", ctx.maxNow ? `Part of this vault's money is in use by open trades right now. You can withdraw up to ${ctx.maxNow} now, or the rest once those trades close.` : "Part of this vault's money is in use by open trades right now. The rest is available once those trades close.", ctx.maxNow ? { action: { id: "use-max", label: `Withdraw ${ctx.maxNow}` } } : {});
       case W.EngineCounterUnderflow:
@@ -398,3 +406,4 @@ const RAW_CHAIN_TEXT = /custom program error|InstructionError|Program [1-9A-HJ-N
 export function keepAppMessage(raw: string): string {
   return raw && !RAW_CHAIN_TEXT.test(raw) ? raw : "Something went wrong and nothing was sent.";
 }
+

@@ -41,7 +41,7 @@ describe("87 / 88 are in the one constants module with copy", () => {
     const e = (n: number) => new Error(`{"InstructionError":[3,{"Custom":${n}}]}\nProgram ${resolveDevnetProgramIds().wrapper} failed: custom program error: 0x${n.toString(16)}`);
     // UX WP-1: the Earn panel shows the ONE resolver's line (lib/limits/user-message.ts).
     expect(earnErrorMessage(e(88), "claim", { p3Bound: true })).toMatch(/^Part of this vault's money is in use by open trades right now\./);
-    expect(earnErrorMessage(e(87), "deposit")).toBe("The vault is booking a recent market move; we'll retry automatically.");
+    expect(earnErrorMessage(e(87), "deposit")).toBe("The vault is booking a recent market move. Try again in a moment.");
   });
 });
 

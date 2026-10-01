@@ -259,7 +259,7 @@ export const ClosePositionForm: FC<ClosePositionFormProps> = ({
           </div>
         )}
         <div className="flex justify-between">
-          <span className="text-[var(--text-dim)]">Est. Balance After:</span>
+          <span className="text-[var(--text-dim)]">{percent >= 100 ? "Est. Back to Wallet:" : "Est. Balance After:"}</span>
           <span className="font-mono font-medium text-[var(--text)]" title={entryKnown ? undefined : "Excludes PnL — the entry price is unknown, so the PnL settled on close can't be previewed."}>
             ~{formatTokenAmount(preview.balanceAfter, decimals)} {colSym}
             {!entryKnown && <span className="ml-1 text-[10px] text-[var(--text-muted)]">excl. PnL</span>}
@@ -267,8 +267,12 @@ export const ClosePositionForm: FC<ClosePositionFormProps> = ({
         </div>
       </div>
 
+      {/* A full close moves the freed funds back to the wallet in a second approval (useClosePosition,
+          #2831); a partial close leaves them in the account behind the rest of the position. */}
       <p className="mb-4 -mt-2 text-[9px] text-[var(--text-dim)] leading-relaxed" data-testid="close-funds-stay">
-        Closing keeps the funds in your trading account. Withdraw to move them to your wallet.
+        {percent >= 100
+          ? "A full close moves the funds back to your wallet. It asks for one more approval."
+          : "A partial close keeps the funds in your trading account. Withdraw to move them to your wallet."}
       </p>
 
       {oracleStale && (

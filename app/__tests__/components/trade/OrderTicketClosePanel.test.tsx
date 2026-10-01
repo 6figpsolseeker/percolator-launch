@@ -164,7 +164,7 @@ describe("inline close — unknown entry (#2660/#2672 rules, 0n from OrderTicket
     expect(screen.getByText("unknown entry")).toBeTruthy();
     expect(screen.queryByText(/\$110\.0+ entry|\$0\.0+ entry/)).toBeNull();
     expect(screen.getByTestId("close-pnl-unknown").textContent?.trim()).toBe("--");
-    expect(rowValue(container, "Est. Balance After:")).toMatch(/excl\. PnL/);
+    expect(rowValue(container, "Est. Back to Wallet:")).toMatch(/excl\. PnL/);
   });
 
   it("…but closing stays ALLOWED: an unknown entry must never trap a position", async () => {
@@ -176,9 +176,10 @@ describe("inline close — unknown entry (#2660/#2672 rules, 0n from OrderTicket
   });
 });
 
-describe("inline close — the funds stay in the account", () => {
-  // A close sends nothing to the wallet, and on a partial close the whole capital stays behind the
-  // remaining position. "Est. Receive" counted capital × percent as paid out.
+describe("inline close — where the funds go", () => {
+  // A partial close leaves the whole capital in the account behind the remaining position; "Est.
+  // Receive" counted capital × percent as paid out. A full close moves the funds back to the wallet
+  // in a second approval (useClosePosition, #2831).
   // 1 SOL long, unknown entry (PnL 0), capital 50, fee 30 bps, 50% at $110: fee 0.165 → 49.835.
   it("a 50% close previews the whole capital minus the fee, not half the capital", () => {
     const { container } = render(<OrderTicketClosePanel {...base({ entryPriceE6: 0n })} />);
@@ -187,10 +188,20 @@ describe("inline close — the funds stay in the account", () => {
     expect(screen.queryByText("Est. Receive:")).toBeNull();
   });
 
-  it("says the funds stay in the trading account until withdrawn", () => {
-    render(<OrderTicketClosePanel {...base()} />);
+  it("a full close says the funds go back to the wallet, with one more approval", () => {
+    const { container } = render(<OrderTicketClosePanel {...base()} />);
     expect(screen.getByTestId("close-funds-stay").textContent).toBe(
-      "Closing keeps the funds in your trading account. Withdraw to move them to your wallet.",
+      "A full close moves the funds back to your wallet. It asks for one more approval.",
+    );
+    expect(within(container).queryByText("Est. Balance After:")).toBeNull();
+    expect(within(container).getByText("Est. Back to Wallet:")).toBeTruthy();
+  });
+
+  it("a partial close says the funds stay in the trading account", () => {
+    render(<OrderTicketClosePanel {...base()} />);
+    fireEvent.click(screen.getByRole("button", { name: "50%" }));
+    expect(screen.getByTestId("close-funds-stay").textContent).toBe(
+      "A partial close keeps the funds in your trading account. Withdraw to move them to your wallet.",
     );
   });
 });

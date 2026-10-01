@@ -36,6 +36,7 @@
  */
 
 import { FC, memo, useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useWalletBalanceRefreshKey } from "@/lib/wallet-balance-invalidation";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { computeNotionalNative } from "@/lib/notional";
@@ -320,6 +321,8 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
     worstFillPriceE6: bigint;
   } | null>(null);
   const [showInlineDeposit, setShowInlineDeposit] = useState(false);
+  // A faucet claim changes none of the wallet-balance effect's other deps.
+  const walletBalanceKey = useWalletBalanceRefreshKey();
   // Which tab the inline card opens on. Clicking the active trigger closes the
   // card; clicking the other trigger switches its tab in place.
   const [inlineDepositMode, setInlineDepositMode] = useState<"deposit" | "withdraw">("deposit");
@@ -491,7 +494,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
     // signal for the inline DepositWithdrawCard's own deposit/withdraw/faucet-mint
     // (its tx signature isn't exposed to this component) — re-fetching on that
     // transition unfreezes the value instead of requiring a full page remount.
-  }, [publicKey, mktConfig?.collateralMint, connection, mockMode, capital, showInlineDeposit]);
+  }, [publicKey, mktConfig?.collateralMint, connection, mockMode, capital, showInlineDeposit, walletBalanceKey]);
 
   // Reset form state on market switch (mirrors TradeForm's bug #1a12dab5 fix).
   useEffect(() => {

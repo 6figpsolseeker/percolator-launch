@@ -22,6 +22,7 @@ import { computePositionInitialMargin, estimateEntryFromPnl } from "@/lib/tradin
 import { getEntryPrice } from "@/lib/entry-price";
 import { useLivePrice } from "@/hooks/useLivePrice";
 import { isSentinelValue } from "@/lib/health";
+import { useWalletBalanceRefreshKey } from "@/lib/wallet-balance-invalidation";
 
 interface DepositWithdrawCardProps {
   slabAddress: string;
@@ -66,6 +67,8 @@ export const DepositWithdrawCard: FC<DepositWithdrawCardProps> = ({ slabAddress,
     if (!mockMode && walletConnected) prewarmTxLanding(connection);
   }, [connection, mockMode, walletConnected]);
   const [lastSig, setLastSig] = useState<string | null>(null);
+  // A faucet claim (inline button or the global modal) changes none of the deps above.
+  const walletBalanceKey = useWalletBalanceRefreshKey();
 
   type WalletBalanceSnapshot = {
     scopeKey: string;
@@ -171,7 +174,7 @@ export const DepositWithdrawCard: FC<DepositWithdrawCardProps> = ({ slabAddress,
     return () => {
       cancelled = true;
     };
-  }, [mockMode, publicKey, mktConfig?.collateralMint, walletBalanceScopeKey, connection, lastSig]);
+  }, [mockMode, publicKey, mktConfig?.collateralMint, walletBalanceScopeKey, connection, lastSig, walletBalanceKey]);
 
   // Pre-fill deposit: the FIRST time this card is open for a brand-new
   // (0-capital) account with a known wallet balance, default the amount

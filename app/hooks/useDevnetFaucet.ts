@@ -21,6 +21,7 @@ import { Connection, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { getConfig } from "@/lib/config";
+import { invalidateWalletBalance } from "@/lib/wallet-balance-invalidation";
 import { keepAppMessage, plainMessage } from "@/lib/limits/user-message";
 
 export type FaucetStep = "idle" | "sol" | "usdc" | "deposit" | "done" | "error";
@@ -342,6 +343,7 @@ export function useDevnetFaucet(): DevnetFaucetState {
         throw new Error(data.error ?? "USDC airdrop failed");
       }
       setUsdcDone(true);
+      invalidateWalletBalance();
       await refreshBalances();
     } catch (e) {
       lastOpFailedRef.current = true;

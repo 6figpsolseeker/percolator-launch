@@ -13,6 +13,7 @@
 import { useState, useCallback } from "react";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
 import { getNetwork } from "@/lib/config";
+import { invalidateWalletBalance } from "@/lib/wallet-balance-invalidation";
 
 interface DevnetTokenFaucetButtonProps {
   /** Devnet SPL mint address (collateralMint) */
@@ -66,6 +67,7 @@ export function DevnetTokenFaucetButton({ mintAddress, symbol }: DevnetTokenFauc
         setError(data.error ?? "Faucet failed");
       } else {
         setClaimed({ amount: data.amount, sig: data.signature });
+        invalidateWalletBalance();
       }
     } catch (e: any) {
       setError(e.message ?? "Network error");

@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useCallback, useState, useSyncExternalStore } from "react";
+import { FC, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
 import type { CreatedMarket } from "@/hooks/useCreatedMarkets";
@@ -11,7 +11,7 @@ import { useAdminActions } from "@/hooks/useAdminActions";
 import { useCloseMarket } from "@/hooks/useCloseMarket";
 import { CLOSE_MARKET_COPY, closeMarketChecklist, firstUnmet, type CloseCheck } from "@/lib/close-market-checklist";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
-import { SlabProvider } from "@/components/providers/SlabProvider";
+import { SlabProvider, useSlabState } from "@/components/providers/SlabProvider";
 import { CreatorClaimPanel } from "@/components/market/CreatorClaimPanel";
 import { useToast } from "@/hooks/useToast";
 import { explorerAccountUrl } from "@/lib/config";
@@ -171,6 +171,18 @@ interface CreatorMarketRowProps {
   onClaimed?: () => void;
 }
 
+/**
+ * Reports asset 0's insurance_authority from the drawer's SlabProvider. TopUpInsurance is gated on
+ * it, and the create flow's BindInsuranceAuthority rebinds it to the stake pool's vault_auth PDA, so
+ * on a completed market no wallet can top up from here.
+ */
+export const InsuranceAuthorityReader: FC<{ onRead: (b58: string | null) => void }> = ({ onRead }) => {
+  const { assetProfile } = useSlabState();
+  const b58 = assetProfile?.insuranceAuthority?.toBase58() ?? null;
+  useEffect(() => onRead(b58), [b58, onRead]);
+  return null;
+};
+
 export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, identity, chainCurrentSlot, expanded, onToggleExpand, onClaimed }) => {
   const { toast } = useToast();
   const actions = useAdminActions();
@@ -319,6 +331,9 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
   const [showBurnConfirm, setShowBurnConfirm] = useState(false);
   const [burnConfirmText, setBurnConfirmText] = useState("");
   const [showTopUpInput, setShowTopUpInput] = useState(false);
+  // Unknown until the drawer's SlabProvider reads it: leave the action as it was until then.
+  const [insuranceAuthority, setInsuranceAuthority] = useState<string | null>(null);
+  const canTopUpInsurance = insuranceAuthority === null || insuranceAuthority === (wallet.publicKey?.toBase58() ?? "");
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   async function handleAction(name: string, fn: () => Promise<string>) {
@@ -487,11 +502,16 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
               {/* Limits (P1 caps / P3 tranche; flag-gated, null when off) */}
               <CreatorTranchePanel slab={slab} decimals={decimals} collateralSymbol="USDC" />
               <CreatorClaimPanel slabAddress={slab} />
+              <InsuranceAuthorityReader onRead={setInsuranceAuthority} />
             </SlabProvider>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 border-t border-[var(--border)]/30 pt-3">
-            <button onClick={() => setShowTopUpInput(true)} disabled={actions.loading === "topUpInsurance"} className="text-[10px] uppercase tracking-[0.1em] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors disabled:opacity-40">
+            <button
+              onClick={() => setShowTopUpInput(true)}
+              disabled={actions.loading === "topUpInsurance" || !canTopUpInsurance}
+              title={canTopUpInsurance ? undefined : "This market's insurance is managed by its stake pool. Add to it from Stake."}
+              className="text-[10px] uppercase tracking-[0.1em] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors disabled:opacity-40">
               top up insurance
             </button>
             <button onClick={handleShare} className="text-[10px] uppercase tracking-[0.1em] text-[var(--text-dim)] hover:text-[var(--text)] transition-colors">

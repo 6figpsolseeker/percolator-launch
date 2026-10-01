@@ -21,7 +21,7 @@ process.env.NEXT_PUBLIC_DEFAULT_NETWORK = "devnet";
 
 const { GET } = await import("@/app/api/prices/[slab]/route");
 
-// A valid base58 pubkey NOT in PLAYGROUND_SLAB_META — forces pyth→null→gecko path.
+// Any valid base58 pubkey — the GeckoTerminal path is the only stats source.
 const SLAB = "DJ54k4wH92NTtNP8RuHAwG8si1bevXEknzctDdqYN8eC";
 
 describe("prices/[slab] writes the fallback cache via boundedSet", () => {

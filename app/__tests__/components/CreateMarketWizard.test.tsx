@@ -110,7 +110,7 @@ describe("LaunchProgress", () => {
       />
     );
     expect(screen.getByText("Transaction cancelled")).toBeDefined();
-    expect(screen.getByRole("button", { name: /Retry Step 3/i })).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Continue$/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /Start Over/i })).toBeDefined();
   });
 
@@ -122,7 +122,7 @@ describe("LaunchProgress", () => {
         onRetry={onRetry}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Continue$/i }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
@@ -145,7 +145,7 @@ describe("LaunchProgress", () => {
         onReset={onReset}
       />
     );
-    expect(screen.queryByRole("button", { name: /Retry/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Continue$/i })).toBeNull();
     expect(screen.getByRole("button", { name: /Start Over/i })).toBeDefined();
   });
 
@@ -204,14 +204,15 @@ describe("LaunchSuccess", () => {
     vi.clearAllMocks();
   });
 
-  it("shows MARKET LAUNCHED heading", () => {
+  it("shows the 'Ready to trade' heading", () => {
     render(<LaunchSuccess {...defaultProps} />);
-    expect(screen.getByText("MARKET LAUNCHED")).toBeDefined();
+    expect(screen.getByText("Ready to trade")).toBeDefined();
   });
 
-  it("shows token symbol in PERP format", () => {
+  it("shows the token symbol (UX WP-10 §4.2: \"SOL\", never \"SOL-PERP\")", () => {
     render(<LaunchSuccess {...defaultProps} />);
-    expect(screen.getByText("SOL-PERP")).toBeDefined();
+    expect(screen.getAllByText("SOL").length).toBeGreaterThan(0);
+    expect(screen.queryByText("SOL-PERP")).toBeNull();
   });
 
   it("shows market address with copy and explorer buttons", () => {
@@ -252,9 +253,10 @@ describe("LaunchSuccess", () => {
     render(<LaunchSuccess {...defaultProps} />);
     // Fee, leverage, and slab capacity are shown in the market preview.
     // v17 slabs have no tier — see LaunchSuccess.tsx's "Max capacity" comment.
-    expect(screen.getByText(/30 bps/)).toBeDefined();
+    // UX WP-10 (§5.1): fees as a percentage, not bps.
+    expect(screen.getAllByText(/0\.30%/).length).toBeGreaterThan(0);
     expect(screen.getByText(/10x/)).toBeDefined();
-    expect(screen.getByText(/Max capacity/)).toBeDefined();
+    expect(screen.getByText(/max capacity/i)).toBeDefined();
   });
 
   it("copy button changes to checkmark on click", async () => {
@@ -277,15 +279,19 @@ describe("LaunchSuccess", () => {
   describe("keeper registration retry (2026-07-09 fix)", () => {
     it("shows a Retry registration button when registration failed and a retry handler is provided", () => {
       const onRetry = vi.fn();
+      // The success screen keeps its actions; the failed price registration is a one-line status
+      // with Retry next to them.
       render(
         <LaunchSuccess
           {...defaultProps}
+          priceFeedRequired
+          keeperPhase="failed"
           keeperDelegated={false}
           keeperMessage="Signature verification failed."
           onRetryKeeperRegistration={onRetry}
         />
       );
-      const retryBtn = screen.getByText("RETRY REGISTRATION");
+      const retryBtn = screen.getByText("Retry");
       fireEvent.click(retryBtn);
       expect(onRetry).toHaveBeenCalledOnce();
     });
@@ -294,14 +300,16 @@ describe("LaunchSuccess", () => {
       render(
         <LaunchSuccess
           {...defaultProps}
+          priceFeedRequired
+          keeperPhase="failed"
           keeperDelegated={false}
           keeperMessage="Signature verification failed."
           onRetryKeeperRegistration={vi.fn()}
           keeperRegistering
         />
       );
-      expect(screen.getByText(/RETRYING/)).toBeDefined();
-      const retryBtn = screen.getByText(/RETRYING/).closest("button");
+      expect(screen.getByText(/Retrying/)).toBeDefined();
+      const retryBtn = screen.getByText(/Retrying/).closest("button");
       expect(retryBtn?.hasAttribute("disabled")).toBe(true);
     });
 

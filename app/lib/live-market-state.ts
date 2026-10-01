@@ -78,6 +78,12 @@ export interface LiveMarketState {
    */
   isComplete: boolean;
   /**
+   * base58 owner program of the slab account (set by readLiveMarketStates). A slab owned by
+   * anything but the CURRENT wrapper is a market of an abandoned program (the 2026-10 relaunch
+   * moved to all-fresh IDs): lib/market-registry.ts drops it from every listing.
+   */
+  owner?: string;
+  /**
    * Max leverage cap derived from the market's REAL on-chain initialMarginBps
    * (round(10000 / bps)). This is the same figure /api/markets' on-chain
    * discovery path computes via computeMaxLeverage — but the Supabase list path
@@ -161,10 +167,22 @@ function parseLiveState(data: Uint8Array, slabKey: PublicKey): LiveMarketState |
     // Real per-market leverage cap from the engine's initialMarginBps — the same
     // derivation /api/markets' on-chain discovery path uses (computeMaxLeverage
     // -> leverageFromMarginBps). Parsed from the SAME bytes already in hand.
-    const risk = parseV17RiskParams(data, cfg.tradeFeeBps);
-    if (risk && risk.initialMarginBps > 0n) {
-      const lev = leverageFromMarginBps(Number(risk.initialMarginBps));
-      if (Number.isFinite(lev) && lev > 0) maxLeverage = lev;
+    //
+    // Isolated in its OWN try so a leverage-parse failure degrades only
+    // maxLeverage (to null → caller keeps the DB value) and can never reach the
+    // outer catch, which fails isComplete CLOSED and thereby HIDES the market
+    // from the list — a leverage read has no business doing that. Mirrors how the
+    // OI and vault reads below are each isolated. parseV17RiskParams is throw-free
+    // today (it length-guards and every field read lands inside CONFIG_READ_LEN),
+    // so this is defence-in-depth against a future edit that reads past that guard.
+    try {
+      const risk = parseV17RiskParams(data, cfg.tradeFeeBps);
+      if (risk && risk.initialMarginBps > 0n) {
+        const lev = leverageFromMarginBps(Number(risk.initialMarginBps));
+        if (Number.isFinite(lev) && lev > 0) maxLeverage = lev;
+      }
+    } catch {
+      // Leverage unreadable — leave maxLeverage null; isComplete/price stand.
     }
   } catch {
     // Config unreadable — the row keeps a null price rather than a wrong one.
@@ -251,7 +269,7 @@ export async function readLiveMarketStates(
       infos.forEach((info, i) => {
         if (!info?.data) return;
         const state = parseLiveState(new Uint8Array(info.data), chunk[i].key);
-        if (state) out.set(chunk[i].slab, state);
+        if (state) out.set(chunk[i].slab, info.owner ? { ...state, owner: info.owner.toBase58() } : state);
       });
     } catch {
       // This chunk stays unresolved; the rest still land.

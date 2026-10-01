@@ -7,7 +7,7 @@
  * or lightweight-charts dependency.
  *
  * `Candle` mirrors the inline shape used throughout TradingChart.tsx and
- * the data-source hooks (usePythChart, useTokenChart, usePercolatorCandles).
+ * the data-source hooks (useTokenChart, usePercolatorCandles).
  * Defined here so a future contributor can grep `Candle` and find a single
  * authoritative declaration. The math functions only read `close` and
  * `timestamp` — the other OHLC fields are unused by these indicators but

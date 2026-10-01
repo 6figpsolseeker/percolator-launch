@@ -81,3 +81,9 @@ export function sanitizeSymbol(sym: string | null | undefined, mintAddress?: str
   if (mintAddress && isPlaceholderSymbol(sym, mintAddress)) return "Token";
   return sym;
 }
+
+/** UX WP-10 (audit §4.2 unit rule): the base symbol is the token ("SOL"), never "SOL-PERP". */
+export function baseSymbol(sym: string | null | undefined): string {
+  const s = (sym ?? "").trim();
+  return s.replace(/[-_ ]?PERP$/i, "").replace(/\/USDC?$/i, "") || s;
+}

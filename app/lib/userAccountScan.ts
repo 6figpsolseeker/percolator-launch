@@ -66,6 +66,7 @@
  * `s.config ? s : { ...s, error }` keep-last-good guard.
  */
 
+import { pickOwnerPortfolio } from "@/lib/owner-portfolio";
 import { Buffer } from "buffer";
 import { PublicKey, type Connection } from "@solana/web3.js";
 import {
@@ -75,7 +76,6 @@ import {
   type PortfolioLegV17,
   type PortfolioV17,
 } from "@percolatorct/sdk";
-import { isLpPortfolio } from "@/lib/lpPortfolio";
 
 // ---------------------------------------------------------------------------
 // Shared UserAccountInfo shape + v17→legacy Account mapper.
@@ -378,30 +378,13 @@ async function runPortfolioScan(
       ],
     });
 
-    let result: OwnPortfolioScanResult | null = null;
-    // Drop the market's LP portfolio BEFORE the sort/pick below — see
-    // isLpPortfolio's doc comment. Only relevant when this wallet is the
-    // market's CREATOR (the LP's owner == the creator's wallet); for every
-    // other wallet the owner filter above already excludes it.
-    const nonLpResults = results.filter(({ account }) => !isLpPortfolio(account.data));
-    if (nonLpResults.length > 0) {
-      // M10: getProgramAccounts doesn't guarantee stable ordering across RPC
-      // nodes/calls. If more than one account ever matches this owner+market
-      // filter, picking an arbitrary array element can select a DIFFERENT
-      // portfolio than useDeposit.ts / useWithdraw.ts pick for the exact same
-      // wallet+market — the displayed account could silently disagree with
-      // the one deposit/withdraw actually mutate. Sort deterministically by
-      // pubkey so every caller (useUserAccount AND usePositionNft, both fed
-      // by this same store) converges on the same account.
-      const sorted = [...nonLpResults].sort((a, b) => a.pubkey.toBase58().localeCompare(b.pubkey.toBase58()));
-      const data = sorted[0].account.data;
-      const portfolio = parsePortfolioV17(data instanceof Buffer ? data : Buffer.from(data));
-      // Defense-in-depth: re-verify the mutable owner actually matches after fetch —
-      // memcmp filters are advisory server-side; don't trust them blindly.
-      if (portfolio.owner.equals(params.publicKey)) {
-        result = { pubkey: sorted[0].pubkey, portfolio };
-      }
-    }
+    // M-4: the ONE selector every flow uses (lib/owner-portfolio.ts): LP dropped,
+    // decoded mutable owner verified, lowest pubkey — so the displayed account is
+    // the one trade / close / deposit act on.
+    const picked = pickOwnerPortfolio(results, params.publicKey);
+    const result: OwnPortfolioScanResult | null = picked
+      ? { pubkey: picked.pubkey, portfolio: parsePortfolioV17(picked.data) }
+      : null;
     publishPortfolioResult(entry, result);
     return entry.raw;
   } catch (e) {

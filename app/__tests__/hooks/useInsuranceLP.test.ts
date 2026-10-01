@@ -74,6 +74,10 @@ vi.mock("@percolatorct/sdk", async () => {
       redemptionCooldownSlots: 0n,
       domain: 0,
     }),
+    // The payout reads the pending ticket's shares (split-pot planning, 2026-10-01b).
+    parseLpRedemption: vi.fn().mockReturnValue({ shares: 1_000n, requestSlot: 0n }),
+    encodeRebalanceLpVaultBacking: vi.fn().mockReturnValue(Buffer.alloc(35)),
+    ACCOUNTS_REBALANCE_LP_VAULT_BACKING: [],
     buildAccountMetas: vi.fn().mockReturnValue([]),
     buildIx: vi.fn().mockReturnValue({
       programId: progId,
@@ -725,6 +729,42 @@ describe("useInsuranceLP", () => {
       // [0] is still the signing cranker (the redeemer themselves).
       expect(keys[0].pubkey.equals(mockWalletPubkey)).toBe(true);
       expect(keys[0].isSigner).toBe(true);
+    });
+
+    // UX WP-4 (user decision 2026-09-30): the cooldown stays (~150 slots), so a request is its own
+    // signature and the page opens the payout when it ends; only a cooldown-0 vault does [76, 77]
+    // in one tx. The registry's own cooldown decides.
+    const registryOnly = (cooldown: bigint) => {
+      const REGISTRY = "7pXnR8Eg2g7YDtPkUeEmcYNpPN5yzGLbNHREeHJMzNhq";
+      mockConnection.getAccountInfo.mockImplementation(async (pk: PublicKey) =>
+        pk.toBase58() === REGISTRY ? { data: Buffer.alloc(64), lamports: 1, executable: false, owner: mockProgramId } : null,
+      );
+      return cooldown;
+    };
+    it.each([
+      [150n, "requested", 1],
+      [0n, "executed", 2],
+    ] as const)("registry cooldown %s slots -> %s, %s instruction(s) in ONE signature", async (cooldown, step, minIxs) => {
+      const sdk = await import("@percolatorct/sdk");
+      vi.mocked(sdk.parseLpVaultRegistry).mockReturnValue({
+        totalLpSharesOutstanding: 1_000_000n,
+        feeDistributionTotalAtoms: 0n,
+        redemptionCooldownSlots: registryOnly(cooldown),
+        domain: 0,
+      } as never);
+      const { result } = renderHook(() => useInsuranceLP());
+      await waitFor(() => expect(result.current.state.registryExists).toBe(true));
+      expect(result.current.state.redemptionCooldownSlots).toBe(cooldown);
+      vi.mocked(sendTx).mockClear();
+      let r: { step: string } | undefined;
+      await act(async () => {
+        r = await result.current.withdraw(250_000n);
+      });
+      expect(r!.step).toBe(step);
+      expect(sendTx).toHaveBeenCalledTimes(1);
+      const ixs = (vi.mocked(sendTx).mock.calls[0][0] as { instructions: unknown[] }).instructions;
+      if (step === "requested") expect(ixs).toHaveLength(1);
+      else expect(ixs.length).toBeGreaterThanOrEqual(minIxs);
     });
 
     it("should throw if wallet not connected", async () => {

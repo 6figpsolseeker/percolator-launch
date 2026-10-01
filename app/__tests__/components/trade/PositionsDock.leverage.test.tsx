@@ -53,6 +53,7 @@ vi.mock("@/components/trade/OtherMarketPositions", () => ({ OtherMarketPositions
 vi.mock("@/components/trade/TradeHistory", () => ({ TradeHistory: () => null }));
 vi.mock("@/components/trade/WarmupProgress", () => ({ WarmupProgress: () => null }));
 vi.mock("@/components/trade/ClosePositionModal", () => ({ ClosePositionModal: () => null }));
+vi.mock("@/components/trade/PositionNftMenu", () => ({ PositionNftMenu: () => <span data-testid="nft-menu-marker" />, NFT_MENU_COPY: { badge: "NFT", closeWrapped: "Unwrap to close this position" } }));
 
 import { PositionsDock } from "@/components/trade/PositionsDock";
 
@@ -92,3 +93,14 @@ describe("PositionsDock leverage column", () => {
     expect(lev().getAttribute("title")).toMatch(/zero or negative/i);
   });
 });
+
+/** UX WP-9 AC6 (audit §3.13): the NFT actions sit in the position row's "⋯" menu. */
+describe("PositionsDock: NFT actions in the row", () => {
+  it("the position row carries the NFT menu next to Close", () => {
+    render(<PositionsDock slabAddress="s" />);
+    const row = screen.getByTestId("position-row");
+    expect(row.querySelector('[data-testid="nft-menu-marker"]')).not.toBeNull();
+    expect(row.querySelector('[data-testid="position-close"]')).not.toBeNull();
+  });
+});
+

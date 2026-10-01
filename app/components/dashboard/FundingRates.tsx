@@ -1,17 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { FundingGlobalEntry } from "@/app/api/funding/global/route";
+import type { FundingGlobalEntry, FundingGlobalResponse } from "@/app/api/funding/global/route";
 import { pollWhenVisible } from "@/lib/pollWhenVisible";
 
 /**
  * Funding Rates — shows top markets by funding rate from /api/funding/global.
  * Rates are per hour (continuous funding, ~9000 slots/hour on Solana).
+ *
+ * The panel renders nothing when it cannot answer honestly: the route is unavailable (503), or
+ * some market has funding on but its rate is not decoded yet (`ratesUnavailable`) while no
+ * listed market has a non-zero rate — "Funding: Off" would then be a claim about markets we
+ * could not read.
  */
 export function FundingRates() {
   const [markets, setMarkets] = useState<FundingGlobalEntry[]>([]);
+  const [ratesUnavailable, setRatesUnavailable] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -20,13 +26,14 @@ export function FundingRates() {
       try {
         const res = await fetch("/api/funding/global?limit=8");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const data = (await res.json()) as FundingGlobalResponse;
         if (!cancelled) {
           setMarkets(data.markets ?? []);
-          setError(null);
+          setRatesUnavailable(data.ratesUnavailable ?? 0);
+          setFailed(false);
         }
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load");
+      } catch {
+        if (!cancelled) setFailed(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -41,18 +48,12 @@ export function FundingRates() {
     };
   }, []);
 
-  // GH#funding-display: FundingGlobalEntry.rateBpsPerSlot is only populated by
-  // the local indexer-db fallback path. The primary path (Railway proxy →
-  // percolator-api GET /funding/global) returns `currentRateBpsPerSlot`
-  // instead, which left rateBpsPerSlot `undefined` on the common path —
-  // `undefined !== 0` is always true (filter never filtered) and
-  // `undefined > 0` is always false (every market showed "S→L" red). Read
-  // whichever field the response actually populated.
-  const rateBps = (m: FundingGlobalEntry): number =>
-    m.currentRateBpsPerSlot ?? m.rateBpsPerSlot ?? 0;
-
   // Active markets are those with non-zero funding rate
-  const active = markets.filter((m) => rateBps(m) !== 0);
+  const active = markets.filter((m) => m.rateBpsPerSlot !== 0);
+
+  if (!loading && (failed || (active.length === 0 && (ratesUnavailable > 0 || markets.length === 0)))) {
+    return null;
+  }
 
   return (
     <div className="border border-[var(--border)] bg-[var(--panel-bg)]">
@@ -77,10 +78,6 @@ export function FundingRates() {
         <div className="flex items-center justify-center px-5 py-6">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)]/30 border-t-[var(--accent)]" />
         </div>
-      ) : error ? (
-        <div className="px-5 py-6 text-center">
-          <p className="text-[11px] text-[var(--short)]">{error}</p>
-        </div>
       ) : active.length === 0 ? (
         // M19: on these devnet markets the applied funding rate is
         // structurally clamped to 0 (max_abs_funding_e9_per_slot == 0), which
@@ -97,7 +94,7 @@ export function FundingRates() {
         <div className="max-h-[280px] overflow-y-auto">
         <ul className="divide-y divide-[rgba(255,255,255,0.04)]">
           {active.slice(0, 15).map((m) => {
-            const isPositive = rateBps(m) > 0;
+            const isPositive = m.rateBpsPerSlot > 0;
             const rateStr =
               (isPositive ? "+" : "") +
               m.hourlyRatePercent.toFixed(4) + "%";

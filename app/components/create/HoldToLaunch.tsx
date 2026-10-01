@@ -81,8 +81,9 @@ export const HoldToLaunch: FC<HoldToLaunchProps> = ({
   useEffect(() => () => cancelAnimationFrame(raf.current), []);
 
   const armed = progress > 0.995 || fired;
+  // UX WP-7 (WZ-4): the reason sits in a line ABOVE the button, never inside it.
   const label = disabled
-    ? (disabledReason ?? "Unavailable")
+    ? "Launch market"
     : fired
       ? "Launching"
       : progress > 0
@@ -93,8 +94,14 @@ export const HoldToLaunch: FC<HoldToLaunchProps> = ({
 
   return (
     <div className="flex flex-col items-center">
+      {disabled && disabledReason && (
+        <p data-testid="wizard-launch-blocked" role="status" className="mb-3 max-w-xs text-center text-[12px] leading-snug text-[var(--text-secondary)]">
+          {disabledReason}
+        </p>
+      )}
       <button
         type="button"
+        data-testid="wizard-launch"
         disabled={disabled || fired}
         aria-label={disabled ? (disabledReason ?? "Launch unavailable") : "Hold to launch market"}
         onMouseDown={begin}

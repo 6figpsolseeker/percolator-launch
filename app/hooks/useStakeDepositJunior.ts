@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import {
@@ -97,7 +98,7 @@ export function useStakeDepositJunior({ slabAddress, collateralMint }: StakeDepo
         // NOT the SDK's default stake program id. Derive all PDAs against the correct program.
         const stakeProgramId = new PublicKey(
           (getConfig() as { vaultProgramId?: string }).vaultProgramId
-          ?? "GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3"
+          ?? DEVNET_PROGRAM_IDS.stake
         );
 
         // Derive all PDAs

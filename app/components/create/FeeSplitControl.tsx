@@ -95,7 +95,7 @@ export const FeeSplitControl: FC<FeeSplitControlProps> = ({ value, onChange }) =
 
       <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
         How the trade fee is divided. The protocol takes a fixed {protocolPct}%;
-        you set the remaining {100 - protocolPct}% across creator, LP vault and
+        you set the remaining {100 - protocolPct}% across creator, Earn vault and
         insurance. The three must add up to {100 - protocolPct}% and respect the
         floors.
       </p>

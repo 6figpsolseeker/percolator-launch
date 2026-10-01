@@ -92,7 +92,7 @@ export function InsuranceFundDisplay({
             <CoverageItem
               icon="🔄"
               label="Socialized Loss Buffer"
-              description="Prevents LP losses from cascading to other depositors"
+              description="Stops a market's losses from spreading to other depositors"
             />
             <CoverageItem
               icon="🏗️"

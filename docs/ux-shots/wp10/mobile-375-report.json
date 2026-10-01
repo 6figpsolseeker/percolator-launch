@@ -1,0 +1,65 @@
+[
+  {
+    "route": "/markets",
+    "scrollWidth": 375,
+    "small": [],
+    "priceClipped": null,
+    "hasPrice": false,
+    "clipped": [],
+    "smallCount": 0
+  },
+  {
+    "route": "/trade/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+    "scrollWidth": 375,
+    "small": [],
+    "priceClipped": false,
+    "hasPrice": true,
+    "clipped": [],
+    "smallCount": 0
+  },
+  {
+    "route": "/earn",
+    "scrollWidth": 375,
+    "small": [],
+    "priceClipped": null,
+    "hasPrice": false,
+    "clipped": [],
+    "smallCount": 0
+  },
+  {
+    "route": "/earn/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+    "scrollWidth": 375,
+    "small": [],
+    "priceClipped": null,
+    "hasPrice": false,
+    "clipped": [],
+    "smallCount": 0
+  },
+  {
+    "route": "/create",
+    "scrollWidth": 375,
+    "small": [],
+    "priceClipped": null,
+    "hasPrice": false,
+    "clipped": [],
+    "smallCount": 0
+  },
+  {
+    "route": "/portfolio",
+    "scrollWidth": 375,
+    "small": [],
+    "priceClipped": null,
+    "hasPrice": false,
+    "clipped": [],
+    "smallCount": 0
+  },
+  {
+    "route": "/my-markets",
+    "scrollWidth": 375,
+    "small": [],
+    "priceClipped": null,
+    "hasPrice": false,
+    "clipped": [],
+    "smallCount": 0
+  }
+]

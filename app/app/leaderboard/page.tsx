@@ -504,7 +504,7 @@ export default function LeaderboardPage() {
               </p>
               <p className="text-[11px] text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
                 {IS_MAINNET
-                  ? "Trade permissionless perps on any live market."
+                  ? "Trade perps on any live market, open to anyone."
                   : "Grab devnet funds from the faucet and trade any live market."}
               </p>
             </div>

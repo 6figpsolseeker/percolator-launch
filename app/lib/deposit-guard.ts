@@ -15,6 +15,7 @@
  */
 import type { Connection, PublicKey } from "@solana/web3.js";
 import { formatTokenAmount } from "@/lib/format";
+import { readU64LE } from "@/lib/u64le";
 
 export type DepositAmountStatus =
   /** amount <= 0 / unparsed: nothing to validate yet. */
@@ -86,7 +87,7 @@ export async function readTokenBalance(
     const info = await connection.getAccountInfo(ata);
     if (info === null) return 0n;
     if (!info.data || info.data.length < 72) return null;
-    return Buffer.from(info.data).readBigUInt64LE(64);
+    return readU64LE(info.data, 64);
   } catch {
     return null;
   }

@@ -376,7 +376,10 @@ export function useWithdraw(slabAddress: string) {
 
         // 600k CU when the v17 crank rides along (matches useTrade's
         // crank+trade budget); all pre-existing paths keep the original 300k.
-        const sig = await sendTx({ connection, wallet, instructions, computeUnits: 300_000 });
+        const sig = await sendTx({
+          connection, wallet, instructions, computeUnits: 300_000,
+          selfHeal: { programId, market: slabPk },
+        });
         // Force immediate slab re-read so balance updates without waiting for the next poll.
         refreshSlab?.();
         setTimeout(() => refreshSlab?.(), 2000);

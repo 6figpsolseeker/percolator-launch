@@ -39,9 +39,11 @@ function makeMarket(adminOverride?: PublicKey, oracleOverride?: PublicKey) {
 // and test them through the hook behavior using mocking.
 
 // Mock the heavy deps so we can import the hook in a test environment
+// Burn admin key (renounceAdmin) reads the slab: asset 0's asset_admin is the gate (#2659).
+const h = vi.hoisted(() => ({ slab: new Uint8Array(0) }));
 vi.mock("@/hooks/useWalletCompat", () => ({
   useWalletCompat: vi.fn(),
-  useConnectionCompat: vi.fn(() => ({ connection: {} })),
+  useConnectionCompat: vi.fn(() => ({ connection: { getAccountInfo: async () => ({ data: Buffer.from(h.slab) }) } })),
 }));
 vi.mock("@/lib/tx", () => ({
   sendTx: vi.fn().mockResolvedValue({ signature: "abc123" }),
@@ -69,6 +71,16 @@ vi.mock("@percolatorct/sdk", async () => {
 import { useWalletCompat } from "@/hooks/useWalletCompat";
 import { renderHook } from "@testing-library/react";
 import { useAdminActions } from "@/hooks/useAdminActions";
+import { assetProfileOff } from "@/lib/v18-wire";
+
+/** A slab whose asset 0 asset_admin is ADMIN_PK (AssetOracleProfileV17 +368). */
+function slabWithAssetAdmin(admin: PublicKey = ADMIN_PK): Uint8Array {
+  const off = assetProfileOff(0) + 368;
+  const d = new Uint8Array(off + 4096);
+  d.set(admin.toBytes(), off);
+  return d;
+}
+h.slab = slabWithAssetAdmin();
 
 function mockWallet(pubkey: PublicKey) {
   vi.mocked(useWalletCompat).mockReturnValue({

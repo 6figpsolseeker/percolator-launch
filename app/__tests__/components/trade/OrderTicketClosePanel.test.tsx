@@ -109,7 +109,7 @@ describe("OrderTicketClosePanel (inline form)", () => {
 
   it("disables + relabels the close button when the engine crank is behind", () => {
     render(<OrderTicketClosePanel {...base({ engineStale: true })} />);
-    const btn = screen.getByRole("button", { name: /crank behind/i }) as HTMLButtonElement;
+    const btn = screen.getByRole("button", { name: /waiting for prices/i }) as HTMLButtonElement; // UX WP-2 calm label
     expect(btn.disabled).toBe(true);
     fireEvent.click(btn);
     expect(closePosition).not.toHaveBeenCalled();
@@ -251,7 +251,7 @@ describe("inline close — gates that flip while the form is open", () => {
   ] as const)("%s turning on after mount blocks the click", async (_n, over) => {
     const { rerender } = render(<OrderTicketClosePanel {...base()} />);
     rerender(<OrderTicketClosePanel {...base(over)} />);
-    const btn = screen.getAllByRole("button").find((b) => /close \d+%|crank behind/i.test(b.textContent ?? ""))!;
+    const btn = screen.getAllByRole("button").find((b) => /close \d+%|waiting for prices/i.test(b.textContent ?? ""))!;
     expect((btn as HTMLButtonElement).disabled).toBe(true);
     await act(async () => fireEvent.click(btn));
     expect(closePosition).not.toHaveBeenCalled();

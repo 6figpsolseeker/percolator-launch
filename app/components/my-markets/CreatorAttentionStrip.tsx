@@ -8,7 +8,7 @@ import { useCreateMarket, type KeeperRegisterRetryParams } from "@/hooks/useCrea
 import { isKeeperFeedDead, isEngineCrankStale, summarizeAffectedMarkets } from "./attentionLogic";
 import { resolveIdentity, type ResolvedIdentity } from "@/lib/bulk-identity";
 
-/** One "retry keeper registration" row. Its own useCreateMarket() instance so
+/** One "connect the live price" row. Its own useCreateMarket() instance so
  *  N dead-feed markets in the strip have independent loading/message state
  *  instead of sharing one global "registering…" flag. */
 const KeeperRetryRow: FC<{ market: CreatedMarket; detail: CreatorMarketDetail | null; identity: ResolvedIdentity | null }> = ({ market, detail, identity }) => {
@@ -27,7 +27,7 @@ const KeeperRetryRow: FC<{ market: CreatedMarket; detail: CreatorMarketDetail | 
       <div>
         <span className="text-[11px] font-semibold text-[var(--text)]">{symbol}</span>
         <span className="ml-2 text-[10px] text-[var(--text-secondary)]">
-          keeper price feed looks dead — new positions may be blocked until it&apos;s re-registered.
+          the live price isn&apos;t connected — new positions may be blocked until it is.
         </span>
         {state.keeperMessage && (
           <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">{state.keeperMessage}</p>
@@ -48,7 +48,7 @@ const KeeperRetryRow: FC<{ market: CreatedMarket; detail: CreatorMarketDetail | 
           }}
           className="shrink-0 border border-[var(--warning)]/50 bg-[var(--warning)]/[0.08] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--warning)] hover:bg-[var(--warning)]/[0.15] transition-colors disabled:opacity-50"
         >
-          {state.keeperRegistering ? "registering…" : "retry keeper registration"}
+          {state.keeperRegistering ? "registering…" : "connect the live price"}
         </button>
       ) : (
         <span className="shrink-0 text-[10px] text-[var(--text-dim)]">
@@ -129,12 +129,12 @@ export const CreatorAttentionStrip: FC<CreatorAttentionStripProps> = ({ markets,
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
               <span className="text-[11px] font-semibold text-[var(--text)]">
                 {crankStale.length === 1
-                  ? "1 market has a stale engine crank"
-                  : `${crankStale.length} markets have a stale engine crank`}
+                  ? "1 market is catching up"
+                  : `${crankStale.length} markets are catching up`}
               </span>
               <span className="text-[10px] text-[var(--text-secondary)]">
-                {crankStaleLabel} — accrue cliff, no self-service fix. Each clears once that
-                market is next traded or cranked; the pulsing dot on a row below marks which.
+                {crankStaleLabel} — each catches up automatically once it is next traded or
+                updated; the pulsing dot on a row below marks which.
               </span>
             </div>
           )}

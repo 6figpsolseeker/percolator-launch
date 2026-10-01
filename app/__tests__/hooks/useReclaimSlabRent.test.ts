@@ -64,11 +64,15 @@ vi.mock("@/hooks/useWalletCompat", () => ({
 
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { useReclaimSlabRent } from "../../hooks/useReclaimSlabRent";
+import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Must match NEXT_PUBLIC_PROGRAM_ID in vitest.config.ts (module-level const captured at load time)
-const PROGRAM_ID = new PublicKey("5BZWY6XWPxuWFxs2nPCLLsVaKRWZVnzZh3FkJDLJBkJf");
+// The configured wrapper (lib/program-ids.ts). P0b: this used to be the arbitrary
+// NEXT_PUBLIC_PROGRAM_ID from vitest.config.ts, which the hook trusted — the bug.
+const PROGRAM_ID = new PublicKey(DEVNET_PROGRAM_IDS.wrapper);
+// vitest.config.ts still sets NEXT_PUBLIC_PROGRAM_ID to this unrelated key.
+const STRAY_ENV_PROGRAM_ID = new PublicKey("5BZWY6XWPxuWFxs2nPCLLsVaKRWZVnzZh3FkJDLJBkJf");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -288,6 +292,30 @@ describe("useReclaimSlabRent", () => {
       await result.current.reclaim(slabKeypair);
     });
 
+    expect(result.current.status).toBe("error");
+    expect(result.current.error).toMatch(/not owned by a? Percolator program/i);
+    expect(mockConnection.sendRawTransaction).not.toHaveBeenCalled();
+  });
+
+  it("P0b NEGATIVE CONTROL: a slab owned by the stray NEXT_PUBLIC_PROGRAM_ID is refused", async () => {
+    mockConnection = makeMockConnection({
+      accountInfoResult: {
+        data: makeUninitialisedSlabData(),
+        lamports: 2_000_000_000,
+        owner: STRAY_ENV_PROGRAM_ID,
+        executable: false,
+      },
+    });
+    vi.mocked(useConnectionCompat).mockReturnValue({
+      connection: mockConnection,
+    } as ReturnType<typeof useConnectionCompat>);
+
+    const { result } = renderHook(() => useReclaimSlabRent());
+    await act(async () => {
+      await result.current.reclaim(slabKeypair);
+    });
+
+    expect(process.env.NEXT_PUBLIC_PROGRAM_ID).toBe(STRAY_ENV_PROGRAM_ID.toBase58());
     expect(result.current.status).toBe("error");
     expect(result.current.error).toMatch(/not owned by a? Percolator program/i);
     expect(mockConnection.sendRawTransaction).not.toHaveBeenCalled();

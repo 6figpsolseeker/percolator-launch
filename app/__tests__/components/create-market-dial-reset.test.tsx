@@ -21,7 +21,7 @@ const POOL = "HC7ArykAUSamJSAJ1aYLrS8aAamvBb1JvqMf1woUtnKo";
 
 const RESOLVE_BODY = {
   feedId: null, symbol: "e/acc", price: 0.0124, source: "dexscreener",
-  dexPoolAddress: POOL, dexType: "meteora", oracleMode: "hyperp", cached: true,
+  dexPoolAddress: POOL, dexType: "meteora-dlmm", oracleMode: "hyperp", cached: true,
 };
 // $48k liquidity = the "medium" tier: 1500 bps, shown as 6.5x.
 const DEXSCREENER_BODY = {
@@ -50,7 +50,7 @@ let dexPairs: unknown[] = DEXSCREENER_BODY.pairs;
 const json = (b: unknown, status = 200) =>
   new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
 
-globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input instanceof Request ? input.url : input);
   if (url.startsWith("https://api.dexscreener.com/latest/dex/tokens/")) {
     await gateDex.p;
@@ -59,6 +59,11 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
   if (url.includes("/api/oracle/resolve/")) {
     await gateResolve.p;
     return json(RESOLVE_BODY);
+  }
+  // E2E B21: the pool search classifies candidates by mainnet owner; this pool is DLMM.
+  if (url === "/api/dex/classify-pools") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { addresses?: string[] };
+    return json({ classes: Object.fromEntries((body.addresses ?? []).map((a) => [a, "meteora-dlmm"])) });
   }
   return json({ error: "not mocked" }, 404);
 }) as typeof fetch;
@@ -272,7 +277,7 @@ describe("dial reset when a detection result lands on step 2 (#2588)", () => {
     createState = { ...IDLE, step: 2, error: "blockhash expired", slabAddress: POOL };
     view!.rerender(<CreateMarketWizard />); await flush();
     gateDex.release(); await flush(); // medium tier: 1538 bps, 10 bps fee
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /retry step/i })); }); await flush();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Continue$/i })); }); await flush();
     expect(create).toHaveBeenCalledTimes(2);
     expect(sentParams(create.mock.calls[1][0])).toEqual(first);
   });

@@ -67,7 +67,7 @@ export const DevelopersClient: FC<Props> = ({
 
           <p className="mb-8 max-w-xl text-lg leading-relaxed text-[var(--text-secondary)]">
             Percolator is an open-source protocol. Browse the repos, fork the
-            code, or contribute — everything that powers permissionless perps is
+            code, or contribute — everything that powers open, anyone-can-launch perps is
             here.
           </p>
 

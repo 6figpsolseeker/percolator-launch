@@ -3,7 +3,20 @@
 import { useState, useCallback, useMemo } from 'react';
 import { formatPercent } from "@/lib/formatters";
 import { earnErrorMessage } from "@/lib/earnErrors";
+import { formatTokenAmount } from "@/lib/format";
+import { drawNoticeText, type DrawSummary } from "@/lib/limits/p3-draw-logs";
 import { GlowButton } from '@/components/ui/GlowButton';
+import { StatusLine } from '@/components/ui/StatusLine';
+import { EarnPendingWithdrawal } from '@/components/earn/EarnPendingWithdrawal';
+import { EarnPayoutCapError } from '@/lib/limits/earn-split-pot';
+import {
+  EARN_WITHDRAW_COPY as WC,
+  cooldownPhrase,
+  previewDepositShares,
+  previewWithdrawAtoms,
+  sharesForUsdc,
+  withdrawFlow,
+} from '@/lib/limits/earn-withdraw';
 import { useWalletCompat } from '@/hooks/useWalletCompat';
 import dynamic from 'next/dynamic';
 
@@ -61,8 +74,37 @@ interface DepositWithdrawPanelProps {
   cooldownRemainingSlots?: bigint;
   /** Deposit callback */
   onDeposit: (amount: bigint) => Promise<void>;
+  /**
+   * P3 (limits UI): when set, deposits are refused by the program for this vault right now
+   * (senior impaired / pending-fee genesis / stale valuation). The Deposit button is disabled
+   * and this reason is shown. Withdrawals are unaffected.
+   */
+  depositBlockedReason?: string | null;
+  depositBlockKind?: string | null;
   /** Withdraw callback — see `WithdrawStepResult` (S2 fix). */
   onWithdraw: (lpAmount: bigint) => Promise<WithdrawStepResult | void>;
+  /** P3: the vault owns its market's LP, which changes what a claim-side 21 means (E2E B24). */
+  p3Bound?: boolean;
+  /** d119eebd: senior draw booked / restored by the user's last Earn tx (its program logs). */
+  drawSummary?: DrawSummary | null;
+  /**
+   * UX WP-4: the P3 pricing the program uses (registry shares + the senior value at the WORSE of
+   * the effective / target price for each side), and what the vault can pay out now. Absent on a
+   * vault without it: the previews fall back to vaultBalance / lpSupply.
+   */
+  pricing?: {
+    totalShares: bigint;
+    depositSeniorValue: bigint | null;
+    withdrawSeniorValue: bigint | null;
+    maxNowAtoms: bigint | null;
+  } | null;
+  /** UX WP-4: re-read the ticket when the countdown reaches 0. */
+  onRefresh?: () => Promise<void> | void;
+  /**
+   * Two-pot vault: the pending withdrawal is more than the vault can pay right now. Re-request
+   * `shares` (cancel + request in one transaction); the payout then collects by itself.
+   */
+  onResizeRedemption?: (shares: bigint) => Promise<void>;
 }
 
 export function DepositWithdrawPanel({
@@ -81,6 +123,13 @@ export function DepositWithdrawPanel({
   cooldownRemainingSlots = 0n,
   onDeposit,
   onWithdraw,
+  depositBlockedReason = null,
+  depositBlockKind = null,
+  p3Bound = false,
+  drawSummary = null,
+  pricing = null,
+  onRefresh,
+  onResizeRedemption,
 }: DepositWithdrawPanelProps) {
   const { connected } = useWalletCompat();
   const [tab, setTab] = useState<Tab>('deposit');
@@ -93,8 +142,12 @@ export function DepositWithdrawPanel({
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [claimSuccess, setClaimSuccess] = useState<string | null>(null);
-  // Two-step confirm for withdrawals
-  const [withdrawConfirming, setWithdrawConfirming] = useState(false);
+  // UX WP-4: the withdrawal is asked for in USDC (a "shares" toggle for those who think in shares).
+  const [withdrawUnit, setWithdrawUnit] = useState<'usdc' | 'shares'>('usdc');
+  // Requested in this page session: the payout prompt opens by itself when the cooldown ends.
+  const [armed, setArmed] = useState(false);
+  // The payout was refused before signing because the vault can pay only part of it right now.
+  const [resizeOffer, setResizeOffer] = useState<{ shares: bigint; atoms: bigint } | null>(null);
 
   const divisor = 10n ** BigInt(decimals);
 
@@ -115,24 +168,49 @@ export function DepositWithdrawPanel({
     }
   }, [amount, decimals, divisor]);
 
+  // The program's own pricing when known (P3: registry shares + worse-of senior value).
+  const shareTotal = pricing?.totalShares ?? lpSupply;
+  const depositValue = pricing ? pricing.depositSeniorValue : vaultBalance;
+  const withdrawValue = pricing ? pricing.withdrawSeniorValue : vaultBalance;
+
   // Preview shares for deposit
   const previewShares = useMemo(() => {
     if (!vaultAvailable || rawAmount <= 0n) return 0n;
-    if (lpSupply === 0n || vaultBalance === 0n) return rawAmount; // 1:1 initial mint
-    return (rawAmount * lpSupply) / vaultBalance;
-  }, [vaultAvailable, rawAmount, lpSupply, vaultBalance]);
+    if (shareTotal === 0n || (depositValue ?? 0n) === 0n) return rawAmount; // 1:1 initial mint
+    return previewDepositShares(rawAmount, shareTotal, depositValue) ?? 0n;
+  }, [vaultAvailable, rawAmount, shareTotal, depositValue]);
+
+  // Withdraw: the shares this request burns (USDC input -> shares at the withdraw-side value).
+  const withdrawShares = useMemo(() => {
+    if (!vaultAvailable || rawAmount <= 0n) return 0n;
+    if (withdrawUnit === 'shares') return rawAmount;
+    return sharesForUsdc(rawAmount, shareTotal, withdrawValue, userLpBalance) ?? 0n;
+  }, [vaultAvailable, rawAmount, withdrawUnit, shareTotal, withdrawValue, userLpBalance]);
 
   // Preview collateral for withdrawal
   const previewCollateral = useMemo(() => {
-    if (!vaultAvailable || rawAmount <= 0n) return 0n;
-    if (lpSupply === 0n) return 0n;
-    return (rawAmount * vaultBalance) / lpSupply;
-  }, [vaultAvailable, rawAmount, lpSupply, vaultBalance]);
+    if (withdrawShares <= 0n || shareTotal === 0n) return 0n;
+    return previewWithdrawAtoms(withdrawShares, shareTotal, withdrawValue) ?? 0n;
+  }, [withdrawShares, shareTotal, withdrawValue]);
+  const userWithdrawableAtoms = useMemo(
+    () => (userLpBalance > 0n && shareTotal > 0n ? previewWithdrawAtoms(userLpBalance, shareTotal, withdrawValue) ?? 0n : 0n),
+    [userLpBalance, shareTotal, withdrawValue],
+  );
+  const pendingAtoms = useMemo(
+    () => (pendingRedemptionShares > 0n && shareTotal > 0n ? previewWithdrawAtoms(pendingRedemptionShares, shareTotal, withdrawValue) : null),
+    [pendingRedemptionShares, shareTotal, withdrawValue],
+  );
+  // 88 before it happens (§3.6 item 6): more than the vault can pay out now.
+  const maxNow = pricing?.maxNowAtoms ?? null;
+  const overMaxNow = tab === 'withdraw' && maxNow !== null && previewCollateral > maxNow;
+  const flow = withdrawFlow(cooldownSlots ?? 0n);
 
+  const withdrawMaxRaw = withdrawUnit === 'shares' ? userLpBalance : userWithdrawableAtoms;
   const maxAmount = useMemo(() => {
-    const raw = tab === 'deposit' ? userBalance : userLpBalance;
+    const raw = tab === 'deposit' ? userBalance : withdrawMaxRaw;
     return formatRaw(raw, decimals);
-  }, [tab, userBalance, userLpBalance, decimals]);
+  }, [tab, userBalance, withdrawMaxRaw, decimals]);
+  const unitLabel = tab === 'deposit' ? collateralSymbol : withdrawUnit === 'shares' ? 'shares' : collateralSymbol;
 
   const displayMaxAmount = loading || !vaultAvailable ? '—' : maxAmount;
 
@@ -145,21 +223,15 @@ export function DepositWithdrawPanel({
     (pct: number) => {
       if (loading || !vaultAvailable) return;
 
-      const raw = tab === 'deposit' ? userBalance : userLpBalance;
+      const raw = tab === 'deposit' ? userBalance : withdrawMaxRaw;
       const partial = (raw * BigInt(pct)) / 100n;
       setAmount(formatRaw(partial, decimals));
     },
-    [loading, vaultAvailable, tab, userBalance, userLpBalance, decimals],
+    [loading, vaultAvailable, tab, userBalance, withdrawMaxRaw, decimals],
   );
 
   const handleSubmit = useCallback(async () => {
     if (!vaultAvailable || rawAmount <= 0n) return;
-
-    // Withdrawals use a two-step confirm flow
-    if (tab === 'withdraw' && !withdrawConfirming) {
-      setWithdrawConfirming(true);
-      return;
-    }
 
     setSubmitting(true);
     setTxError(null);
@@ -170,32 +242,24 @@ export function DepositWithdrawPanel({
         await onDeposit(rawAmount);
         setTxSuccess('Deposit successful!');
       } else {
-        const result = await onWithdraw(rawAmount);
-        // S2 fix: step 1 (RequestRedeemLpShares) only STARTS the cooldown —
-        // no funds have moved yet. Only step 2 (ExecuteRedemption) actually
-        // sends collateral to the wallet, so only that step earns "successful".
-        setTxSuccess(
-          result?.step === 'requested'
-            ? 'Redemption requested — claim it once the cooldown elapses.'
-            : 'Withdrawal successful!',
-        );
-        setWithdrawConfirming(false);
+        const result = await onWithdraw(withdrawShares);
+        // UX WP-4: a request (76) starts the cooldown; the pending card takes it from here and
+        // opens the payout by itself. Only a payout sends funds, so only it earns "sent".
+        if (result?.step === 'requested') setArmed(true);
+        else setTxSuccess(`Sent ≈ ${formatUsdc(previewCollateral, decimals)} ${collateralSymbol} to your wallet.`);
       }
       setAmount('');
     } catch (e) {
       // Decode the program error into Earn-specific copy (a locked vault used to
       // surface as a raw "custom program error: 0x15").
-      setTxError(earnErrorMessage(e, tab === 'deposit' ? 'deposit' : 'claim'));
-      setWithdrawConfirming(false);
+      setTxError(earnErrorMessage(e, tab === 'deposit' ? 'deposit' : 'claim', { p3Bound }));
     } finally {
       setSubmitting(false);
     }
-  }, [vaultAvailable, rawAmount, tab, withdrawConfirming, onDeposit, onWithdraw]);
+  }, [vaultAvailable, rawAmount, tab, onDeposit, onWithdraw, withdrawShares, previewCollateral, decimals, collateralSymbol, p3Bound]);
 
-  // S1 fix: claim an already-requested redemption. Deliberately bypasses the
-  // rawAmount/userLpBalance gate below — a full ("Max") redemption request
-  // zeroes userLpBalance, which would otherwise make ExecuteRedemption
-  // permanently unreachable through the normal form.
+  // The payout (77) of a pending withdrawal: automatic when armed, "Finish withdrawal" otherwise.
+  // Deliberately bypasses the form's userLpBalance gate — a full request escrows every share.
   const handleClaimRedemption = useCallback(async () => {
     if (claimSubmitting || loading || !vaultAvailable || !cooldownElapsed) return;
     setClaimSubmitting(true);
@@ -203,26 +267,51 @@ export function DepositWithdrawPanel({
     setClaimSuccess(null);
     try {
       const result = await onWithdraw(pendingRedemptionShares);
+      setArmed(false);
       setClaimSuccess(
         result?.step === 'requested'
-          ? 'Redemption requested — claim it once the cooldown elapses.'
-          : 'Redemption claimed — funds sent to your wallet!',
+          ? null
+          : `Sent${pendingAtoms !== null ? ` ≈ ${formatUsdc(pendingAtoms, decimals)} ${collateralSymbol}` : ''} to your wallet.`,
       );
     } catch (e) {
-      setClaimError(earnErrorMessage(e, 'claim'));
+      setArmed(false);
+      if (e instanceof EarnPayoutCapError && onResizeRedemption && e.maxShares > 0n) {
+        setResizeOffer({ shares: e.maxShares, atoms: e.maxAtoms });
+        return;
+      }
+      setClaimError(earnErrorMessage(e, 'claim', { p3Bound }));
     } finally {
       setClaimSubmitting(false);
     }
-  }, [claimSubmitting, loading, vaultAvailable, cooldownElapsed, onWithdraw, pendingRedemptionShares]);
+  }, [claimSubmitting, loading, vaultAvailable, cooldownElapsed, onWithdraw, pendingRedemptionShares, pendingAtoms, decimals, collateralSymbol, p3Bound, onResizeRedemption]);
+
+  const handleResize = useCallback(async () => {
+    if (!resizeOffer || !onResizeRedemption || claimSubmitting) return;
+    setClaimSubmitting(true);
+    setClaimError(null);
+    try {
+      await onResizeRedemption(resizeOffer.shares);
+      setResizeOffer(null);
+      // The cooldown restarts; collect by itself when it ends (one flow).
+      setArmed(true);
+    } catch (e) {
+      setClaimError(earnErrorMessage(e, 'claim', { p3Bound }));
+    } finally {
+      setClaimSubmitting(false);
+    }
+  }, [resizeOffer, onResizeRedemption, claimSubmitting, p3Bound]);
 
   // Validation
   const isValid = useMemo(() => {
     if (loading || !vaultAvailable) return false;
     if (rawAmount <= 0n) return false;
     if (tab === 'deposit' && rawAmount > userBalance) return false;
+    if (tab === 'deposit' && depositBlockedReason) return false;
     if (tab === 'withdraw') {
-      if (rawAmount > userLpBalance) return false;
-      if (!cooldownElapsed) return false;
+      if (hasPendingRedemption) return false;
+      if (withdrawShares <= 0n || withdrawShares > userLpBalance) return false;
+      if (withdrawUnit === 'shares' && rawAmount > userLpBalance) return false;
+      if (overMaxNow) return false;
     }
     return true;
   }, [
@@ -232,7 +321,11 @@ export function DepositWithdrawPanel({
     tab,
     userBalance,
     userLpBalance,
-    cooldownElapsed,
+    withdrawShares,
+    withdrawUnit,
+    hasPendingRedemption,
+    overMaxNow,
+    depositBlockedReason,
   ]);
 
   if (!connected) {
@@ -256,12 +349,13 @@ export function DepositWithdrawPanel({
         {(['deposit', 'withdraw'] as Tab[]).map((t) => (
           <button
             key={t}
+            data-testid="earn-tab"
+            data-tab={t}
             onClick={() => {
               setTab(t);
               setAmount('');
               setTxError(null);
               setTxSuccess(null);
-              setWithdrawConfirming(false);
             }}
             className={`flex-1 py-3 text-[12px] font-medium uppercase tracking-[0.15em] transition-all duration-150 ${
               tab === t
@@ -274,71 +368,61 @@ export function DepositWithdrawPanel({
         ))}
       </div>
 
-      {/* S1 fix: pending-redemption banner — shown on both tabs so it's never
-          missed. A full ("Max") redemption request zeroes userLpBalance, so
-          without this the normal Withdraw button becomes permanently
-          disabled and ExecuteRedemption is unreachable through the form. */}
+      {/* UX WP-4: the pending withdrawal card (both tabs). A full request escrows every share, so
+          this is also what keeps the payout reachable (S1). It counts as an active position. */}
       {hasPendingRedemption && (
-        <div className="mx-5 mt-5 p-3 border border-[var(--accent)]/30 bg-[var(--accent)]/5 rounded-sm">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] uppercase tracking-[0.15em] font-medium text-[var(--accent)]">
-              Pending Redemption
-            </span>
-            <span className="text-[12px] font-mono tabular-nums text-[var(--text)]">
-              {formatRaw(pendingRedemptionShares, decimals)} LP
-            </span>
-          </div>
-          <p className="text-[11px] text-[var(--text-secondary)] mb-3">
-            {cooldownElapsed
-              ? 'Cooldown elapsed — claim your redemption to receive the underlying collateral.'
-              : cooldownRemainingSlots > 0n
-                ? `Cooldown in progress — ~${slotsToSeconds(cooldownRemainingSlots)}s remaining.`
-                : 'Cooldown in progress.'}
-          </p>
-
-          {claimError && (
-            <p role="alert" className="mb-2 text-[11px] text-[var(--short)]">{claimError}</p>
-          )}
-          {claimSuccess && (
-            <p role="status" aria-live="polite" className="mb-2 text-[11px] text-[var(--cyan)]">{claimSuccess}</p>
-          )}
-
-          <GlowButton
-            onClick={handleClaimRedemption}
-            disabled={!vaultAvailable || !cooldownElapsed || claimSubmitting || loading}
-            variant="primary"
-            size="lg"
-            className="w-full"
-          >
-            {claimSubmitting
-              ? 'Claiming...'
-              : cooldownElapsed
-                ? 'Claim Redemption'
-                : 'Claim available after cooldown'}
-          </GlowButton>
-        </div>
+        <EarnPendingWithdrawal
+          amountLabel={pendingAtoms !== null ? `${formatUsdc(pendingAtoms, decimals)} ${collateralSymbol}` : `${formatRaw(pendingRedemptionShares, decimals)} shares`}
+          cooldownElapsed={cooldownElapsed}
+          cooldownRemainingSlots={cooldownRemainingSlots}
+          armed={armed}
+          disabled={!vaultAvailable || loading || claimSubmitting}
+          onCollect={handleClaimRedemption}
+          onRefresh={onRefresh}
+          ticketKey={pendingRedemptionShares.toString()}
+          error={claimError}
+          resize={
+            resizeOffer
+              ? {
+                  label: WC.maxAvailableAction(`${formatUsdc(resizeOffer.atoms, decimals)} ${collateralSymbol}`),
+                  body: WC.maxAvailableBody,
+                  onResize: handleResize,
+                }
+              : null
+          }
+        />
+      )}
+      {claimSuccess && (
+        <p role="status" aria-live="polite" data-testid="earn-withdraw-sent" className="mx-5 mt-3 text-[12px] text-[var(--text)]">{claimSuccess}</p>
       )}
 
       <div className="p-5">
+        {tab === 'withdraw' && hasPendingRedemption ? (
+          <p data-testid="earn-withdraw-in-progress" className="text-[12px] text-[var(--text-secondary)]">
+            Your withdrawal is in progress above. You can start another once it is collected.
+          </p>
+        ) : (
+        <>
         {/* Amount input */}
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
             <label htmlFor="earn-amount-input" className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-secondary)]">
-              {tab === 'deposit' ? 'Deposit Amount' : 'LP Tokens to Burn'}
+              {tab === 'deposit' ? 'Deposit Amount' : 'Withdraw Amount'}
             </label>
             <button
               onClick={handleSetMax}
               disabled={loading || !vaultAvailable}
-              aria-label={`Set maximum amount: ${displayMaxAmount} ${tab === 'deposit' ? collateralSymbol : 'LP'}`}
+              aria-label={`Set maximum amount: ${displayMaxAmount} ${unitLabel}`}
               className="text-[10px] text-[var(--accent)] hover:text-[var(--accent)]/80 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Max: {displayMaxAmount} {tab === 'deposit' ? collateralSymbol : 'LP'}
+              Max: {displayMaxAmount} {unitLabel}
             </button>
           </div>
 
           <div className="relative">
             <input
               id="earn-amount-input"
+              data-testid={tab === 'deposit' ? 'earn-deposit-input' : 'earn-withdraw-input'}
               type="text"
               inputMode="decimal"
               placeholder="0.00"
@@ -350,9 +434,22 @@ export function DepositWithdrawPanel({
               }}
               className="w-full h-12 px-4 pr-16 text-2xl font-mono tabular-nums bg-[var(--bg)] border border-[var(--border)] rounded-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]/40 transition-colors"
             />
-            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[12px] text-[var(--text-secondary)]">
-              {tab === 'deposit' ? collateralSymbol : 'LP'}
-            </span>
+            {tab === 'deposit' ? (
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[12px] text-[var(--text-secondary)]">{collateralSymbol}</span>
+            ) : (
+              <button
+                type="button"
+                data-testid="earn-withdraw-unit"
+                data-unit={withdrawUnit}
+                onClick={() => {
+                  setWithdrawUnit((u) => (u === 'usdc' ? 'shares' : 'usdc'));
+                  setAmount('');
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 border border-[var(--border)] px-2 py-0.5 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text)]"
+              >
+                {unitLabel}
+              </button>
+            )}
           </div>
 
           {/* Quick percentage buttons */}
@@ -379,113 +476,51 @@ export function DepositWithdrawPanel({
         {/* Preview */}
         {vaultAvailable && rawAmount > 0n && tab === 'deposit' && (
           <div className="mb-4 p-3 bg-[var(--bg)] border border-[var(--border)] rounded-sm">
-            <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-secondary)] mb-2">
-              You will receive
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-mono tabular-nums text-[var(--text)]">
-                ≈ {formatRaw(previewShares, decimals)} LP tokens
-              </span>
-              {lpSupply > 0n && (
-                <span className="text-[10px] text-[var(--text-secondary)]">
-                  Share: {formatPercent((Number(previewShares) / Number(lpSupply + previewShares)) * 100)}
-                </span>
+            <p data-testid="earn-deposit-preview" className="text-[12px] font-mono tabular-nums text-[var(--text)]">
+              {WC.depositPreview(
+                formatShares(previewShares, decimals),
+                formatPercent(shareTotal + previewShares > 0n ? (Number(previewShares) / Number(shareTotal + previewShares)) * 100 : 100),
               )}
-            </div>
-          </div>
-        )}
-
-        {/* Withdrawal preview */}
-        {vaultAvailable && rawAmount > 0n && tab === 'withdraw' && (
-          <div className={`mb-4 p-3 border rounded-sm ${
-            withdrawConfirming
-              ? 'bg-[var(--warning)]/5 border-[var(--warning)]/30'
-              : 'bg-[var(--bg)] border-[var(--border)]'
-          }`}>
-            <div className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-secondary)] mb-3">
-              {withdrawConfirming ? 'Confirm Withdrawal' : 'Withdrawal Preview'}
-            </div>
-
-            <div className="space-y-2">
-              {/* LP tokens burned */}
-              <div className="flex items-center justify-between text-[12px]">
-                <span className="text-[var(--text-secondary)]">LP tokens burned</span>
-                <span className="font-mono tabular-nums text-[var(--text)]">
-                  {formatRaw(rawAmount, decimals)} LP
-                </span>
-              </div>
-
-              {/* Estimated collateral out */}
-              <div className="flex items-center justify-between text-[12px]">
-                <span className="text-[var(--text-secondary)]">Estimated {collateralSymbol} received</span>
-                <span className="font-mono tabular-nums text-[var(--cyan)] font-medium">
-                  ≈ {formatRaw(previewCollateral, decimals)} {collateralSymbol}
-                </span>
-              </div>
-
-              {/* Exchange rate */}
-              {lpSupply > 0n && (
-                <div className="flex items-center justify-between text-[12px]">
-                  <span className="text-[var(--text-secondary)]">Rate (1 LP)</span>
-                  <span className="font-mono tabular-nums text-[var(--text)]">
-                    ≈ {formatRaw((vaultBalance * divisor) / lpSupply, decimals)} {collateralSymbol}
-                  </span>
-                </div>
-              )}
-
-              {/* Cooldown status — withdraw() only ever REQUESTS a redemption when
-                  there's no pending ticket yet (hasPendingRedemption === false);
-                  cooldownElapsed defaults to true in that state (nothing to wait
-                  on), so it must not drive this copy or it reads as "ready to
-                  withdraw now" when the action actually just starts the cooldown. */}
-              <div className="flex items-center justify-between text-[12px]">
-                <span className="text-[var(--text-secondary)]">Cooldown</span>
-                <span className={`font-medium ${!hasPendingRedemption || cooldownElapsed ? 'text-[var(--cyan)]' : 'text-[var(--warning)]'}`}>
-                  {!hasPendingRedemption
-                    ? cooldownSlots && cooldownSlots > 0n
-                      ? `Starts on request (~${slotsToSeconds(cooldownSlots)}s)`
-                      : 'Starts on request'
-                    : cooldownElapsed
-                      ? 'Elapsed — ready to claim'
-                      : cooldownSlots && cooldownSlots > 0n
-                        ? `~${slotsToSeconds(cooldownSlots)}s remaining`
-                        : 'Not elapsed'
-                  }
-                </span>
-              </div>
-
-              {/* Protocol fee note */}
-              <div className="flex items-center justify-between text-[12px]">
-                <span className="text-[var(--text-secondary)]">Protocol fee</span>
-                <span className="text-[var(--text)]">None</span>
-              </div>
-            </div>
-
-            {withdrawConfirming && (
-              <div className="mt-3 pt-3 border-t border-[var(--warning)]/20">
-                <p className="text-[11px] text-[var(--warning)]">
-                  {hasPendingRedemption
-                    ? 'LP tokens will be permanently burned. This action cannot be undone.'
-                    : 'LP tokens will be locked in escrow until the cooldown completes and you claim the redemption.'}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Cooldown warning — shown when no amount entered yet */}
-        {vaultAvailable && tab === 'withdraw' && !cooldownElapsed && rawAmount === 0n && (
-          <div className="mb-4 p-3 bg-[var(--warning)]/5 border border-[var(--warning)]/20 rounded-sm">
-            <p className="text-[11px] text-[var(--warning)]">
-              Cooldown period has not elapsed. You cannot withdraw yet.
             </p>
+          </div>
+        )}
+
+        {/* Withdrawal: one receive line (never "LP tokens will be permanently burned": burning
+            shares for USDC IS the withdrawal), and 88 before it happens (max_now). */}
+        {vaultAvailable && rawAmount > 0n && tab === 'withdraw' && (
+          <div className="mb-4 space-y-2">
+            <p data-testid="earn-withdraw-receive" className="text-[12px] font-mono tabular-nums text-[var(--text)]">
+              {WC.receive(`${formatUsdc(previewCollateral, decimals)} ${collateralSymbol}`, formatShares(withdrawShares, decimals))}
+            </p>
+            {overMaxNow && maxNow !== null && (
+              <StatusLine
+                message={{
+                  kind: 'earn-max-now',
+                  variant: 'paused',
+                  title: 'Partly available now',
+                  body: WC.maxNow(`${formatUsdc(maxNow, decimals)} ${collateralSymbol}`),
+                  action: { id: 'use-max', label: WC.maxNowAction(`${formatUsdc(maxNow, decimals)} ${collateralSymbol}`) },
+                }}
+                onAction={() => {
+                  setWithdrawUnit('usdc');
+                  setAmount(formatRaw(maxNow, decimals));
+                }}
+              />
+            )}
           </div>
         )}
 
         {/* Error / Success */}
         {txError && (
-          <div role="alert" className="mb-4 p-3 bg-[var(--short)]/5 border border-[var(--short)]/20 rounded-sm">
+          <div role="alert" data-testid="earn-error" data-kind="tx" className="mb-4 p-3 bg-[var(--short)]/5 border border-[var(--short)]/20 rounded-sm">
             <p className="text-[11px] text-[var(--short)]">{txError}</p>
+          </div>
+        )}
+        {drawSummary && (
+          <div role="status" data-testid="earn-draw-notice" className="mb-4 p-3 bg-[var(--warning)]/5 border border-[var(--warning)]/20 rounded-sm">
+            <p className="text-[11px] text-[var(--text-secondary)]">
+              {drawNoticeText(drawSummary, (a) => `${formatTokenAmount(a, decimals)} ${collateralSymbol}`)}
+            </p>
           </div>
         )}
         {txSuccess && (
@@ -494,17 +529,27 @@ export function DepositWithdrawPanel({
           </div>
         )}
 
+        {tab === 'deposit' && depositBlockedReason && (
+          <div
+            role="status"
+            data-testid="earn-deposit-blocked"
+            data-reason={depositBlockKind ?? ''}
+            className="mb-3 border border-[var(--warning)]/30 bg-[var(--warning)]/5 px-3 py-2"
+          >
+            <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-[var(--warning)]">Deposits paused</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-[var(--text-secondary)]">{depositBlockedReason}</p>
+          </div>
+        )}
+
         {/* Submit */}
+        {tab === 'withdraw' && (
+          <p data-testid="earn-withdraw-arrives" className="mb-2 text-[11px] text-[var(--text-secondary)]">
+            {WC.requestLine(flow === 'one-tx' ? 'one transaction' : cooldownPhrase(cooldownSlots ?? 0n), flow === 'one-tx' ? 1 : 2)}
+          </p>
+        )}
         <div className="flex gap-2">
-          {withdrawConfirming && (
-            <button
-              onClick={() => setWithdrawConfirming(false)}
-              className="flex-none px-4 py-2.5 text-[12px] font-medium border border-[var(--border)] rounded-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:border-[var(--accent)]/30 transition-all"
-            >
-              Cancel
-            </button>
-          )}
           <GlowButton
+            data-testid={tab === 'deposit' ? 'earn-deposit-submit' : 'earn-withdraw-request'}
             onClick={handleSubmit}
             disabled={!isValid || submitting || loading}
             variant="primary"
@@ -512,24 +557,29 @@ export function DepositWithdrawPanel({
             className="flex-1"
           >
             {submitting
-              ? 'Confirming...'
+              ? 'Confirm in wallet…'
               : tab === 'deposit'
                 ? 'Deposit'
-                : hasPendingRedemption
-                  ? (withdrawConfirming ? 'Confirm Withdrawal' : 'Withdraw')
-                  : (withdrawConfirming ? 'Confirm Request' : 'Request Withdrawal')}
+                : WC.requestButton(rawAmount > 0n ? `${formatUsdc(previewCollateral, decimals)} ${collateralSymbol}` : collateralSymbol)}
           </GlowButton>
         </div>
+        </>
+        )}
       </div>
     </div>
   );
 }
 
-/** Solana devnet slot time, used to render cooldowns as an approximate wall-clock duration. */
-const SLOT_SECONDS = 0.4;
+/** USDC to 2 dp (floored) for the withdrawal lines. */
+function formatUsdc(raw: bigint, decimals: number): string {
+  return formatShares(raw, decimals);
+}
 
-function slotsToSeconds(slots: bigint): number {
-  return Math.ceil(Number(slots) * SLOT_SECONDS);
+/** Shares to 2 dp (never raw atoms like "996058616"). */
+function formatShares(raw: bigint, decimals: number): string {
+  const d = 10n ** BigInt(decimals);
+  const cents = (raw * 100n) / d;
+  return `${(cents / 100n).toLocaleString('en-US')}.${(cents % 100n).toString().padStart(2, '0')}`;
 }
 
 /** Format raw bigint to human-readable decimal string */

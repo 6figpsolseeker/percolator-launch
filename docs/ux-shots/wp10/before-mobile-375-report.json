@@ -1,0 +1,675 @@
+[
+  {
+    "route": "/markets",
+    "scrollWidth": 375,
+    "small": [
+      {
+        "text": "Switch to light mode",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "Open menu",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "+ LAUNCH MARKET",
+        "h": 34,
+        "tid": null
+      },
+      {
+        "text": "VOLUME",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "OI",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "HEALTH",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "RECENT",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "TOKENS",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "USD",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "ALL",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "5X+",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "10X+",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "20X+",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "ALL ORACLES",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "LIVE FEED",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "MANUAL",
+        "h": 36,
+        "tid": null
+      },
+      {
+        "text": "☆",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "☆",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "☆",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "☆",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "☆",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "☆",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "8PzFWy...pumpcopy",
+        "h": 15,
+        "tid": null
+      },
+      {
+        "text": "Open lo-fi radio player",
+        "h": 32,
+        "tid": null
+      }
+    ],
+    "priceClipped": null,
+    "hasPrice": false,
+    "smallCount": 25
+  },
+  {
+    "route": "/trade/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+    "scrollWidth": 375,
+    "small": [
+      {
+        "text": "Switch to light mode",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "Open menu",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "",
+        "h": 12,
+        "tid": null
+      },
+      {
+        "text": "SOL-PERP/USDPERP▼",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "☆ watch",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "Candle (Solid)",
+        "h": 26,
+        "tid": null
+      },
+      {
+        "text": "Line",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Area",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Candle (Solid)",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Candle (Hollow)",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Candle (Hollow Up)",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Candle (Hollow Down)",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Bar (OHLC)",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Display",
+        "h": 26,
+        "tid": null
+      },
+      {
+        "text": "Position Summary",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Avg Entry Price",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Liquidation Price",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "Live PnL",
+        "h": 28,
+        "tid": null
+      },
+      {
+        "text": "f(x)",
+        "h": 26,
+        "tid": null
+      },
+      {
+        "text": "Simple Moving Average",
+        "h": 16,
+        "tid": null
+      },
+      {
+        "text": "Exponential Moving Average",
+        "h": 16,
+        "tid": null
+      },
+      {
+        "text": "Bollinger Bands",
+        "h": 16,
+        "tid": null
+      },
+      {
+        "text": "Relative Strength Index",
+        "h": 16,
+        "tid": null
+      },
+      {
+        "text": "MACD",
+        "h": 16,
+        "tid": null
+      },
+      {
+        "text": "Clear all",
+        "h": 33,
+        "tid": null
+      },
+      {
+        "text": "Zoom in",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "Zoom out",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "Reset zoom",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "Drag to zoom",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "1m",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "5m",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "15m",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "1h",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "4h",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "1d",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "Positions",
+        "h": 29,
+        "tid": null
+      },
+      {
+        "text": "Trades",
+        "h": 29,
+        "tid": null
+      },
+      {
+        "text": "Trade",
+        "h": 41,
+        "tid": "mobile-trade-bar"
+      },
+      {
+        "text": "✕",
+        "h": 24,
+        "tid": null
+      },
+      {
+        "text": "open",
+        "h": 35,
+        "tid": "trade-mode-tab"
+      },
+      {
+        "text": "close",
+        "h": 35,
+        "tid": "trade-mode-tab"
+      },
+      {
+        "text": "Long",
+        "h": 39,
+        "tid": "trade-side-long"
+      },
+      {
+        "text": "Short",
+        "h": 39,
+        "tid": "trade-side-short"
+      },
+      {
+        "text": "USD",
+        "h": 38,
+        "tid": "trade-size-unit"
+      },
+      {
+        "text": "25%",
+        "h": 25,
+        "tid": "trade-size-preset"
+      },
+      {
+        "text": "50%",
+        "h": 25,
+        "tid": "trade-size-preset"
+      },
+      {
+        "text": "75%",
+        "h": 25,
+        "tid": "trade-size-preset"
+      },
+      {
+        "text": "Max",
+        "h": 25,
+        "tid": "trade-size-preset"
+      },
+      {
+        "text": "1x",
+        "h": 12,
+        "tid": "trade-leverage-preset"
+      },
+      {
+        "text": "3x",
+        "h": 12,
+        "tid": "trade-leverage-preset"
+      },
+      {
+        "text": "5x",
+        "h": 12,
+        "tid": "trade-leverage-preset"
+      },
+      {
+        "text": "10x",
+        "h": 12,
+        "tid": "trade-leverage-preset"
+      },
+      {
+        "text": "15.01x",
+        "h": 12,
+        "tid": "trade-leverage-preset"
+      },
+      {
+        "text": "Details ▾",
+        "h": 17,
+        "tid": "ticket-details-toggle"
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "8PzFWy...pumpcopy",
+        "h": 15,
+        "tid": null
+      }
+    ],
+    "priceClipped": null,
+    "hasPrice": false,
+    "smallCount": 57
+  },
+  {
+    "route": "/earn",
+    "scrollWidth": 375,
+    "small": [
+      {
+        "text": "Switch to light mode",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "Open menu",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "LP Vault",
+        "h": 39,
+        "tid": null
+      },
+      {
+        "text": "Stake",
+        "h": 39,
+        "tid": null
+      },
+      {
+        "text": "My Markets",
+        "h": 39,
+        "tid": null
+      },
+      {
+        "text": "TVL",
+        "h": 31,
+        "tid": null
+      },
+      {
+        "text": "Volume",
+        "h": 31,
+        "tid": null
+      },
+      {
+        "text": "Util",
+        "h": 31,
+        "tid": null
+      },
+      {
+        "text": "Mine",
+        "h": 31,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "8PzFWy...pumpcopy",
+        "h": 15,
+        "tid": null
+      },
+      {
+        "text": "Open lo-fi radio player",
+        "h": 32,
+        "tid": null
+      }
+    ],
+    "priceClipped": null,
+    "hasPrice": false,
+    "smallCount": 13
+  },
+  {
+    "route": "/earn/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+    "scrollWidth": 375,
+    "small": [
+      {
+        "text": "Switch to light mode",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "Open menu",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "8PzFWy...pumpcopy",
+        "h": 15,
+        "tid": null
+      },
+      {
+        "text": "Open lo-fi radio player",
+        "h": 32,
+        "tid": null
+      }
+    ],
+    "priceClipped": null,
+    "hasPrice": false,
+    "smallCount": 6
+  },
+  {
+    "route": "/create",
+    "scrollWidth": 375,
+    "small": [
+      {
+        "text": "Switch to light mode",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "Open menu",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 41,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "8PzFWy...pumpcopy",
+        "h": 15,
+        "tid": null
+      },
+      {
+        "text": "Open lo-fi radio player",
+        "h": 32,
+        "tid": null
+      }
+    ],
+    "priceClipped": null,
+    "hasPrice": false,
+    "smallCount": 6
+  },
+  {
+    "route": "/portfolio",
+    "scrollWidth": 375,
+    "small": [
+      {
+        "text": "Switch to light mode",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "Open menu",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Overview",
+        "h": 39,
+        "tid": null
+      },
+      {
+        "text": "Positions",
+        "h": 39,
+        "tid": null
+      },
+      {
+        "text": "Wallet",
+        "h": 39,
+        "tid": null
+      },
+      {
+        "text": "My Markets",
+        "h": 39,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "8PzFWy...pumpcopy",
+        "h": 15,
+        "tid": null
+      },
+      {
+        "text": "Open lo-fi radio player",
+        "h": 32,
+        "tid": null
+      }
+    ],
+    "priceClipped": null,
+    "hasPrice": false,
+    "smallCount": 10
+  },
+  {
+    "route": "/my-markets",
+    "scrollWidth": 375,
+    "small": [
+      {
+        "text": "Switch to light mode",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "Connect Solflare",
+        "h": 40,
+        "tid": "wallet-connect"
+      },
+      {
+        "text": "Open menu",
+        "h": 40,
+        "tid": null
+      },
+      {
+        "text": "8PzFWy...pumpcopy",
+        "h": 15,
+        "tid": null
+      },
+      {
+        "text": "Open lo-fi radio player",
+        "h": 32,
+        "tid": null
+      }
+    ],
+    "priceClipped": null,
+    "hasPrice": false,
+    "smallCount": 5
+  }
+]

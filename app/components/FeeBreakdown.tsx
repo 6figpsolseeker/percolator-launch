@@ -13,6 +13,7 @@
  * SDK's FEE_SPLIT — nothing here restates a number.
  */
 
+import { bpsPct } from "@/lib/format";
 import type { FC } from "react";
 import {
   FEE_LEGS,
@@ -45,8 +46,8 @@ export const FeeBreakdown: FC<FeeBreakdownProps> = ({
       {feeBps != null && feeBps > 0 && (
         <p className="mb-2 text-[var(--text-secondary)]">
           This market charges{" "}
-          <span className="font-mono tabular-nums text-[var(--text)]">{feeBps} bps</span>{" "}
-          per trade ({(feeBps / 100).toFixed(2)}%) — set by the token&apos;s liquidity, so it
+          <span className="font-mono tabular-nums text-[var(--text)]">{bpsPct(feeBps)}</span>{" "}
+          per trade — set by the token&apos;s liquidity, so it
           differs between markets. Every market splits it the same way:
         </p>
       )}
@@ -89,8 +90,8 @@ export const FeeBreakdown: FC<FeeBreakdownProps> = ({
             >
               Stakers
               <span className="ml-1 text-[var(--text-muted)]">
-                — none of the trading fee. Staking backs the insurance fund above and takes
-                first loss; it is not a fee-earning position.
+                — the insurance share above, paid into the stake pool automatically. Stakers
+                back that fund and take first loss.
               </span>
             </span>
             <span className="shrink-0 font-mono tabular-nums text-[var(--text-secondary)]">

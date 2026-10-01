@@ -48,7 +48,6 @@ export function VaultRow({ vault, selected, userDepositUsd, onSelect }: VaultRow
         <MarketLogo mainnetCa={vault.mainnetCa} symbol={vault.symbol} pixelOverride={22} decorative />
         <span className="min-w-0 truncate text-[12px] font-medium text-[var(--text)]">
           {vault.symbol}
-          <span className="text-[var(--text-muted)]">-PERP</span>
         </span>
       </div>
 

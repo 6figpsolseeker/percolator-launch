@@ -1,3 +1,6 @@
+import { resolveDevnetProgramIds } from "@/lib/program-ids";
+import { P2_ERROR_COPY } from "@/lib/limits/copy";
+import { PORTFOLIO_LOOKUP_COPY } from "@/lib/owner-portfolio";
 /**
  * Percolator on-chain program error code to human-readable message mappings.
  * 
@@ -19,6 +22,7 @@
 // used by deposit/withdraw/trade/close hooks, and importing @/lib/tx pulled that heavy
 // tx module into every hook test that mocks @/lib/tx, breaking them at module load.
 // Keep this in sync with LIGHTHOUSE_PROGRAM_ID in @/lib/tx (same constant, two leaves).
+import { WRAPPER_ERR } from "@/lib/wrapper-errors";
 const LIGHTHOUSE_PROGRAM_ID_STR = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95";
 
 const LIGHTHOUSE_USER_MESSAGE =
@@ -42,26 +46,46 @@ export { LIGHTHOUSE_USER_MESSAGE };
 // the deployed program: Custom(N) == enum ordinal, no offset; ProgramError::Custom(value as u32)).
 // This was previously a stale v12 map whose codes were misaligned from ordinal 4
 // onward (e.g. 21 showed "Position size mismatch" but v17 21 = EngineLockActive).
+/**
+ * P1 wrapper errors (Custom 66..71, feat/p1-safety-release). The single
+ * source of P1 wording: lib/limits/errors.ts reuses this table.
+ */
+export const P1_ERROR_MESSAGES: Record<number, string> = {
+  // p1-safety-release-2026-09-29.md §3 (append-only; feat/p1-safety-release). Harmless before
+  // the P1 deploy: the deployed wrapper never returns these codes.
+  [WRAPPER_ERR.ExecPriceOutsideOracleBand]: "The price moved too far for this trade, so it didn't go through. Try again; if it keeps happening the price is moving fast.",
+  [WRAPPER_ERR.SameOwnerTrade]: "This wallet owns this market's liquidity or created the market, so it can only close positions here, not open or add to them. Use a different wallet to trade.",
+  [WRAPPER_ERR.LpExposureCapExceeded]: "This trade is larger than the market has room for right now. Try a smaller size.",
+  [WRAPPER_ERR.LpFloorHalt]: "The market has no room for new positions right now, so opening is paused. Closing positions still works.",
+  [WRAPPER_ERR.ProtocolSideOiCapExceeded]: "This side of the market has reached its open-interest cap. Try a smaller size or the other side.",
+  [WRAPPER_ERR.CloseSlabFeesOutstanding]: "The market's last fees are being collected. Close again in a minute.",
+};
+
 const ERROR_CODE_MAP: Record<number, string> = {
-  0: "Invalid market data (bad magic) - corrupted or not a Percolator market.",
-  1: "This market uses a different program version and needs migration.",
-  2: "Market already initialized.",
-  3: "Market not initialized.",
-  4: "Wrong account type for this action.",
-  5: "Invalid account data length - corrupted account.",
-  6: "Missing required signature.",
-  7: "An account that must be writable was passed as read-only.",
-  8: "Unauthorized - you don't have permission for this action.",
-  9: "Invalid or unsupported instruction. (If this is a market order, the market's matcher config may be misaligned on-chain. Please report this to the team.)",
-  10: "Invalid mint account.",
-  11: "Invalid token account.",
-  12: "Invalid vault account.",
-  13: "Invalid token program.",
-  14: "Invalid engine configuration for this market.",
-  15: "Math overflow in engine calculation - try a smaller size.",
-  16: "Account provenance mismatch - wrong market or account passed.",
-  17: "Position has an unsettled leg - crank the market and retry.",
-  18: "Invalid position leg.",
+  [WRAPPER_ERR.InvalidMagic]: "Invalid market data (bad magic) - corrupted or not a Percolator market.",
+  [WRAPPER_ERR.InvalidVersion]: "This market uses a different program version and needs migration.",
+  [WRAPPER_ERR.AlreadyInitialized]: "Market already initialized.",
+  [WRAPPER_ERR.NotInitialized]: "Market not initialized.",
+  [WRAPPER_ERR.InvalidAccountKind]: "Wrong account type for this action.",
+  [WRAPPER_ERR.InvalidAccountLen]: "Invalid account data length - corrupted account.",
+  [WRAPPER_ERR.ExpectedSigner]: "Missing required signature.",
+  [WRAPPER_ERR.ExpectedWritable]: "An account that must be writable was passed as read-only.",
+  // Custom(8) = PercolatorError::Unauthorized from the PROGRAM: the connected
+  // wallet is not the authority the instruction requires. Not the same thing as
+  // a wallet that is locked / has not authorised this site (Phantom 4100,
+  // Solflare "wallet is locked") — those are detected in detectWalletError and
+  // never reach this map.
+  [WRAPPER_ERR.Unauthorized]: "Not authorized: the connected wallet isn't the account this action requires (for example the market's creator or admin, or the owner of this position). If you switched wallets, reconnect the one you used for this market.",
+  [WRAPPER_ERR.InvalidInstruction]: "Invalid or unsupported instruction. (If this is a market order, the market's matcher config may be misaligned on-chain. Please report this to the team.)",
+  [WRAPPER_ERR.InvalidMint]: "Invalid mint account.",
+  [WRAPPER_ERR.InvalidTokenAccount]: "Invalid token account.",
+  [WRAPPER_ERR.InvalidVaultAccount]: "Invalid vault account.",
+  [WRAPPER_ERR.InvalidTokenProgram]: "Invalid token program.",
+  [WRAPPER_ERR.EngineInvalidConfig]: "Invalid engine configuration for this market.",
+  [WRAPPER_ERR.EngineArithmeticOverflow]: "Math overflow in engine calculation - try a smaller size.",
+  [WRAPPER_ERR.EngineProvenanceMismatch]: "Account provenance mismatch - wrong market or account passed.",
+  [WRAPPER_ERR.EngineHiddenLeg]: "Position has an unsettled leg - crank the market and retry.",
+  [WRAPPER_ERR.EngineInvalidLeg]: "Invalid position leg.",
   // LF1 (2026-07-08): EngineStale is the ~500-slot ACCRUE cliff, not a normal
   // "wait a moment" blip - live-devnet verification found SOL/JUP/TRUMP sitting
   // 273k-283k slots past it, permanently reverting every trade/close. Once
@@ -76,8 +100,8 @@ const ERROR_CODE_MAP: Record<number, string> = {
   //   2. A favorable action (e.g. claim released PnL) on an account whose health
   //      cert has drifted behind the header epoch — clears with a crank.
   //   3. A genuinely deep-stale market — needs a maintainer crank/re-seed.
-  19: "This action can't be completed right now. If you're withdrawing, close your open position first — collateral backing a position can't be withdrawn. Otherwise the market may just need a moment; try again shortly, and report it if it persists.",
-  20: "Counterparty (backing) state is stale - crank the market, then retry.",
+  [WRAPPER_ERR.EngineStale]: "This action can't be completed right now. If you're withdrawing, close your open position first — collateral backing a position can't be withdrawn. Otherwise the market may just need a moment; try again shortly, and report it if it persists.",
+  [WRAPPER_ERR.EngineBStale]: "Counterparty (backing) state is stale - crank the market, then retry.",
   // LF1 (2026-07-08): EngineLockActive is the OTHER symptom of the same cliff
   // as EngineStale(19) above - once a market crosses it, every trade/close
   // reverts one of the two, permanently, until a maintainer re-seeds it. The
@@ -91,52 +115,63 @@ const ERROR_CODE_MAP: Record<number, string> = {
   // position settled); or a genuinely deep-stale market. It does NOT always mean
   // "re-seed" — a transient lag clears on its own; a bankrupt/recovery market
   // needs maintainer action. Don't promise either outcome.
-  21: "This market is temporarily locked. If it's a brief lag it clears on its own — try again in a moment. If it persists, the market needs maintainer attention (it may be in recovery). Please report it.",
-  22: "Crank made no progress - the market may need attention. Try again shortly.",
-  23: "This market is in recovery mode and must be cranked before trading resumes.",
-  24: "Engine counter overflow.",
-  25: "Engine counter underflow.",
-  26: "Oracle is invalid - no price available for this market.",
-  27: "Oracle price is stale - a fresh price must be pushed before trading. Try again in a moment.",
-  28: "Oracle confidence interval too wide - price too uncertain to trade right now.",
-  29: "Invalid oracle account for this market.",
-  30: "An LP vault already exists for this market.",
-  31: "LP vault not found for this market.",
-  32: "LP vault is paused.",
-  33: "LP vault still has shares outstanding - cannot proceed.",
-  34: "Amount must be greater than zero.",
-  35: "Insufficient LP vault shares.",
-  36: "LP vault redemption cooldown is still active - wait before redeeming.",
-  37: "Trade would exceed the market's open-interest cap. Try a smaller size.",
-  38: "No LP vault fees available to crank yet.",
-  39: "LP vault share supply mismatch - please report this error.",
-  40: "LP vault authority mismatch.",
-  41: "Deposit too small - it would mint zero LP shares. Deposit a larger amount.",
-  42: "Position-NFT registry not found for this market.",
-  43: "This position can't be transferred as an NFT right now.",
-  44: "Invalid NFT transfer - cannot transfer to yourself or a zero address.",
-  45: "Invalid NFT mint authority.",
-  46: "Position-NFT provenance mismatch.",
-  47: "Insurance withdrawal cooldown is still active.",
-  48: "Insurance withdrawal exceeds the allowed ceiling (deposits-only limit).",
-  49: "Insufficient margin for this trade - deposit more collateral or reduce size/leverage.",
+  [WRAPPER_ERR.EngineLockActive]: "This market is temporarily locked, or reduce-only while it recovers from a bankruptcy. Closing positions still works (your close is sent as a unilateral exit if needed); new positions may be paused until the market reopens on its own. If a brief lag, try again in a moment.",
+  [WRAPPER_ERR.EngineNonProgress]: "Crank made no progress - the market may need attention. Try again shortly.",
+  [WRAPPER_ERR.EngineRecoveryRequired]: "This market is in recovery mode and must be cranked before trading resumes.",
+  [WRAPPER_ERR.EngineCounterOverflow]: "Engine counter overflow.",
+  [WRAPPER_ERR.EngineCounterUnderflow]: "Engine counter underflow.",
+  [WRAPPER_ERR.OracleInvalid]: "Oracle is invalid - no price available for this market.",
+  [WRAPPER_ERR.OracleStale]: "Oracle price is stale - a fresh price must be pushed before trading. Try again in a moment.",
+  [WRAPPER_ERR.OracleConfTooWide]: "Oracle confidence interval too wide - price too uncertain to trade right now.",
+  [WRAPPER_ERR.InvalidOracleKey]: "Invalid oracle account for this market.",
+  [WRAPPER_ERR.LpVaultAlreadyExists]: "An LP vault already exists for this market.",
+  [WRAPPER_ERR.LpVaultNotFound]: "LP vault not found for this market.",
+  [WRAPPER_ERR.LpVaultPaused]: "LP vault is paused.",
+  [WRAPPER_ERR.LpVaultSharesOutstanding]: "LP vault still has shares outstanding - cannot proceed.",
+  [WRAPPER_ERR.LpVaultZeroAmount]: "Amount must be greater than zero.",
+  [WRAPPER_ERR.LpVaultInsufficientShares]: "Insufficient LP vault shares.",
+  [WRAPPER_ERR.LpVaultCooldownActive]: "LP vault redemption cooldown is still active - wait before redeeming.",
+  [WRAPPER_ERR.LpVaultOiReservationViolated]: "Trade would exceed the market's open-interest cap. Try a smaller size.",
+  [WRAPPER_ERR.LpVaultNoFeesToCrank]: "No LP vault fees available to crank yet.",
+  [WRAPPER_ERR.LpVaultSupplyMismatch]: "LP vault share supply mismatch - please report this error.",
+  [WRAPPER_ERR.LpVaultAuthorityMismatch]: "LP vault authority mismatch.",
+  [WRAPPER_ERR.LpVaultZeroSharesMinted]: "Deposit too small - it would mint zero LP shares. Deposit a larger amount.",
+  [WRAPPER_ERR.NftRegistryNotFound]: "Position-NFT registry not found for this market.",
+  [WRAPPER_ERR.NftPortfolioNotTransferable]: "This position can't be transferred as an NFT right now.",
+  [WRAPPER_ERR.NftTransferSelfOrZero]: "Invalid NFT transfer - cannot transfer to yourself or a zero address.",
+  [WRAPPER_ERR.NftInvalidMintAuthority]: "Invalid NFT mint authority.",
+  [WRAPPER_ERR.NftPortfolioProvenance]: "Position-NFT provenance mismatch.",
+  [WRAPPER_ERR.InsuranceWithdrawCooldownActive]: "Insurance withdrawal cooldown is still active.",
+  [WRAPPER_ERR.InsuranceWithdrawCeilingExceeded]: "Insurance withdrawal exceeds the allowed ceiling (deposits-only limit).",
+  [WRAPPER_ERR.EngineInsufficientInitialMargin]: "Insufficient margin for this trade - deposit more collateral or reduce size/leverage.",
   // ── v17 fee-split + stake/keeper ordinals (50-61) ────────────────────────
   // Source: SDK abi/errors.ts (v16_program.rs PercolatorError, percolator-prog@10acb5ae,
   // deployed to the fresh wrapper DhSkE7uTb8HBUYYWF1xkxMYBGtLYJEoDq1tfBD7SnHcj). These
   // were missing entirely from this map — 51/52 in particular are the fee-split floors/sum
   // errors the launch wizard's UpdateFeeSplit (tag 86) can trip if a bad split reaches chain.
-  50: "First LP vault deposit is below the minimum-liquidity floor. Deposit a larger amount.",
-  51: "Fee split violates the on-chain floors (creator ≤ 3600 bps, LP ≥ 3200 bps, insurance ≥ 1200 bps of the post-protocol remainder). Adjust the shares in the launch wizard.",
-  52: "Fee split shares must sum to exactly 8000 bps (the 80% left after the fixed 20% protocol cut). Adjust the shares in the launch wizard.",
-  53: "Nothing to claim from the insurance reserve yet — it's already fully pushed. Retry after more trading volume.",
-  54: "No stake pool bound to this market — BindInsuranceAuthority hasn't run, so the staker/insurance leg has no exit.",
-  55: "The supplied stake pool is not owned by the canonical stake program (forgery gate).",
-  56: "Stake pool authority mismatch — this pool did not bind itself to this market.",
-  57: "Stake pool belongs to a different market.",
-  58: "Stake pool was initialized against a different wrapper program.",
-  59: "Stake pool is not in insurance-LP mode, so it is not owed the insurance/staker fee leg.",
-  60: "This wrapper build has no pinned stake program — the insurance-reserve-to-stake withdrawal has no trusted destination (expected off devnet).",
-  61: "This asset slot is already configured/active — only an append at the next index or a re-activation of a retired slot is allowed.",
+  [WRAPPER_ERR.LpVaultDepositBelowMinimumLiquidity]: "First LP vault deposit is below the minimum-liquidity floor. Deposit a larger amount.",
+  [WRAPPER_ERR.FeeSplitFloorViolation]: "Fee split violates the on-chain floors (creator ≤ 3600 bps, LP ≥ 3200 bps, insurance ≥ 1200 bps of the post-protocol remainder). Adjust the shares in the launch wizard.",
+  [WRAPPER_ERR.FeeSplitSumInvalid]: "Fee split shares must sum to exactly 8000 bps (the 80% left after the fixed 20% protocol cut). Adjust the shares in the launch wizard.",
+  [WRAPPER_ERR.NoInsuranceReserveToClaim]: "Nothing to claim from the insurance reserve yet — it's already fully pushed. Retry after more trading volume.",
+  [WRAPPER_ERR.StakePoolNotBound]: "No stake pool bound to this market — BindInsuranceAuthority hasn't run, so the staker/insurance leg has no exit.",
+  [WRAPPER_ERR.StakePoolOwnerMismatch]: "The supplied stake pool is not owned by the canonical stake program (forgery gate).",
+  [WRAPPER_ERR.StakePoolAuthorityMismatch]: "Stake pool authority mismatch — this pool did not bind itself to this market.",
+  [WRAPPER_ERR.StakePoolMarketMismatch]: "Stake pool belongs to a different market.",
+  [WRAPPER_ERR.StakePoolWrapperMismatch]: "Stake pool was initialized against a different wrapper program.",
+  [WRAPPER_ERR.StakePoolModeMismatch]: "Stake pool is not in insurance-LP mode, so it is not owed the insurance/staker fee leg.",
+  [WRAPPER_ERR.StakeProgramNotPinned]: "This wrapper build has no pinned stake program — the insurance-reserve-to-stake withdrawal has no trusted destination (expected off devnet).",
+  [WRAPPER_ERR.AssetSlotAlreadyConfigured]: "This asset slot is already configured/active — only an append at the next index or a re-activation of a retired slot is allowed.",
+  // 62-65: on the DEPLOYED wrapper (deploy/v18.2-wrapper@6377376a PercolatorError), missing here until P0b.
+  [WRAPPER_ERR.CreatorFeeOverClaim]: "That's more than the creator fees available to claim right now. Claim the amount shown, or wait for more trading.",
+  [WRAPPER_ERR.LpVaultBackingBucketNotEmpty]: "This market's backing is already funded outside the Earn vault, so an Earn vault can't be created for it.",
+  [WRAPPER_ERR.RentExemptRequired]: "The market account must stay rent-exempt after this action. Please report this — it should not happen on a normal market.",
+  [WRAPPER_ERR.AssetGenerationMismatch]: "This market's asset changed since the transaction was built. Refresh the page and try again.",
+  // ── P1 safety release (oracle band, auto-halt, exposure cap) ──────────────
+  // Codes are appended after 61 by feat/p1-safety-release; add one line per
+  // code here from ~/percolator-ops/ledger/p1-safety-release-2026-09-29.md.
+  // market-error.ts (explainMarketTxError) can refine any of them with live
+  // market health, the same way 19/21/49 are refined.
+  ...P1_ERROR_MESSAGES,
 };
 
 /** Legacy Anchor error map (unused but kept for compatibility) */
@@ -189,7 +224,7 @@ const NFT_ERROR_CODE_MAP: Record<number, string> = {
 
 /** Hard-coded NFT program id. Matches app/lib/nft-program.ts. Kept here to
  *  avoid importing the (client-only) PublicKey wrapper from this module. */
-const NFT_PROGRAM_ID = "CNGBPZRALk9Xu8BdgWNyrLJ7daQ9eJYFf1GnEEC7YCU3";
+const NFT_PROGRAM_ID = resolveDevnetProgramIds().nft;
 
 function isNftProgramError(msg: string): boolean {
   if (msg.includes(NFT_PROGRAM_ID)) return true;
@@ -218,6 +253,40 @@ function isSplTokenProgramError(msg: string): boolean {
 const SPL_TOKEN_INSUFFICIENT_FUNDS_MESSAGE =
   "Insufficient balance - you're trying to deposit more than your wallet holds. " +
   "Reduce the amount or add more funds and try again.";
+
+// ── Wallet-side errors (Phantom / Solflare / Privy) ─────────────────────────
+// A wallet that is LOCKED or has not authorised this site is not a program
+// "Unauthorized". Shapes observed/documented:
+//   Phantom  : {code: 4100, message: "The requested method and/or account has not been authorized by the user."}
+//              {code: 4001, message: "User rejected the request."}
+//   Solflare : "Wallet is locked" / "WalletNotConnectedError" / "User rejected the request"
+//   adapters : WalletNotConnectedError, WalletSignTransactionError: "Wallet not connected"
+export const WALLET_LOCKED_MESSAGE =
+  "Your wallet is locked or hasn't authorised this site. Unlock Phantom / Solflare, reconnect it from the header, and try again. Nothing was sent.";
+export type WalletErrorKind = "locked" | "rejected";
+
+export function detectWalletError(msg: string): WalletErrorKind | null {
+  if (/has not been authori[sz]ed by the user|\b4100\b.*authori[sz]|wallet is locked|locked wallet|WalletNotConnected|wallet not connected|please unlock/i.test(msg)) {
+    return "locked";
+  }
+  if (/user rejected|rejected the request|user declined|transaction rejected|request rejected|\b4001\b/i.test(msg)) {
+    return "rejected";
+  }
+  return null;
+}
+
+/**
+ * Program id of the FIRST "Program <id> failed: custom program error" log line
+ * — the innermost failing program (a CPI failure is logged by the callee
+ * first, then re-logged by each caller). Null when no such line is present.
+ */
+export function failingProgramId(msg: string): string | null {
+  const m = msg.match(/Program ([1-9A-HJ-NP-Za-km-z]{32,44}) failed: custom program error/);
+  return m ? m[1] : null;
+}
+
+const MATCHER_PROGRAM_ID = resolveDevnetProgramIds().matcher;
+const WRAPPER_PROGRAM_ID = resolveDevnetProgramIds().wrapper;
 
 export function extractErrorCode(msg: string): number | null {
   const m = msg.match(/(?:custom program error|Error Code)[:\s]+0x([0-9a-fA-F]+)/i);
@@ -253,7 +322,7 @@ function extractCustomIndex(msg: string): number | null {
 // set (and 21 from LONG_WINDOW_RETRY below) so withTransientRetry stops
 // silently retrying a dead market 8x before finally telling the user. See
 // ERROR_CODE_MAP[19]/[21] and useEngineFreshness.ts for the corrected model.
-const TRANSIENT_CODES = new Set([20, 26, 27]);
+const TRANSIENT_CODES = new Set<number>([WRAPPER_ERR.EngineBStale, WRAPPER_ERR.OracleInvalid, WRAPPER_ERR.OracleStale]);
 
 export function isTransientError(msg: string): boolean {
   // A confirmation timeout must NEVER classify as transient: the tx may have
@@ -284,12 +353,12 @@ export function isOracleStaleError(msg: string): boolean {
   // deliberately NOT included — see LF1 in TRANSIENT_CODES above: unlike
   // these three, 19 is the ~500-slot accrue cliff and does not self-clear
   // from a normal price push or crank once tripped; it needs a re-seed.
-  return code === 27 || code === 26 || code === 20;
+  return code === WRAPPER_ERR.OracleStale || code === WRAPPER_ERR.OracleInvalid || code === WRAPPER_ERR.EngineBStale;
 }
 
 export function isEngineLockError(msg: string): boolean {
   const code = extractErrorCode(msg);
-  return code === 21 || code === 19;
+  return code === WRAPPER_ERR.EngineLockActive || code === WRAPPER_ERR.EngineStale;
 }
 
 
@@ -310,6 +379,18 @@ export function humanizeError(rawMsg: string, context?: "trade"): string {
   if (isLighthouseError(rawMsg)) {
     return LIGHTHOUSE_USER_MESSAGE;
   }
+
+  // Wallet-side refusals BEFORE any code extraction: a locked Phantom/Solflare
+  // must never read as the program's Custom(8) "Not authorized".
+  // lib/maintenance.ts MaintenanceError: already user-facing.
+  if (rawMsg.includes("The playground is in maintenance")) {
+    return rawMsg.slice(rawMsg.indexOf("The playground is in maintenance"));
+  }
+  // M-4: lib/owner-portfolio.ts PortfolioLookupError — already calm, user-facing copy.
+  if (rawMsg.includes(PORTFOLIO_LOOKUP_COPY)) return PORTFOLIO_LOOKUP_COPY;
+  const walletErr = detectWalletError(rawMsg);
+  if (walletErr === "locked") return WALLET_LOCKED_MESSAGE;
+  if (walletErr === "rejected") return "Transaction cancelled.";
 
   // Handle Solana system errors BEFORE custom code extraction.
   // These are string-form errors like "InvalidAccountData", "AccountAlreadyInitialized" etc.
@@ -353,6 +434,13 @@ export function humanizeError(rawMsg: string, context?: "trade"): string {
   // recognized" in the NFT program — a user who sees the former assumes a
   // wallet/signing bug instead of an on-chain program mismatch).
   if (code !== null) {
+    // Code-overlap guard: the matcher's own custom codes are not wrapper codes.
+    const origin = failingProgramId(rawMsg);
+    if (origin && origin === MATCHER_PROGRAM_ID && origin !== WRAPPER_PROGRAM_ID) {
+      // P2 matcher v2 codes (8002..8005) have plain copy; anything else keeps the generic line.
+      if (P2_ERROR_COPY[code]) return P2_ERROR_COPY[code];
+      return `The market's matcher rejected this fill (matcher error ${code}). Try a smaller size, or retry in a moment.`;
+    }
     if (isNftProgramError(rawMsg) && NFT_ERROR_CODE_MAP[code]) {
       return NFT_ERROR_CODE_MAP[code];
     }
@@ -374,10 +462,12 @@ export function humanizeError(rawMsg: string, context?: "trade"): string {
     // The old text asserted (a) only, which sent debugging down the slippage
     // path while the real cause was (b). Keep it honest: name the likely cause
     // and the recovery. Only trade-submit call sites pass context: "trade".
-    if (code === 9 && context === "trade") {
+    if (code === WRAPPER_ERR.InvalidInstruction && context === "trade") {
       return "The trade was rejected by the program (invalid instruction) — usually the price moved past your slippage tolerance, or a trade parameter was off. Try again with the same size and leverage.";
     }
-    if (ERROR_CODE_MAP[code]) {
+    // error-codes-4b1a5d30.md: a Custom(n) is the WRAPPER's code only when the wrapper raised
+    // it. An unattributed code (no "Program X failed" line) or another program's is not guessed.
+    if (origin === WRAPPER_PROGRAM_ID && ERROR_CODE_MAP[code]) {
       return ERROR_CODE_MAP[code];
     }
   }
@@ -413,19 +503,22 @@ export function humanizeError(rawMsg: string, context?: "trade"): string {
     return "Transfer-hook metadata account missing. This NFT was minted before a recent hook-fix upgrade; open a support ticket so we can run RepairExtraAccountMetas on it.";
   }
   if (rawMsg.includes("timeout") || rawMsg.includes("Timeout")) {
-    return "Transaction timed out. It may still confirm - check your wallet.";
+    return CONFIRMING_MESSAGE;
   }
-  // If we have a raw error code that wasn't recognized, show it
-  if (rawMsg.includes("custom program error")) {
-    return `Program error: ${rawMsg.replace(/.*custom program error:\s*/i, "").slice(0, 60)}`;
-  }
-  if (rawMsg.includes("Custom(")) {
-    return `Program error: ${rawMsg.match(/Custom\(\d+\)/)?.[0] ?? rawMsg.slice(0, 60)}`;
-  }
-  // Keep last 80 chars of the raw message for debugging
-  const trimmed = rawMsg.length > 80 ? "..." + rawMsg.slice(-80) : rawMsg;
-  return `Transaction failed: ${trimmed}`;
+  // UX WP-10 (audit §5.1 / §5.3 "unmapped"): never a raw code or "Transaction failed: …raw" in
+  // the UI; the raw text stays in the console / the Details disclosure.
+  console.warn("[humanizeError] unmapped:", rawMsg.slice(0, 300));
+  // Never hide a cause the app can name (§5.3): an unknown on-chain code is named (no raw logs or
+  // program ids). Free text is NOT passed through: runtime / RPC / wallet text is not ours to show.
+  if (code !== null) return `Solana didn't accept this (error ${code}), so nothing changed.`;
+  return UNMAPPED_MESSAGE;
 }
+
+
+/** §5.3 "unmapped": the one line for anything the maps do not know. */
+export const UNMAPPED_MESSAGE = "Something went wrong and nothing was sent.";
+/** §5.3 "confirmation timeout" (never "check your wallet"). */
+export const CONFIRMING_MESSAGE = "Still confirming. We'll update this when it lands.";
 
 // Lets a caller-recognized transient code widen withTransientRetry's own
 // retry budget beyond what the call site requested (e.g. useClosePosition.ts

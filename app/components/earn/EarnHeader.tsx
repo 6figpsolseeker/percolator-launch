@@ -32,11 +32,10 @@ export function EarnHeader({ stats, loading }: EarnHeaderProps) {
           className="text-2xl font-medium tracking-[-0.01em] text-[var(--text)]"
           style={{ fontFamily: 'var(--font-display)' }}
         >
-          <span className="font-normal text-[var(--text-secondary)]">LP </span>Vaults
+          Earn
         </h1>
         <p className="mt-2 text-[13px] text-[var(--text-secondary)] max-w-lg">
-          Provide counterparty backing to Percolator markets — fully on-chain and
-          transparent.
+          Deposit USDC into a market&apos;s vault and earn a share of its trading fees.
         </p>
         {/* Small and muted, not a prominent banner. Corrected 2026-07-28: this
             used to say yield distribution "isn't active on the deployed program
@@ -45,17 +44,28 @@ export function EarnHeader({ stats, loading }: EarnHeaderProps) {
             round trip accrued 1_440_000 atoms (the LP's 48% of the fee) and one
             LpVaultCrankFees moved all of it into the vault. The keeper now
             cranks on its own interval. */}
-        <p className="mt-1.5 text-[11px] text-[var(--text-muted)] max-w-lg">
-          Deposits and redemptions are live on devnet. LPs earn a {LP_SHARE_PCT}% share of
-          every trading fee, distributed to the vault automatically — so APY reflects real
-          trading activity and reads 0% while a market is quiet.
+        {/* UX WP-10 (MB-3, §4.4): on phones the explainer is a collapsed "How Earn works"
+            disclosure so the vault list comes first; from md up it shows as before. */}
+        <details data-testid="earn-how-it-works" className="mt-2 md:hidden">
+          <summary className="cursor-pointer select-none text-[12px] text-[var(--text-secondary)]">How Earn works</summary>
+        <p className="mt-1.5 text-[11px] text-[var(--text-secondary)] max-w-lg">
+          Earn deposits receive a {LP_SHARE_PCT}% share of every trading fee, added to the vault
+          automatically, so the yield follows real trading activity and reads 0% while a market is
+          quiet.
         </p>
-        {/* The share above was a hard-coded literal in prose — the kind that
-            keeps reading 48% after the protocol changes. It is derived now, and
-            shown against the other legs so an LP can see what they are a share
-            OF. #2565. */}
         <div className="mt-3 max-w-lg border border-[var(--border)] bg-[var(--panel-bg)] p-3">
           <FeeBreakdown highlight="lp" />
+        </div>
+        </details>
+        <div className="hidden md:block">
+        <p className="mt-1.5 text-[11px] text-[var(--text-secondary)] max-w-lg">
+          Earn deposits receive a {LP_SHARE_PCT}% share of every trading fee, added to the vault
+          automatically, so the yield follows real trading activity and reads 0% while a market is
+          quiet.
+        </p>
+        <div className="mt-3 max-w-lg border border-[var(--border)] bg-[var(--panel-bg)] p-3">
+          <FeeBreakdown highlight="lp" />
+        </div>
         </div>
 
         {/* Stats row */}

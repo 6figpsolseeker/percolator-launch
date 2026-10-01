@@ -57,7 +57,7 @@ export const OracleFreshnessIndicator: FC = () => {
           }}
         >
           <span>⚠</span>
-          <span>Oracle unavailable — market not yet cranked</span>
+          <span>No price yet — it updates automatically</span>
         </div>
         {panelOpen && (
           <OracleDetailsPanel onClose={() => setPanelOpen(false)} />

@@ -8,7 +8,7 @@ export function MainnetBetaBanner() {
   return (
     <div className="w-full bg-[var(--accent)]/10 border-b border-[var(--accent)]/20 px-4 py-2 flex items-center justify-between text-[11px]">
       <span className="text-[var(--accent)] font-medium">
-        ⚡ BETA — $1K seed vault. Permissionless. Trade at your own risk.
+        BETA — $1K seed vault. Open to anyone. Trade at your own risk.
       </span>
       <button
         onClick={() => setDismissed(true)}

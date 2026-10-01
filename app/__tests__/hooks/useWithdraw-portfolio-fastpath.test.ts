@@ -34,7 +34,6 @@ vi.mock("@/lib/errorMessages", () => ({
 }));
 
 vi.mock("@/lib/config", () => ({
-  getBackendUrl: vi.fn(() => "http://localhost:3001"),
 }));
 
 vi.mock("@/lib/programAllowlist", () => ({

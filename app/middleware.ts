@@ -549,14 +549,13 @@ function addSecurityHeaders(response: NextResponse, nonce?: string) {
     "img-src 'self' data: https: blob:",
     // GH#1283: Added https://lite.jup.ag — used by useCreateMarket to fetch token price
     // via /v6/price endpoint for HYPERP/Pump.fun oracle markets during deposit flow.
-    // GH#1982: api.percolatorlaunch.com added for WebSocket price streaming (wss://)
-    // and REST fallback (https://). The subdomain must resolve via DNS CNAME to
-    // percolator-api-production.up.railway.app — without this CSP entry browsers
-    // would block the connection even after DNS is configured.
+    // The live price-WS service (NEXT_PUBLIC_WS_URL) is a Railway host, covered by
+    // wss://*.up.railway.app. The api.percolatorlaunch.com entries (GH#1982) are gone with the
+    // retired percolator-api.
     // challenges.cloudflare.com is appended for the Turnstile widget's
     // XHR back-channel (telemetry + challenge-state checks). Same
     // origin as the script load.
-    `connect-src 'self' ${devLocalWs}https://*.solana.com wss://*.solana.com https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://api.coingecko.com https://api.geckoterminal.com https://*.helius-rpc.com wss://*.helius-rpc.com https://api.dexscreener.com https://hermes.pyth.network https://*.up.railway.app wss://*.up.railway.app https://api.percolatorlaunch.com wss://api.percolatorlaunch.com https://lite.jup.ag https://token.jup.ag https://tokens.jup.ag https://auth.privy.io https://embedded-wallets.privy.io https://*.privy.systems https://*.rpc.privy.systems https://explorer-api.walletconnect.com wss://relay.walletconnect.com wss://relay.walletconnect.org wss://www.walletlink.org https://challenges.cloudflare.com https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://cloudflareinsights.com blob:`,
+    `connect-src 'self' ${devLocalWs}https://*.solana.com wss://*.solana.com https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://api.coingecko.com https://api.geckoterminal.com https://*.helius-rpc.com wss://*.helius-rpc.com https://api.dexscreener.com https://*.up.railway.app wss://*.up.railway.app https://lite.jup.ag https://token.jup.ag https://tokens.jup.ag https://auth.privy.io https://embedded-wallets.privy.io https://*.privy.systems https://*.rpc.privy.systems https://explorer-api.walletconnect.com wss://relay.walletconnect.com wss://relay.walletconnect.org wss://www.walletlink.org https://challenges.cloudflare.com https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://cloudflareinsights.com blob:`,
     // Removed https://*.vercel.app wildcard (issue #635) — no legitimate use case for embedding
     // arbitrary Vercel-hosted content in iframes. frame-src controls outbound iframe embedding.
     // challenges.cloudflare.com is the iframe origin the Turnstile widget

@@ -30,8 +30,11 @@
 import { FC, memo, useMemo, useState } from "react";
 import { useUserAccount } from "@/hooks/useUserAccount";
 import { useNftWrappedPosition } from "@/hooks/useNftWrappedPosition";
+import { PositionNftMenu, NFT_MENU_COPY } from "@/components/trade/PositionNftMenu";
 import { useClosePosition } from "@/hooks/useClosePosition";
 import { useSlabState } from "@/components/providers/SlabProvider";
+import { useMarketLimits } from "@/hooks/useMarketLimits";
+import { PositionLimitsRow } from "@/components/limits/PositionLimitsRow";
 import { useTokenMeta } from "@/hooks/useTokenMeta";
 import { useLivePrice } from "@/hooks/useLivePrice";
 import { useMarketConfig } from "@/hooks/useMarketConfig";
@@ -128,6 +131,8 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
   const { market: marketInfo } = useMarketInfo(slabAddress);
   const symbol = marketInfo?.symbol ?? collateralSymbol;
   const decimals = tokenMeta?.decimals ?? 6;
+  // P3 skew funding / liquidation drift (flag-gated; "off" = no RPC).
+  const marketLimits = useMarketLimits(slabAddress);
   // T3-dd: `symbol` sometimes already carries a "-PERP" suffix from the
   // market registry (e.g. "SOL-PERP") — appending "/USD" on top of that
   // rendered "SOL-PERP/USD". Strip it once, just for the Market column label
@@ -151,7 +156,7 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
   // H6: engine accrue-staleness — distinct from the oracle-push freshness
   // above. A market can look perfectly fresh here (keeper still pushing
   // prices) while the ENGINE hasn't accrued in ~500 slots, cliff-dead and
-  // permanently reverting every close until a maintainer re-seeds it. See
+  // permanently reverting every close (UX WP-2: only beyond the app's own catch-up). See
   // useEngineFreshness's file header.
   const { engineStale } = useEngineFreshness();
   const closeBlockedByStaleness = !mockMode && (oracleStale || engineStale);
@@ -360,15 +365,13 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
     <div>
       {lpUnderfunded && (
         <div className="border-b border-[var(--warning)]/20 bg-[var(--warning)]/5 px-4 py-1.5 text-center">
-          <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-[var(--warning)]">LP Underfunded</span>
+          <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-[var(--warning)]">Low liquidity</span>
         </div>
       )}
-      {/* H6: engine-stale takes priority over the generic oracle-stale copy
-          when it's specifically the engine accrue guard that tripped — tells
-          the user this needs a re-seed, not just "wait a moment". */}
+      {/* UX WP-2 (SH-3): the engine is catching up beyond the app's own repair; calm, clears itself. */}
       {engineStale && !oracleStale && (
         <div className="border-b border-[var(--warning)]/20 bg-[var(--warning)]/5 px-4 py-1.5 text-center">
-          <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-[var(--warning)]">Market Crank Behind — Trading Paused</span>
+          <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-[var(--text-secondary)]">Catching up with the latest prices</span>
         </div>
       )}
       {isNftWrapped && (
@@ -400,15 +403,15 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
             </tr>
           </thead>
           <tbody>
-            <tr className="border-b border-[var(--border)]/20 transition-colors hover:bg-[var(--accent)]/[0.03]">
+            <tr data-testid="position-row" className="border-b border-[var(--border)]/20 transition-colors hover:bg-[var(--accent)]/[0.03]">
               <td className="whitespace-nowrap px-4 py-2.5 text-left"><span className="text-[11px] font-medium text-[var(--text)]">{marketDisplaySymbol}/USD</span></td>
               <td className="whitespace-nowrap px-3 py-2.5 text-left">
                 <span className={`inline-block rounded-sm px-1.5 py-0.5 text-[9px] font-bold uppercase ${isLong ? "bg-[var(--long)]/10 text-[var(--long)]" : "bg-[var(--short)]/10 text-[var(--short)]"}`}>
                   {isLong ? "LONG" : "SHORT"}
                 </span>
                 {isNftWrapped && (
-                  <span className="ml-1 inline-block rounded-sm bg-[var(--accent)]/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-[var(--accent)]" title="This position is wrapped in a Position NFT you hold.">
-                    🎫 NFT
+                  <span data-testid="position-nft-badge" className="ml-1 inline-block rounded-sm bg-[var(--accent)]/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-[var(--accent)]" title="This position is wrapped in a Position NFT you hold.">
+                    {NFT_MENU_COPY.badge}
                   </span>
                 )}
               </td>
@@ -497,12 +500,10 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
                 {hasValidMark && pnlIsKnown ? formatPercent(roe) : "--"}
               </td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                <span className="inline-flex items-center justify-end gap-1">
                 {isNftWrapped ? (
-                  <span
-                    title="This position is wrapped in a Position NFT. Burn the NFT in the Position NFT panel to unwrap it, then close."
-                    className="inline-block cursor-help rounded-none border border-[var(--accent)]/30 px-3 py-1 text-[9px] font-medium uppercase tracking-[0.1em] text-[var(--accent)]"
-                  >
-                    🎫 Wrapped
+                  <span data-testid="position-close-wrapped" className="text-[9px] text-[var(--text-secondary)]">
+                    {NFT_MENU_COPY.closeWrapped}
                   </span>
                 ) : (
                   <button
@@ -510,15 +511,33 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
                     // the moment the modal opens, so the confirm click reaches
                     // the wallet popup with zero blocking round-trips.
                     onClick={() => { prewarmClose(); setShowCloseModal(true); }}
+                    data-testid="position-close"
                     disabled={closeLoading || lpUnderfunded || !hasValidMark || engineStale}
-                    title={!hasValidMark ? "Waiting for price data…" : engineStale ? "Market crank behind — trading paused. This market needs a re-seed before closing works." : undefined}
+                    title={!hasValidMark ? "Waiting for price data…" : engineStale ? "Prices are catching up. Closing resumes automatically, usually within a minute." : undefined}
                     className="rounded-none border border-[var(--short)]/30 px-3 py-1 text-[9px] font-medium uppercase tracking-[0.1em] text-[var(--short)] transition-colors duration-150 hover:bg-[var(--short)]/8 hover:border-[var(--short)]/50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Close
                   </button>
                 )}
+                {/* UX WP-9 (§3.13): Wrap / Send / Unwrap live in this row's "⋯" menu. */}
+                <PositionNftMenu slabAddress={slabAddress} />
+                </span>
               </td>
             </tr>
+            {marketLimits.flags.p3 && (
+              <tr data-testid="limits-position-row" className="border-b border-[var(--border)]/20">
+                <td colSpan={99} className="px-4 pb-2">
+                  <PositionLimitsRow
+                    limits={marketLimits}
+                    positionQ={effectiveSize}
+                    priceE6={currentPriceE6}
+                    marginAboveMaintAtoms={account.capital - (absPosition * currentPriceE6 * maintenanceBps) / 1_000_000n / 10_000n}
+                    decimals={decimals}
+                    collateralSymbol={collateralSymbol}
+                  />
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -526,7 +545,7 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
         <WarmupProgress slabAddress={slabAddress} accountIdx={activeInfo.idx} />
       </div>
       {closeError && (
-        <div className="mx-4 mb-3 rounded-none border border-[var(--short)]/20 bg-[var(--short)]/5 px-3 py-2">
+        <div data-testid="position-close-error" className="mx-4 mb-3 rounded-none border border-[var(--short)]/20 bg-[var(--short)]/5 px-3 py-2">
           <p className="text-[10px] text-[var(--short)]">{closeError}</p>
         </div>
       )}

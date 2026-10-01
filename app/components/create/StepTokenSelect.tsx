@@ -1,6 +1,7 @@
 "use client";
 
 import { FC, useState, useEffect, useMemo, useRef } from "react";
+import { ConnectWalletCta } from "@/components/wallet/ConnectWalletCta";
 import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
@@ -268,6 +269,7 @@ export const StepTokenSelect: FC<StepTokenSelectProps> = ({
         </label>
         <input
           id="token-mint"
+          data-testid="wizard-token-input"
           type="text"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
@@ -384,15 +386,22 @@ export const StepTokenSelect: FC<StepTokenSelectProps> = ({
         <p className="text-[10px] text-[var(--text-dim)]">Checking wallet balance...</p>
       )}
 
-      {/* Continue */}
+      {/* Continue — leaving this step needs a connected wallet: every later
+          step builds or signs a transaction. Without one, the slot is a
+          clear "connect" CTA instead of a Continue that leads nowhere. */}
+      {!publicKey ? (
+        <ConnectWalletCta label="Connect wallet to continue" testId="wizard-connect-wallet" />
+      ) : (
       <button
         type="button"
         onClick={onContinue}
+        data-testid="wizard-next"
         disabled={!effectiveCanContinue}
         className="w-full border border-[var(--accent)]/50 bg-[var(--accent)]/[0.08] py-3 text-[13px] font-bold uppercase tracking-[0.1em] text-[var(--accent)] transition-all duration-200 hud-btn-corners hover:border-[var(--accent)] hover:bg-[var(--accent)]/[0.15] disabled:cursor-not-allowed disabled:border-[var(--border)] disabled:bg-transparent disabled:text-[var(--text-secondary)]"
       >
         {mintNetworkStatus === "loading" ? "VALIDATING..." : "CONTINUE →"}
       </button>
+      )}
     </div>
   );
 };

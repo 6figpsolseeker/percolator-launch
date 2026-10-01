@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSlabParam } from "@/lib/route-validators";
 import { toE6 } from "@/lib/format";
-import { PLAYGROUND_SLAB_META } from "@/lib/playground-slab-meta";
 import { boundedSet } from "@/lib/bounded-map";
 import * as Sentry from "@sentry/nextjs";
 
@@ -11,25 +10,18 @@ const NO_STORE = { "Cache-Control": "private, no-store" } as const;
 
 // BUG 18 fix: this route is force-dynamic and previously always sent no-store,
 // so under the hosted playground (no indexer backend) EVERY client poll (~10s,
-// per useLivePrice) fell through to pythStatsFallback() and hit
-// benchmarks.pyth.network fresh, fanned out across every viewer, and degraded
-// to { stats: null } on 429. Mirror the sibling /api/chart/pyth route: cache
-// the fallback response for a short TTL so repeated polls within the window
-// reuse one upstream fetch instead of re-hitting Pyth per viewer per poll.
+// per useLivePrice) hit the upstream fresh, fanned out across every viewer.
+// Cache the fallback response for a short TTL so repeated polls within the
+// window reuse one upstream fetch instead of re-hitting it per viewer per poll.
 const FALLBACK_CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=120" } as const;
-
-/** Pyth Benchmarks — same public source /api/chart/pyth proxies for chart
- *  history. Used as the 24h-stats fallback when the indexer backend is not
- *  running (local playground, and the hosted playground deploy): without it
- *  this route 502s every 10s and 24H HIGH / 24H LOW render as dashes forever. */
-const PYTH_BASE = "https://benchmarks.pyth.network/v1/shims/tradingview/history";
 
 type Stats24h = { change24h: number; high24h: string; low24h: string };
 
-/** Short in-memory TTL cache for pythStatsFallback(), keyed by slab. Belt-and-
- *  suspenders alongside FALLBACK_CACHE_HEADERS: on a warm serverless instance
- *  (or local dev, where there's no CDN in front to honor s-maxage) this still
- *  collapses repeated ~10s polls into one upstream fetch per TTL window per slab. */
+/** Short in-memory TTL cache for the GeckoTerminal fallback, keyed by slab.
+ *  Belt-and-suspenders alongside FALLBACK_CACHE_HEADERS: on a warm serverless
+ *  instance (or local dev, where there's no CDN in front to honor s-maxage)
+ *  this still collapses repeated ~10s polls into one upstream fetch per TTL
+ *  window per slab. */
 const FALLBACK_CACHE_TTL_MS = 60_000;
 // Hard cap on this in-memory cache. The GeckoTerminal fallback path serves ANY
 // slab and writes an entry on every miss (including null misses), so the key
@@ -39,76 +31,18 @@ const FALLBACK_CACHE_TTL_MS = 60_000;
 const FALLBACK_CACHE_MAX_ENTRIES = 10_000;
 const fallbackCache = new Map<string, { value: Stats24h | null; expiresAt: number }>();
 
-/** Compute 24h stats from Pyth Benchmarks hourly bars for a playground slab.
- *  Returns null when the slab has no playground meta or Pyth has no data —
- *  callers then respond `{ stats: null }` (dashes in the UI, no error spam). */
-async function pythStatsFallback(slab: string): Promise<Stats24h | null> {
-  const cached = fallbackCache.get(slab);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.value;
-  }
-
-  const meta = PLAYGROUND_SLAB_META[slab];
-  if (!meta) return null;
-  // "JUP-PERP" → "Crypto.JUP/USD". Guard the base so only sane symbols reach Pyth.
-  const base = meta.symbol.split("-")[0];
-  if (!/^[A-Z0-9]{2,10}$/.test(base)) return null;
-
-  const to = Math.floor(Date.now() / 1000);
-  const from = to - 86_400;
-  const url = `${PYTH_BASE}?symbol=${encodeURIComponent(`Crypto.${base}/USD`)}&resolution=60&from=${from}&to=${to}`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "percolator-prices-proxy/1.0" },
-    signal: AbortSignal.timeout(10_000),
-  });
-  // Cache negative results too (short TTL) — otherwise a rate-limited (429)
-  // upstream gets hammered again on the very next ~10s poll instead of backing off.
-  if (!res.ok) {
-    boundedSet(fallbackCache, slab, { value: null, expiresAt: Date.now() + FALLBACK_CACHE_TTL_MS }, FALLBACK_CACHE_MAX_ENTRIES);
-    return null;
-  }
-  const data = (await res.json()) as { s?: string; o?: number[]; h?: number[]; l?: number[]; c?: number[] };
-  if (data.s !== "ok" || !data.o?.length || !data.h?.length || !data.l?.length || !data.c?.length) {
-    boundedSet(fallbackCache, slab, { value: null, expiresAt: Date.now() + FALLBACK_CACHE_TTL_MS }, FALLBACK_CACHE_MAX_ENTRIES);
-    return null;
-  }
-
-  const high = Math.max(...data.h);
-  const low = Math.min(...data.l);
-  const first = data.o[0];
-  const last = data.c[data.c.length - 1];
-  if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(first) || first <= 0) {
-    boundedSet(fallbackCache, slab, { value: null, expiresAt: Date.now() + FALLBACK_CACHE_TTL_MS }, FALLBACK_CACHE_MAX_ENTRIES);
-    return null;
-  }
-
-  const toE6Str = (v: number) => toE6(v).toString();
-  const result: Stats24h = {
-    change24h: ((last - first) / first) * 100,
-    high24h: toE6Str(high),
-    low24h: toE6Str(low),
-  };
-  boundedSet(fallbackCache, slab, { value: result, expiresAt: Date.now() + FALLBACK_CACHE_TTL_MS }, FALLBACK_CACHE_MAX_ENTRIES);
-  return result;
-}
-
 const GECKOTERMINAL_OHLCV_BASE = "https://api.geckoterminal.com/api/v2/networks/solana/pools";
 
 /** [timestamp, open, high, low, close, volume] — GeckoTerminal's OHLCV row shape. */
 type GeckoOhlcvBar = [number, number, number, number, number, number];
 
 /**
- * Fallback 24h stats derived directly from GeckoTerminal's public OHLCV API,
- * for markets `pythStatsFallback` can't cover — anything without a
- * `PLAYGROUND_SLAB_META` entry (every wizard/community-launched market) or
- * without a mapped Pyth feed for its underlying asset. Same shape/caching
- * discipline as `pythStatsFallback`; the only difference is the upstream
- * source and that the DEX pool address comes from this app's OWN
- * Supabase-backed `/api/markets/:slab` (reliable, independent of the
- * Railway-hosted indexer the primary path above already degrades away from)
- * instead of a hardcoded symbol map — so it works for ANY market, including
- * ones for tokens Pyth has never heard of (e.g. a freshly-launched pump.fun
- * coin), as long as GeckoTerminal has indexed its pool.
+ * 24h stats derived directly from GeckoTerminal's public OHLCV API for the
+ * market's own DEX pool — the same venue the market is priced from. The pool
+ * address comes from this app's OWN Supabase-backed `/api/markets/:slab`
+ * (reliable, independent of the Railway-hosted indexer) rather than a
+ * hardcoded symbol map, so it works for ANY market — curated or
+ * wizard-launched — as long as GeckoTerminal has indexed its pool. No Pyth.
  */
 async function geckoTerminalStatsFallback(slab: string, origin: string): Promise<Stats24h | null> {
   const cacheKey = `gt:${slab}`;
@@ -204,24 +138,18 @@ export async function GET(
     // polls every 10s, per market. The indexer that replaced that service is
     // ingest-only: it serves /health and the Helius webhook, nothing else.
     //
-    // The Pyth / GeckoTerminal fallbacks below were already doing all the real
-    // work; they are now simply the primary path.
+    // The GeckoTerminal path below is the primary (and only) stats source. The
+    // Pyth Benchmarks fallback that used to run first is gone too: NO PYTH.
     const prices: Array<{ price_e6: string; timestamp: number }> = [];
 
     if (prices.length === 0) {
-      // pythStatsFallback only covers the curated PLAYGROUND_SLAB_META markets
-      // (SOL/BONK/JUP/TRUMP/PENGU) — null for anything else, including every
-      // wizard/community-launched market. geckoTerminalStatsFallback picks up
-      // there: it works for ANY market (looks up the pool via /api/markets/:slab)
-      // as long as GeckoTerminal has indexed the pool, which is the common case
-      // even for a brand-new pump.fun-style coin.
-      let stats = await pythStatsFallback(validSlab).catch(() => null);
-      if (!stats) {
-        stats = await geckoTerminalStatsFallback(validSlab, req.nextUrl.origin).catch(() => null);
-      }
+      // geckoTerminalStatsFallback works for ANY market (looks up the pool via
+      // /api/markets/:slab) as long as GeckoTerminal has indexed the pool, which
+      // is the common case even for a brand-new pump.fun-style coin.
+      const stats = await geckoTerminalStatsFallback(validSlab, req.nextUrl.origin).catch(() => null);
       // BUG 18 fix: was NO_STORE — this is the live path on the hosted playground
       // (no indexer backend), polled every ~10s by every viewer. Cache it briefly
-      // so repeated polls within the window don't each re-hit Pyth/GeckoTerminal
+      // so repeated polls within the window don't each re-hit GeckoTerminal
       // (see FALLBACK_CACHE_HEADERS / fallbackCache above).
       return NextResponse.json({ stats }, { headers: FALLBACK_CACHE_HEADERS });
     }

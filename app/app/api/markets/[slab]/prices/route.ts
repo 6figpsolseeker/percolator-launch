@@ -1,33 +1,25 @@
-import { type NextRequest } from "next/server";
-import { proxyToApi } from "@/lib/api-proxy";
+import { NextResponse } from "next/server";
 import { validateSlabParam } from "@/lib/route-validators";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/markets/[slab]/prices
+ * GET /api/markets/[slab]/prices — oracle price history.
  *
- * Proxies to percolator-api GET /prices/:slab
- * Removed standalone Supabase impl (GH#1066 — arch cleanup).
- * Fixed GH#1928: route was incorrectly proxying to /markets/:slab/prices (404→500);
- * correct backend path is /prices/:slab (registered in priceRoutes()).
+ * This was a proxy to percolator-api `/prices/:slab`. That service is retired ("Application not
+ * found"), and nothing else records an oracle price series: the indexer DB keeps trades only
+ * (lib/indexer-db.ts), and the chain holds the current mark, not its history. So the route says
+ * so with a 404 instead of an empty-but-200 series that would read as "no prices yet".
  *
- * **Slab:** `validateSlabParam` (base58 pubkey) — path segment only; no SQL in this layer.
- * Query string is forwarded unchanged. **Ordering**, resolution, and row caps are enforced in
- * percolator-api `routes/prices.ts` (see repo README "Price history for charting").
+ * The one caller (TradingChart's oracle fallback series) maps `prices ?? []`, so it already
+ * degrades to its live-tick series on this answer.
  */
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ slab: string }> }
-) {
+export async function GET(_req: Request, { params }: { params: Promise<{ slab: string }> }) {
   const { slab } = await params;
-
-  // Validate slab parameter format
   const validation = validateSlabParam(slab);
-  if (!validation.valid) {
-    return validation.response;
-  }
-  const validSlab = validation.slab;
-
-  return proxyToApi(req, `/prices/${validSlab}`);
+  if (!validation.valid) return validation.response;
+  return NextResponse.json(
+    { error: "Price history is not recorded for this market" },
+    { status: 404, headers: { "Cache-Control": "public, s-maxage=300" } },
+  );
 }

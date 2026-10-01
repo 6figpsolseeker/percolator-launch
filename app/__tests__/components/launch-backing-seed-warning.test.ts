@@ -32,22 +32,16 @@ const SUCCESS = read("components/create/LaunchSuccess.tsx");
 const WIZARD = read("components/create/CreateMarketWizard.tsx");
 
 describe("GH#2514: backing-seed failure is recorded, not swallowed", () => {
-  it("the backing-bucket catch sets backingSeedFailed", () => {
-    // Isolate the catch block so a match elsewhere in the file cannot satisfy
-    // this — the flag has to be set at the failure site itself.
-    const start = HOOK.indexOf("} catch (backingBucketErr) {");
-    expect(start).toBeGreaterThan(-1);
-    const block = HOOK.slice(start, start + 1400);
-    expect(block).toMatch(/backingSeedFailed:\s*true/);
-  });
-
-  it("keeps the step non-fatal — it must not throw or set the fatal error", () => {
-    // The fix is "report it", not "fail the launch". Turning this fatal would
-    // reintroduce exactly the stranding the original comment guards against.
-    const start = HOOK.indexOf("} catch (backingBucketErr) {");
-    const block = HOOK.slice(start, start + 1400);
-    expect(block).not.toMatch(/throw\s/);
-    expect(block).not.toMatch(/error:\s*[`'"]/);
+  it("C-1: the backing seed is no longer a swallowed side-step — it is part of the fatal Earn-vault tx", () => {
+    // The non-fatal TopUpBackingBucket try/catch is gone: a direct top-up makes
+    // CreateLpVault fail Custom(63). Both domains are now funded by
+    // DepositToLpVault atomically with CreateLpVault (lib/earn-vault-seed.ts),
+    // and a failure there THROWS (surfaced step-aware), so there is nothing
+    // left to swallow. backingSeedFailed stays on the state for the UI wiring
+    // below but is no longer set by a swallowed catch.
+    expect(HOOK).not.toContain("catch (backingBucketErr)");
+    expect(HOOK).toContain("buildEarnVaultSeedInstructions");
+    expect(HOOK).toMatch(/throw earnErr;/);
   });
 
   it("declares backingSeedFailed on the state and initialises it false", () => {

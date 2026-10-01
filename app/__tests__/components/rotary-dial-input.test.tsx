@@ -39,6 +39,18 @@ describe("RotaryDial wheel", () => {
     fireEvent.wheel(slider, { deltaY: -100 });
     expect(onChange).not.toHaveBeenCalled();
   });
+  it("consumes the wheel (non-passive) so the page can't scroll out from under it (#2716)", () => {
+    // The bug: React registers `wheel` passively, so the old synthetic onWheel
+    // could not preventDefault — the page scrolled and the dial left the cursor,
+    // so "scroll" was advertised but never actually moved the value. The fix binds
+    // a non-passive native listener that preventDefaults. defaultPrevented===true
+    // is what a passive handler can't produce, so this fails if the fix regresses.
+    const { slider, onChange } = mount();
+    const ev = new WheelEvent("wheel", { deltaY: -100, cancelable: true, bubbles: true });
+    slider.dispatchEvent(ev);
+    expect(onChange).toHaveBeenLastCalledWith(5.5); // still adjusts
+    expect(ev.defaultPrevented).toBe(true); // and suppresses the page scroll
+  });
 });
 
 describe("RotaryDial keys", () => {

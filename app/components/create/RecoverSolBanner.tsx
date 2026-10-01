@@ -183,7 +183,7 @@ const StuckSlabCard: FC<{
                 type="button"
                 onClick={() => navigator.clipboard.writeText(stuckSlab.publicKey.toBase58())}
                 className="ml-2 text-[10px] text-[var(--accent)]/70 hover:text-[var(--accent)] transition-colors"
-                title="Copy full slab address"
+                title="Copy the full market address"
               >
                 copy
               </button>
@@ -191,7 +191,7 @@ const StuckSlabCard: FC<{
             <p className="text-[10px] text-[var(--text-secondary)]">
               {reclaimable ? (
                 <>
-                  The slab is initialized ({rentSol} SOL in rent) but holds no deposit yet —
+                  The market account is set up ({rentSol} SOL in rent) but holds no deposit yet —
                   this is the <span className="text-[var(--text)]">last point the rent can be reclaimed</span>.
                   Resume to finish it, or reclaim the rent now.
                 </>
@@ -365,11 +365,11 @@ const UninitialisedSlabBanner: FC<{
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--warning)]">
-              ⚠ Stuck Slab — SOL Recoverable
+              Unfinished market: SOL recoverable
             </span>
           </div>
           <p className="text-[11px] text-[var(--text-secondary)] mb-1">
-            A slab account was created at{" "}
+            A market account was created at{" "}
             <code className="font-mono text-[10px] text-[var(--warning)]/80">
               {stuckSlab.publicKey.toBase58().slice(0, 8)}...
               {stuckSlab.publicKey.toBase58().slice(-4)}

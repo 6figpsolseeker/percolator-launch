@@ -82,7 +82,8 @@ export const OracleDetailsPanel: FC<OracleDetailsPanelProps> = ({ onClose }) => 
   // Freshness bar percentage (drains from 100% → 0% over 30s)
   const freshnessBarPct = Math.max(0, Math.min(100, ((30 - elapsedSecs) / 30) * 100));
 
-  // Dynamic publisher data from Pythnet/oracle bridge (PERC-371)
+  // Dynamic publisher data from the oracle bridge (hyperp DEX sources) or the
+  // admin authority (PERC-371). No Pyth publishers.
   const publishers = dynamicPublishers;
 
   return (
@@ -388,7 +389,6 @@ function HexIconLarge() {
   );
 }
 
-/* getFallbackChain removed — it described a fictional Pyth→Chainlink fallback
- * chain that doesn't exist in this system (real fallback is Pyth/DEX, per
- * PLAYGROUND.md). getMockPublishers removed in PERC-371 — publisher data now
+/* getFallbackChain removed — it described a fictional fallback chain that
+ * doesn't exist in this system. getMockPublishers removed in PERC-371 — publisher data now
  * fetched dynamically. */

@@ -1,7 +1,26 @@
 import { Connection, Transaction, TransactionInstruction, ComputeBudgetProgram, SendTransactionError, SystemProgram, TransactionExpiredBlockheightExceededError, VersionedTransaction } from "@solana/web3.js";
+import { MAX_TX_COMPUTE_UNITS, sizeComputeUnitLimit, type CuSizing } from "@/lib/compute-budget";
 import bs58 from "bs58";
 import type { PublicKey, Signer } from "@solana/web3.js";
 import { getNetwork } from "@/lib/config";
+import { connectionSelfHealDeps, describeRepair, isSelfHealEnabled, planSelfHeal } from "@/lib/self-heal";
+import {
+  connectionVaultLpRepairDeps,
+  isVaultLpSelfHealEnabled,
+  planVaultLpRepair,
+  type VaultLpRepairResult,
+} from "@/lib/limits/vault-lp-repair";
+import {
+  connectionSeniorDrawRepairDeps,
+  planSeniorDrawRepair,
+  type SeniorDrawRepairResult,
+} from "@/lib/limits/senior-draw-repair";
+import type { AccountMeta } from "@solana/web3.js";
+import { WRAPPER_ERR } from "@/lib/wrapper-errors";
+import { resolveDevnetProgramIds } from "@/lib/program-ids";
+import type { SelfHealResult } from "@/lib/self-heal";
+import { getMaintenanceConfig, MaintenanceError } from "@/lib/maintenance";
+import { readU64LE } from "@/lib/u64le";
 
 /**
  * PERC-8388: Lighthouse v2 program ID — Blowfish/Phantom wallet middleware injects
@@ -55,14 +74,149 @@ export interface SendTxParams {
    * already been asked to sign. The create-market wizard sets it on every step.
    */
   simulateBeforeSign?: boolean;
+  /**
+   * P0b client self-heal (lib/self-heal.ts). When set, sendTx reads this
+   * market (overlapped with the blockhash fetch) and, only if the user's
+   * transaction would revert Custom(19)/Custom(21) because of a lapsed backing
+   * bucket or a ResetPending side, prepends the permissionless repairs
+   * (ExpireBackingBucket 89 / FinalizeResetSide 45) to THIS transaction.
+   * Steady state (nothing to repair) costs one overlapped account read.
+   */
+  selfHeal?: {
+    programId: PublicKey;
+    market: PublicKey;
+    /** UX WP-2: repair a lagging engine clock with catch-up cranks of this LP (null = bound vault LP). */
+    catchUp?: { portfolio: PublicKey | null; oracleTail?: AccountMeta[] };
+  };
+  /** Test/diagnostic hook: receives the self-heal decision once per sendTx. */
+  onSelfHeal?: (result: SelfHealResult) => void;
+  /**
+   * P3-L2 self-repair (lib/limits/vault-lp-repair.ts): on a vault-owned-LP market, when
+   * the user's Earn tx would revert VaultLpValuationStale, prepend the permissionless
+   * crank of the vault LP into THIS tx. Planned after the P0b self-heal, on every attempt.
+   */
+  vaultLpRepair?: { programId: PublicKey; market: PublicKey; oracleTail?: AccountMeta[] };
+  /**
+   * Size the ComputeBudget limit from a simulation of THIS instruction list (after any
+   * self-heal / vault-LP repair): consumed + margin, clamped to `cap` (lib/compute-budget.ts).
+   * When set, `computeUnits` is ignored. Trades, closes and batches use it (P1: CPI trades
+   * need ~13k more CU; a single-leg batch on asset 1 needs 216k > the 200k default).
+   */
+  computeUnitsFromSim?: CuSizing;
+  /** Test/diagnostic hook: the limit sendTx set and the consumed CU it was sized from. */
+  onComputeUnits?: (r: { limit: number; consumed: number | null }) => void;
+  onVaultLpRepair?: (result: VaultLpRepairResult) => void;
+  /** Test/diagnostic hook: the senior-draw repair's outcome (runs whenever vaultLpRepair is set). */
+  onSeniorDrawRepair?: (result: SeniorDrawRepairResult) => void;
 }
 
 /**
- * Simulate `tx` (unsigned or partially signed) and throw a
- * "Transaction simulation failed: …" error carrying the program error and the
- * failing log lines if it would revert. RPC errors during the simulation
- * itself are logged and do NOT throw — the broadcast's own preflight still
- * guards the send.
+ * UX WP-1 (SH-1): a simulation refused the transaction, so the wallet was NOT opened.
+ * Carries what the message resolver (lib/limits/user-message.ts) needs; the message keeps
+ * the historic "Transaction simulation failed: …" prefix so older string classifiers work.
+ */
+export class SimulationRefusal extends Error {
+  readonly err: unknown;
+  readonly logs: string[];
+  /** Custom program error code, when the refusal is one. */
+  readonly code: number | null;
+  /** Index of the failing instruction in the simulated list, when known. */
+  readonly instructionIndex: number | null;
+  /** Program id of the failing instruction (from the list, else the "Program X failed" log). */
+  readonly programId: string | null;
+  constructor(err: unknown, logs: readonly string[] = [], instructions: readonly TransactionInstruction[] = []) {
+    const failing = logs.filter((l) => l.includes("Error") || l.includes("failed") || l.includes("Program log:")).slice(-3).join("\n");
+    super(`Transaction simulation failed: ${JSON.stringify(err)}` + (failing ? `\n${failing}` : ""));
+    this.name = "SimulationRefusal";
+    this.err = err;
+    this.logs = [...logs];
+    const ie = (err as { InstructionError?: unknown } | null)?.InstructionError;
+    let index: number | null = null;
+    let code: number | null = null;
+    if (Array.isArray(ie) && typeof ie[0] === "number") {
+      index = ie[0];
+      const inner = ie[1] as { Custom?: unknown } | null;
+      if (inner && typeof inner === "object" && typeof inner.Custom === "number") code = inner.Custom;
+    }
+    this.code = code;
+    this.instructionIndex = index;
+    // The INNERMOST failing program owns the code (a CPI failure is logged by the callee
+    // first): take the first "Program X failed" log line, else the failing instruction.
+    let pid: string | null = null;
+    for (const l of logs) {
+      const m = /^Program (\w{32,44}) failed/.exec(l);
+      if (m) { pid = m[1]; break; }
+    }
+    if (!pid && index !== null && instructions[index]) pid = instructions[index].programId.toBase58();
+    this.programId = pid;
+  }
+}
+
+export interface GateSimulation {
+  consumed: number | null;
+  err: unknown;
+  logs: string[];
+  /** The simulation RPC itself failed: no verdict (never a refusal). */
+  rpcFailed: boolean;
+  /** The exact list simulated (compute-budget prefix included), for refusal attribution. */
+  simulated: TransactionInstruction[];
+}
+
+/**
+ * Simulate `instructions` under the full heap frame and the maximum CU limit (sigVerify off,
+ * blockhash replaced). One RPC gives both the CU sizing and the pre-sign verdict (SH-1).
+ */
+export async function simulateForGate(
+  connection: Connection,
+  feePayer: PublicKey,
+  instructions: TransactionInstruction[],
+): Promise<GateSimulation> {
+  const simulated = [
+    ComputeBudgetProgram.requestHeapFrame({ bytes: 131072 }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_TX_COMPUTE_UNITS }),
+    ...instructions,
+  ];
+  try {
+    const tx = new Transaction();
+    for (const ix of simulated) tx.add(ix);
+    tx.feePayer = feePayer;
+    tx.recentBlockhash = "11111111111111111111111111111111"; // placeholder; replaceRecentBlockhash
+    const sim = await connection.simulateTransaction(new VersionedTransaction(tx.compileMessage()), {
+      replaceRecentBlockhash: true,
+      sigVerify: false,
+      commitment: "confirmed",
+    });
+    const u = sim.value.unitsConsumed;
+    return {
+      consumed: !sim.value.err && typeof u === "number" && u > 0 ? u : null,
+      err: sim.value.err ?? null,
+      logs: sim.value.logs ?? [],
+      rpcFailed: false,
+      simulated,
+    };
+  } catch {
+    return { consumed: null, err: null, logs: [], rpcFailed: true, simulated };
+  }
+}
+
+/**
+ * Units consumed by `instructions` under the full heap frame and the maximum CU limit
+ * (sigVerify off, blockhash replaced). null when the simulation errors or the RPC fails:
+ * the caller then uses its cap, and sendTx's own simulation surfaces the real error.
+ */
+export async function simulateConsumedUnits(
+  connection: Connection,
+  feePayer: PublicKey,
+  instructions: TransactionInstruction[],
+): Promise<number | null> {
+  return (await simulateForGate(connection, feePayer, instructions)).consumed;
+}
+
+/**
+ * Simulate `tx` (unsigned or partially signed) and throw a SimulationRefusal ("Transaction
+ * simulation failed: …", carrying the program error and the failing log lines) if it would
+ * revert. RPC errors during the simulation itself are logged and do NOT throw — the
+ * broadcast's own preflight still guards the send.
  */
 export async function presimulateOrThrow(
   connection: Connection,
@@ -76,20 +230,10 @@ export async function presimulateOrThrow(
       commitment: "confirmed",
     });
     if (simResult.value.err) {
-      const logs = simResult.value.logs ?? [];
-      const errorLog = logs
-        .filter((l: string) => l.includes("Error") || l.includes("failed") || l.includes("Program log:"))
-        .slice(-3)
-        .join("\n");
-      throw new Error(
-        `Transaction simulation failed: ${JSON.stringify(simResult.value.err)}` +
-        (errorLog ? `\n${errorLog}` : ""),
-      );
+      throw new SimulationRefusal(simResult.value.err, simResult.value.logs ?? [], tx.instructions);
     }
   } catch (simError) {
-    if (simError instanceof Error && simError.message.startsWith("Transaction simulation failed")) {
-      throw simError;
-    }
+    if (simError instanceof SimulationRefusal) throw simError;
     console.warn("[presimulateOrThrow] simulation RPC failed (non-blocking):", simError);
   }
 }
@@ -557,7 +701,7 @@ function getAccountCreationLamports(instructions: TransactionInstruction[]): num
     // CreateAccount (discriminant 0): u32 | u64 lamports | u64 space | Pubkey owner
     if (ix.data.length < 12) continue;
     if (ix.data.readUInt32LE(0) !== 0) continue; // only CreateAccount is used by these flows
-    total += Number(ix.data.readBigUInt64LE(4));
+    total += Number(readU64LE(ix.data, 4));
   }
   return total;
 }
@@ -591,6 +735,13 @@ export async function sendTx({
   abortSignal,
   skipPreflight = false,
   simulateBeforeSign = false,
+  selfHeal,
+  onSelfHeal,
+  vaultLpRepair,
+  onVaultLpRepair,
+  onSeniorDrawRepair,
+  computeUnitsFromSim,
+  onComputeUnits,
 }: SendTxParams): Promise<string> {
   if (!wallet.publicKey || (!wallet.signTransaction && !wallet.signAndSendTransaction)) {
     throw new Error("Wallet not connected");
@@ -605,6 +756,10 @@ export async function sendTx({
   // stop FUTURE signatures, never an already-submitted one).
   if (abortSignal?.aborted) {
     throw new TxCancelledError();
+  }
+  // Maintenance with writes blocked: refuse before any tx is built or signed.
+  if (getMaintenanceConfig().blockWrites) {
+    throw new MaintenanceError();
   }
 
   // Check clock drift — genuinely non-blocking now (it was awaited serially
@@ -622,6 +777,30 @@ export async function sendTx({
   let lastError: Error | null = null;
   let lastSignature: string | undefined;
 
+  // P0b self-heal. Planned from the ORIGINAL instructions on EVERY attempt:
+  // a repair that someone else (the keeper) landed meanwhile makes its engine
+  // gate false, and resending that stale repair would revert the whole tx on
+  // each retry (security review 2026-09-29, LOW). Attempt 0's plan starts
+  // before the first blockhash fetch so the market read overlaps it.
+  const feePayer = wallet.publicKey;
+  const selfHealOn = !!selfHeal && isSelfHealEnabled() && !skipPreflight;
+  const planHeal = (): Promise<SelfHealResult | null> =>
+    selfHeal && selfHealOn
+      ? planSelfHeal(
+          {
+            programId: selfHeal.programId,
+            market: selfHeal.market,
+            instructions,
+            computeUnits,
+            catchUp: selfHeal.catchUp ? { cranker: feePayer, portfolio: selfHeal.catchUp.portfolio, oracleTail: selfHeal.catchUp.oracleTail } : undefined,
+          },
+          connectionSelfHealDeps(connection, selfHeal.market, feePayer),
+        )
+      : Promise.resolve(null);
+  let selfHealPromise: Promise<SelfHealResult | null> = planHeal();
+  let healedInstructions = instructions;
+  let healedComputeUnits = computeUnits;
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       // Latency: kick the blockhash fetch off FIRST so it overlaps the fee
@@ -629,6 +808,74 @@ export async function sendTx({
       // a prewarmTxLanding call; retries force a fresh blockhash since a
       // stale one is a plausible cause of the failure being retried).
       const blockhashPromise = getFreshBlockhash(connection, attempt > 0);
+      if (selfHealOn) {
+        if (attempt > 0) selfHealPromise = planHeal();
+        const heal = await selfHealPromise;
+        healedInstructions = instructions;
+        healedComputeUnits = computeUnits;
+        if (heal) {
+          onSelfHeal?.(heal);
+          if (heal.outcome === "repaired") {
+            healedInstructions = heal.instructions;
+            healedComputeUnits = heal.computeUnits;
+            console.info(`[self-heal] prepended ${heal.repairs.map(describeRepair).join(", ")}`);
+          }
+        }
+      }
+      if (vaultLpRepair && !skipPreflight && isVaultLpSelfHealEnabled()) {
+        // Planned from the (P0b-healed) list on EVERY attempt, like P0b: a crank someone
+        // else landed meanwhile makes the valuation current and the repair is dropped.
+        if (!selfHealOn) {
+          healedInstructions = instructions;
+          healedComputeUnits = computeUnits;
+        }
+        const r = await planVaultLpRepair(
+          {
+            programId: vaultLpRepair.programId,
+            market: vaultLpRepair.market,
+            cranker: feePayer,
+            instructions: healedInstructions,
+            computeUnits: healedComputeUnits,
+            oracleTail: vaultLpRepair.oracleTail,
+          },
+          connectionVaultLpRepairDeps(connection, vaultLpRepair.market, feePayer),
+        );
+        onVaultLpRepair?.(r);
+        if (r.outcome === "repaired") {
+          healedInstructions = r.instructions;
+          healedComputeUnits = r.computeUnits;
+          console.info("[vault-lp-repair] prepended the vault-LP refresh crank");
+        }
+        // d119eebd senior draw: 87 -> crank the vault LP; 88 -> recall (98) before the 77.
+        const d = await planSeniorDrawRepair(
+          {
+            programId: vaultLpRepair.programId,
+            market: vaultLpRepair.market,
+            cranker: feePayer,
+            instructions: healedInstructions,
+            computeUnits: healedComputeUnits,
+            oracleTail: vaultLpRepair.oracleTail,
+          },
+          connectionSeniorDrawRepairDeps(connection, feePayer),
+        );
+        onSeniorDrawRepair?.(d);
+        if (d.outcome === "cranked" || d.outcome === "recalled" || d.outcome === "other-pot") {
+          healedInstructions = d.instructions;
+          healedComputeUnits = d.computeUnits;
+          console.info(`[senior-draw-repair] ${d.outcome}${d.recallAtoms !== undefined ? ` ${d.recallAtoms}` : ""}`);
+        }
+      }
+
+      // SH-1: the CU-sizing simulation IS the pre-sign verdict when it runs — a refusal
+      // here never opens the wallet, and a green one is not simulated a second time.
+      let gateGreen = false;
+      if (computeUnitsFromSim) {
+        const g = await simulateForGate(connection, feePayer, healedInstructions);
+        if (g.err && !skipPreflight) throw new SimulationRefusal(g.err, g.logs, g.simulated);
+        gateGreen = !g.err && !g.rpcFailed;
+        healedComputeUnits = sizeComputeUnitLimit(g.consumed, computeUnitsFromSim);
+        onComputeUnits?.({ limit: healedComputeUnits, consumed: g.consumed });
+      }
 
       // Get dynamic priority fee on first attempt (cached 45s)
       const priorityFee = attempt === 0 ? await getPriorityFee(connection) : PRIORITY_FEE_FALLBACK;
@@ -640,7 +887,7 @@ export async function sendTx({
       let balanceCheckPromise: Promise<void> | null = null;
       if (attempt === 0) {
         const numSignatures = 1 + signers.length; // wallet + additional signers
-        const fees = estimateFees(computeUnits, priorityFee, numSignatures);
+        const fees = estimateFees(healedComputeUnits, priorityFee, numSignatures);
         // BUG 17: only non-zero when this tx actually creates an account (e.g.
         // init/first-deposit's InitPortfolio) — a plain trade's instructions
         // contain no CreateAccount ix, so this is 0 and behavior is unchanged.
@@ -652,7 +899,7 @@ export async function sendTx({
       // injected into the instruction array by wallet middleware or upstream hooks.
       // This is a defensive filter — our code doesn't add these, but wallet extensions
       // or provider wrappers might contaminate the instruction list before it reaches sendTx.
-      const cleanInstructions = instructions.filter(
+      const cleanInstructions = healedInstructions.filter(
         (ix) => ix.programId.toBase58() !== LIGHTHOUSE_PROGRAM_ID
       );
 
@@ -661,7 +908,7 @@ export async function sendTx({
       // violation in heap section") on its first heap allocation unless the tx
       // requests the full heap frame. Must be the FIRST instruction. (issue #176)
       tx.add(ComputeBudgetProgram.requestHeapFrame({ bytes: 131072 }));
-      tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }));
+      tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: healedComputeUnits }));
       tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }));
       for (const ix of cleanInstructions) {
         tx.add(ix);
@@ -705,21 +952,16 @@ export async function sendTx({
       const usesAtomicSend =
         !!wallet.signAndSendTransaction && signers.length === 0 && getNetwork() !== "devnet";
       const runSimulation = (): Promise<void> => presimulateOrThrow(connection, tx);
-      const wantSimulation = !skipPreflight && (signers.length === 0 || simulateBeforeSign);
-      const simulateFirst = usesAtomicSend || simulateBeforeSign;
-      if (wantSimulation && simulateFirst) {
+      // UX WP-1 (SH-1): simulate BEFORE the wallet opens, on every network and also with
+      // keypair signers (sigVerify:false, so missing signatures don't matter). A refusal
+      // throws SimulationRefusal and the wallet is never prompted. The only skips: the
+      // Lighthouse fallback (skipPreflight) and a green CU-sizing simulation of this exact
+      // list above. `simulateBeforeSign` is kept for callers; it is now the default.
+      void simulateBeforeSign;
+      const wantSimulation = !skipPreflight && !gateGreen;
+      if (wantSimulation) {
         await runSimulation();
       }
-      // Settled-result wrapper so a simulation rejection can't become an
-      // unhandled rejection while we're awaiting the wallet popup.
-      const concurrentSimGate: Promise<Error | null> | null =
-        wantSimulation && !simulateFirst
-          ? runSimulation().then(
-              () => null,
-              (e) => (e instanceof Error ? e : new Error(String(e))),
-            )
-          : null;
-
       // ================================================================
       // PERC-8388: Use signAndSendTransaction when available.
       // This is the definitive fix for Lighthouse/Blowfish injection.
@@ -776,15 +1018,6 @@ export async function sendTx({
             `Sending with skipPreflight=true as workaround.`
           );
           skipPreflight = true;
-        }
-
-        // Gate the broadcast on the concurrent simulation's verdict (started
-        // before the wallet popup, see above). If simulation reported a
-        // program error, the user's signature is simply never broadcast —
-        // same safety property as the old simulate-then-popup ordering.
-        if (concurrentSimGate) {
-          const simErr = await concurrentSimGate;
-          if (simErr) throw simErr;
         }
 
         try {
@@ -1117,4 +1350,97 @@ export async function broadcastSignedTx(
     throw confirmErr;
   }
   return signature;
+}
+
+/** UX WP-2 (principle 3): re-simulation backoff while waiting for the market, before any prompt. */
+export const WAIT_DELAYS_MS = [1_500, 3_000, 5_000, 8_000, 12_000];
+
+/**
+ * Wrapper codes the keeper clears within seconds (engine / oracle catching up) and the P2
+ * matcher's stale-mark codes. Only a SimulationRefusal (the wallet was never opened) is waited on.
+ */
+const WAITABLE_WRAPPER = new Set<number>([WRAPPER_ERR.EngineStale, WRAPPER_ERR.EngineBStale, WRAPPER_ERR.EngineLockActive, WRAPPER_ERR.OracleStale, WRAPPER_ERR.OracleInvalid]);
+const WAITABLE_MATCHER = new Set<number>([8002, 8003]);
+
+export function isWaitableRefusal(e: unknown): e is SimulationRefusal {
+  if (!(e instanceof SimulationRefusal) || e.code === null) return false;
+  const ids = resolveDevnetProgramIds();
+  if (e.programId === ids.wrapper) return WAITABLE_WRAPPER.has(e.code);
+  if (e.programId === ids.matcher) return WAITABLE_MATCHER.has(e.code);
+  return false;
+}
+
+/**
+ * sendTx, but a refusal the market clears on its own (engine/oracle catching up) is
+ * re-simulated on WAIT_DELAYS_MS instead of surfacing — the wallet opens as soon as the
+ * simulation is green (self-heal / catch-up cranks re-planned each round). `onWaiting(true)`
+ * while waiting ("Waiting for the latest price…"), `onWaiting(false)` when done either way.
+ */
+export async function sendTxWaiting(
+  params: SendTxParams & {
+    onWaiting?: (waiting: boolean) => void;
+    waitDelaysMs?: readonly number[];
+    /**
+     * UX WP-3 (§3.3): keep re-simulating on the last delay after the schedule ends (the
+     * ticket says "We'll keep trying" and offers Stop = `abortSignal`), instead of throwing.
+     */
+    keepWaiting?: boolean;
+    /** Called once when the wait passes `longWaitMs` (default 30 s). */
+    onWaitingLong?: () => void;
+    longWaitMs?: number;
+  },
+): Promise<string> {
+  const { onWaiting, waitDelaysMs = WAIT_DELAYS_MS, keepWaiting = false, onWaitingLong, longWaitMs = 30_000, ...rest } = params;
+  let waited = 0;
+  let saidLong = false;
+  for (let i = 0; ; i++) {
+    try {
+      const sig = await sendTx(rest);
+      if (i > 0) onWaiting?.(false);
+      return sig;
+    } catch (e) {
+      const exhausted = i >= waitDelaysMs.length && !(keepWaiting && waitDelaysMs.length > 0);
+      if (!isWaitableRefusal(e) || exhausted || rest.abortSignal?.aborted) {
+        if (i > 0) onWaiting?.(false);
+        if (rest.abortSignal?.aborted && isWaitableRefusal(e)) throw new WaitStoppedError();
+        throw e;
+      }
+      onWaiting?.(true);
+      const delay = waitDelaysMs[Math.min(i, waitDelaysMs.length - 1)];
+      const stopped = await abortableSleep(delay, rest.abortSignal);
+      waited += delay;
+      if (!saidLong && waited >= longWaitMs) {
+        saidLong = true;
+        onWaitingLong?.();
+      }
+      if (stopped) {
+        onWaiting?.(false);
+        throw new WaitStoppedError();
+      }
+    }
+  }
+}
+
+/** The user pressed Stop while the app was waiting for the market: nothing was sent. */
+export class WaitStoppedError extends Error {
+  constructor() {
+    super("Stopped waiting for the market; nothing was sent.");
+    this.name = "WaitStoppedError";
+  }
+}
+
+/** Resolves true when `signal` aborted during the sleep. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(true);
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(false);
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      resolve(true);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

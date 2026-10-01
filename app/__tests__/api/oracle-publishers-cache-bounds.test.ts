@@ -214,7 +214,7 @@ describe("GET /api/oracle/publishers cache resource bounds", () => {
 
     await expect(response.json()).resolves.toEqual(cachedResult);
 
-    expect(cacheMock.get).toHaveBeenCalledWith("hyperp:");
+    expect(cacheMock.get).toHaveBeenCalledWith("hyperp");
     expect(cacheMock.set).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });

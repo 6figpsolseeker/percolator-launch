@@ -78,7 +78,7 @@ describe("DepositWithdrawPanel", () => {
       target: { value: "1000" },
     });
 
-    expect(screen.getByText(/≈\s*1000 LP tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/≈ 1,000\.00 shares/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deposit" })).toBeEnabled();
   });
 
@@ -100,7 +100,7 @@ describe("DepositWithdrawPanel", () => {
       target: { value: "1000" },
     });
 
-    expect(screen.getByText(/≈\s*1000 LP tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/≈ 1,000\.00 shares/)).toBeInTheDocument();
 
     rerender(
       <DepositWithdrawPanel
@@ -125,7 +125,7 @@ describe("DepositWithdrawPanel", () => {
       ).toBeDisabled();
     }
 
-    expect(screen.queryByText(/≈\s*1000 LP tokens/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/≈ 1,000\.00 shares/)).not.toBeInTheDocument();
 
     const depositButton = screen.getByRole("button", { name: "Deposit" });
     expect(depositButton).toBeDisabled();
@@ -150,10 +150,10 @@ describe("DepositWithdrawPanel", () => {
       screen.getByRole("button", { name: "withdraw" }),
     );
 
-    expect(screen.getByLabelText("LP Tokens to Burn")).toBeDisabled();
+    expect(screen.getByLabelText("Withdraw Amount")).toBeDisabled();
 
     const withdrawButton = screen.getByRole("button", {
-      name: "Request Withdrawal",
+      name: /^Withdraw /,
     });
 
     expect(withdrawButton).toBeDisabled();
@@ -177,7 +177,7 @@ describe("DepositWithdrawPanel", () => {
     );
 
     const claimButton = screen.getByRole("button", {
-      name: "Claim Redemption",
+      name: "Finish withdrawal",
     });
 
     expect(claimButton).toBeDisabled();

@@ -12,26 +12,20 @@
  * DEX source held 1000 bars ending at 121.51. One stale internal trade beat
  * three and a half days of correct data.
  *
- * The mechanism was an escape hatch that quietly changed meaning. It read:
- *
- *     hasPercolatorData = perc.success && priced > 0 && (priced >= 10 || pythHasNothing)
- *
- * and its own comment explained `pythHasNothing` as a PER-TOKEN condition —
- * "Pyth has no feed for this long-tail asset". That description was never
- * accurate: an unmapped asset leaves usePythChart on `"idle"`, for which
- * `pythHasNothing` was false, so the hatch never fired for the long-tail case
- * it named. It fired only on `error` and on `success`-with-no-bars. Then Pyth
- * removed its
- * TradingView shim upstream (`/v1/shims/tradingview/*` now 404s, while
- * `/v1/price_feeds` still returns 200), so `pythStatus === "error"` became
- * permanent for every Pyth-mapped market. A per-token exception became a
- * global one, the >= 10 threshold was bypassed everywhere, and because the DEX
+ * The mechanism was an escape hatch that quietly changed meaning: a thin
+ * Percolator series was allowed to win whenever the (since removed) external
+ * spot feed errored, and that feed's upstream later started erroring
+ * permanently. A per-token exception became a global one, and because the DEX
  * source is only consulted AFTER Percolator loses, it was never reached.
  *
  * The fix is one clause: a sub-threshold Percolator series may only win when
- * BOTH other sources have actually settled with nothing. It keeps the hatch's
- * real intent — "any internal data beats a blank chart" — and denies it the
- * power to outrank a healthy source.
+ * the DEX source has actually settled with nothing. It keeps the hatch's real
+ * intent — "any internal data beats a blank chart" — and denies it the power to
+ * outrank a healthy source.
+ *
+ * NO PYTH: the chart has exactly three sources — the market's own trades
+ * (Percolator), the mint's DEX pool history (GeckoTerminal), and the market's
+ * own on-chain mark history (oracle). There is no external price-feed tier.
  *
  * A source that is still LOADING is deliberately not "nothing". That is what
  * stops the stub flashing in during the DEX round trip, which is the flicker
@@ -41,8 +35,8 @@
 import type { ChartDataSource } from "@/lib/chart-live-tick";
 
 /**
- * Mirrors what the three candle hooks actually report. `"empty"` is NOT
- * optional: usePercolatorCandles, usePythChart and useTokenChart all set it
+ * Mirrors what the candle hooks actually report. `"empty"` is NOT
+ * optional: usePercolatorCandles and useTokenChart both set it
  * for a batch that came back with no rows, and it is the state a dataless
  * source spends its life in. Omitting it here both failed the type check and
  * made `settledEmpty` unreachable for the most common real case.
@@ -52,12 +46,12 @@ export type ChartFetchStatus = "idle" | "loading" | "success" | "empty" | "error
 export interface ChartSourceState {
   status: ChartFetchStatus;
   /**
-   * False when this source can never produce data for this market — no Pyth
-   * symbol mapping, or no mainnet CA for the DEX pool lookup.
+   * False when this source can never produce data for this market — e.g. no
+   * mainnet CA for the DEX pool lookup.
    *
    * Load-bearing, and NOT the same as `status === "idle"`. useTokenChart sets
    * `idle` and returns without fetching when its mint is null, and stays there
-   * forever; so does usePythChart with no symbol. Without this flag an
+   * forever. Without this flag an
    * inapplicable source looks permanently "not yet settled", and a market with
    * 1..9 internal bars and no CA would fall through to the oracle FOREVER
    * rather than showing its own trades. Defaults to true.
@@ -114,7 +108,6 @@ function hasData(s: ChartSourceState): boolean {
 
 export interface ChartSourceInputs {
   percolator: ChartSourceState;
-  pyth: ChartSourceState;
   dex: ChartSourceState;
 }
 
@@ -125,25 +118,23 @@ export interface ChartSourceInputs {
  *
  *   1. Percolator WITH enough bars — the market's own trades are the truest
  *      series when there are enough of them to read.
- *   2. Pyth — deep spot history for a mapped asset.
- *   3. DEX — the mint's pool history; deep, but a different venue.
- *   4. Percolator with ANY bars, but ONLY once Pyth and DEX have both settled
- *      empty. Something beats nothing; it must not beat something.
- *   5. Oracle — the market's own mark history, the last resort.
+ *   2. DEX — the mint's GeckoTerminal pool history; deep, and the same venue
+ *      the relaunch markets are priced from (pumpswap / meteora-dlmm).
+ *   3. Percolator with ANY bars, but ONLY once DEX has settled empty.
+ *      Something beats nothing; it must not beat something.
+ *   4. Oracle — the market's own mark history, the last resort.
  */
 export function selectChartSource(
-  { percolator, pyth, dex }: ChartSourceInputs,
+  { percolator, dex }: ChartSourceInputs,
   minPercBars: number = MIN_PERC_BARS,
 ): ChartDataSource {
   if (percolator.status === "success" && percolator.pricedBars >= minPercBars) {
     return "percolator";
   }
-  if (hasData(pyth)) return "pyth";
   if (hasData(dex)) return "dex";
   if (
     percolator.status === "success" &&
     percolator.pricedBars > 0 &&
-    settledEmpty(pyth) &&
     settledEmpty(dex)
   ) {
     return "percolator";

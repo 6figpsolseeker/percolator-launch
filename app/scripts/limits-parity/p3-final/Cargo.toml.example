@@ -1,0 +1,11 @@
+# Copy to a scratch dir as Cargo.toml (with main.rs at src/main.rs); paths = clean worktrees of
+# percolator-prog feat/p3-vault-owned-lp@4b1a5d30 (FINAL, senior draw, pause code 89) and its engine sibling 35ddd692.
+[package]
+name = "limits-p3-final"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+percolator-prog = { path = "/Users/khubair/wt-limits-p3head/percolator-prog", features = ["devnet"] }
+percolator = { path = "/Users/khubair/wt-limits-p3head/percolator", features = ["fork-facade"] }
+bytemuck = { version = "1.14", features = ["derive", "min_const_generics"] }
+[workspace]

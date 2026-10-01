@@ -19,6 +19,11 @@ const TEXT_COLORS: Record<ToastItem["type"], string> = {
   warning: "text-[var(--warning)]",
 };
 
+/**
+ * UX WP-10 (audit §4.9, UI-1): success 4 s, info / warning 6 s, error sticky until dismissed.
+ */
+export const TOAST_DURATION_MS: Record<ToastItem["type"], number | null> = { success: 4_000, info: 6_000, warning: 6_000, error: null };
+
 const SingleToast: FC<{ item: ToastItem; onDismiss: (id: string) => void }> = ({
   item,
   onDismiss,
@@ -44,6 +49,8 @@ const SingleToast: FC<{ item: ToastItem; onDismiss: (id: string) => void }> = ({
       );
     }
 
+    const duration = TOAST_DURATION_MS[item.type];
+    if (duration === null) return;
     const timer = setTimeout(() => {
       if (!prefersReduced && el) {
         gsap.to(el, {
@@ -56,10 +63,10 @@ const SingleToast: FC<{ item: ToastItem; onDismiss: (id: string) => void }> = ({
       } else {
         onDismiss(item.id);
       }
-    }, 5000);
+    }, duration);
 
     return () => clearTimeout(timer);
-  }, [item.id, onDismiss, prefersReduced]);
+  }, [item.id, item.type, onDismiss, prefersReduced]);
 
   const c = COLORS[item.type];
 
@@ -81,6 +88,9 @@ const SingleToast: FC<{ item: ToastItem; onDismiss: (id: string) => void }> = ({
   return (
     <div
       ref={elRef}
+      data-testid="toast"
+      data-type={item.type}
+      role={item.type === "error" ? "alert" : "status"}
       className={`pointer-events-auto flex items-center gap-3 rounded-sm border px-4 py-3 shadow-lg bg-[var(--panel-bg)] ${c.border}`}
       style={{ opacity: 0 }}
     >
@@ -88,6 +98,7 @@ const SingleToast: FC<{ item: ToastItem; onDismiss: (id: string) => void }> = ({
       <span className="text-sm text-[var(--text)]">{item.message}</span>
       <button
         onClick={handleDismiss}
+        aria-label="Dismiss"
         className="ml-2 text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
       >
         ✕
@@ -100,7 +111,13 @@ export const ToastContainer: FC = () => {
   const { toasts, dismiss } = useToastContext();
 
   return (
-    <div className="pointer-events-none fixed right-4 top-20 z-[100] flex flex-col gap-2">
+    // Top-right on desktop, top-center on mobile (clear of the bottom nav); announced politely.
+    <div
+      data-testid="toast-container"
+      aria-live="polite"
+      aria-relevant="additions"
+      className="pointer-events-none fixed left-1/2 top-16 z-[100] flex w-[calc(100%-32px)] max-w-sm -translate-x-1/2 flex-col gap-2 md:left-auto md:right-4 md:top-20 md:w-auto md:translate-x-0"
+    >
       {toasts.map((t) => (
         <SingleToast key={t.id} item={t} onDismiss={dismiss} />
       ))}

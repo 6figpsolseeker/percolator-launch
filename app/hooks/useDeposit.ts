@@ -19,13 +19,13 @@ import {
   parseAllAccounts,
   AccountKind,
   isV17Account,
-  parsePortfolioV17,
   V17_PORTFOLIO_ACCOUNT_LEN,
   deriveVaultAuthority,
 } from "@percolatorct/sdk";
 import { sendTx } from "@/lib/tx";
 import { isBlockedSlab } from "@/lib/blocklist";
-import { getPortfolioRawSnapshot, isLpPortfolio, makePortfolioScanKey } from "@/lib/userAccountScan";
+import { getPortfolioRawSnapshot, makePortfolioScanKey } from "@/lib/userAccountScan";
+import { findOwnerPortfolio } from "@/lib/owner-portfolio";
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { assertKnownProgram } from "@/lib/programAllowlist";
 import { humanizeError } from "@/lib/errorMessages";
@@ -38,59 +38,11 @@ import { assertDepositWithinBalance, readTokenBalance } from "@/lib/deposit-guar
 const V17_PORTFOLIO_ACCOUNT_SIZE = V17_PORTFOLIO_ACCOUNT_LEN;
 
 /**
- * Find the user's v17 portfolio account for a given market.
- * v17 portfolios are standalone accounts (not embedded in the slab bitmap).
- * We scan getProgramAccounts filtered by owner-program + data magic to find
- * the user's portfolio for this market.
- *
- * Returns null if no portfolio exists yet.
+ * The user's v17 portfolio on this market (lib/owner-portfolio.ts). `null` ONLY
+ * when the scan found none — an RPC failure throws PortfolioLookupError, so a
+ * 429 can never make this flow create a second portfolio (M-4).
  */
-async function findV17Portfolio(
-  connection: Parameters<typeof import("@solana/web3.js")["Connection"]["prototype"]["getProgramAccounts"]>[0] extends never ? never : import("@solana/web3.js").Connection,
-  programId: PublicKey,
-  marketPk: PublicKey,
-  ownerPk: PublicKey,
-): Promise<PublicKey | null> {
-  try {
-    // V17 magic bytes at offset 0: 0x5045524356313600 in LE = [0x00, 0x36, 0x31, 0x56, 0x43, 0x52, 0x45, 0x50]
-    const V17_MAGIC_BYTES = Buffer.from([0x00, 0x36, 0x31, 0x56, 0x43, 0x52, 0x45, 0x50]);
-    const accounts = await connection.getProgramAccounts(programId, {
-      filters: [
-        { memcmp: { offset: 0, bytes: V17_MAGIC_BYTES.toString("base64"), encoding: "base64" } },
-        // marketGroupId is at HEADER_LEN(16) in the portfolio = offset 16
-        { memcmp: { offset: 16, bytes: marketPk.toBase58() } },
-        // Mutable owner (SDK PF_OWNER_OFF) is at offset 116, NOT offset 80
-        // (offset 80 is provenanceOwner — IMMUTABLE). MintPositionNft moves the
-        // mutable owner to the escrow PDA on wrap but leaves provenance pointing
-        // at the original wallet, so filtering on 80 would still match a wrapped
-        // (NFT-escrowed) portfolio here.
-        { memcmp: { offset: 116, bytes: ownerPk.toBase58() } },
-      ],
-    });
-    // Drop the market's LP portfolio BEFORE the sort/pick below — CRITICAL:
-    // a market CREATOR depositing on their own market must create/top up
-    // THEIR OWN portfolio, never the LP (the LP's owner == the creator's
-    // wallet). See isLpPortfolio's doc comment.
-    const nonLpAccounts = accounts.filter(({ account }) => !isLpPortfolio(account.data));
-    if (nonLpAccounts.length === 0) return null;
-    // M10: getProgramAccounts doesn't guarantee stable ordering across RPC
-    // nodes/calls. If more than one account ever matches this owner+market
-    // filter, picking an arbitrary array element can select a DIFFERENT
-    // portfolio than useWithdraw.ts / useUserAccount.ts pick for the exact
-    // same wallet+market — deposit, withdraw, and display would silently
-    // disagree about which account holds the user's funds. Sort
-    // deterministically by pubkey so every caller converges on the same one.
-    const sorted = [...nonLpAccounts].sort((a, b) => a.pubkey.toBase58().localeCompare(b.pubkey.toBase58()));
-    // Defense-in-depth: re-verify the mutable owner actually matches after fetch —
-    // memcmp filters are advisory server-side; don't trust them blindly.
-    const data = sorted[0].account.data;
-    const portfolio = parsePortfolioV17(data instanceof Buffer ? data : Buffer.from(data));
-    if (!portfolio.owner.equals(ownerPk)) return null;
-    return sorted[0].pubkey;
-  } catch {
-    return null;
-  }
-}
+const findV17Portfolio = findOwnerPortfolio;
 
 export function useDeposit(slabAddress: string) {
   const { connection } = useConnectionCompat();
@@ -391,7 +343,7 @@ export function useDeposit(slabAddress: string) {
           );
         }
 
-        const sig = await sendTx({ connection, wallet, instructions });
+        const sig = await sendTx({ connection, wallet, instructions, selfHeal: { programId, market: slabPk } });
 
         // Force immediate slab re-read so balance updates without waiting for
         // the next poll cycle (which can be up to 30 s when WS is active).

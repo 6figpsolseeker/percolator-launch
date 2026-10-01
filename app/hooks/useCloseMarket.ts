@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { PublicKey, Transaction, ComputeBudgetProgram } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
+import type { TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   parseHeader,
@@ -19,7 +20,36 @@ import {
 } from "@percolatorct/sdk";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { planCloseMarket } from "@/lib/close-market-plan";
+import { readAndPlanPreResolve } from "@/lib/pre-resolve";
+import { getConfig } from "@/lib/config";
+import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
 import { parseMarketCreationError } from "@/lib/parseMarketError";
+import { closeInOneApproval, closeSlabState, PRESIGNED_CLOSE_RESENDS, type CloseSlabState } from "@/lib/limits/close-slab";
+import type { Connection } from "@solana/web3.js";
+import { COPY } from "@/lib/limits/copy";
+import { CLEANUP_CU, planOwnCleanupForOneApproval } from "@/lib/limits/own-portfolio-cleanup";
+import { broadcastSignedTx, buildBatchTx, getFreshBlockhash, getPriorityFee, signAllCompat, simulateForGate, SimulationRefusal } from "@/lib/tx";
+
+import { WRAPPER_ERR } from "@/lib/wrapper-errors";
+import { plainMessage } from "@/lib/limits/user-message";
+/** Slab state after `sig`, read at (at least) the tx's slot so a cached pre-close read can't answer. */
+export async function readCloseSlabStateAfter(
+  connection: { getSignatureStatuses: Connection["getSignatureStatuses"]; getAccountInfo: Connection["getAccountInfo"] },
+  slab: PublicKey,
+  sig: string,
+): Promise<CloseSlabState> {
+  try {
+    const st = await connection.getSignatureStatuses([sig]);
+    const slot = st.value[0]?.slot;
+    const info = await connection.getAccountInfo(
+      slab,
+      slot == null ? "confirmed" : { commitment: "confirmed", minContextSlot: slot },
+    );
+    return closeSlabState(info ? new Uint8Array(info.data) : null);
+  } catch {
+    return "unknown";
+  }
+}
 
 /**
  * CloseSlab (IX_TAG.CloseSlab = 13) instruction in percolator-prog.
@@ -146,6 +176,8 @@ export function useCloseMarket() {
         // no such lifecycle (and no authority-epoch lane: 0n).
         let authorityEpoch = 0n;
         let resolveIx: ReturnType<typeof buildIx> | null = null;
+        let preResolveCranks: TransactionInstruction[] = [];
+        let cleanupGroups: TransactionInstruction[][] = [];
         if (isV17Account(data)) {
           const plan = planCloseMarket(data);
           if (!plan.ok) {
@@ -157,7 +189,47 @@ export function useCloseMarket() {
             return null;
           }
           authorityEpoch = plan.authorityEpoch;
+          // E2E B12: on an already-RESOLVED market, CloseSlab needs materialized_portfolio_count
+          // == 0, and CloseResolved alone does not dematerialize. Close the wallet's OWN
+          // portfolios first (owner-signed 30 / 46 -> 8), each sim-gated, then re-check.
+          // UX WP-9: the cleanups are PLANNED here (each sim-gated) and signed with the CloseSlab
+          // tx in the one approval below, instead of one surprise prompt each.
+          if (!plan.resolve) {
+            const cleanup = await planOwnCleanupForOneApproval({
+              connection,
+              programId,
+              market: slabPk,
+              owner: walletCompat.publicKey,
+              collateralMint,
+              vaultToken: vaultPubkey,
+              vaultAuthority,
+            });
+            if (!cleanup.ok) {
+              setError(COPY.reclaimCleanup[cleanup.reason](cleanup.remaining !== undefined ? String(cleanup.remaining) : ""));
+              setLoading(false);
+              return null;
+            }
+            cleanupGroups = cleanup.groups;
+          }
           if (plan.resolve) {
+            // P0b pre-resolve gate (fee-flow audit F4): crank the Live-only LP (78) and
+            // staker (87 → stake 12) legs in THIS tx before ResolveMarket, and refuse
+            // when a leg is owed that can't be cranked or the creator's own fees are
+            // unclaimed — CloseSlab would burn them. lib/pre-resolve.ts.
+            const gate = await readAndPlanPreResolve(connection, {
+              programId,
+              stakeProgramId: new PublicKey((getConfig() as { vaultProgramId?: string }).vaultProgramId ?? DEVNET_PROGRAM_IDS.stake),
+              cranker: walletCompat.publicKey,
+              market: slabPk,
+              marketData: data,
+            });
+            if (gate.blockers.length > 0) {
+              setError(`Cannot reclaim yet: ${gate.blockers.join(" ")}`);
+              setLoading(false);
+              return null;
+            }
+            for (const w of gate.warnings) console.warn("[useCloseMarket] pre-resolve:", w);
+            preResolveCranks = gate.cranks;
             resolveIx = buildIx({
               programId,
               keys: buildAccountMetas(ACCOUNTS_RESOLVE_MARKET, {
@@ -188,24 +260,34 @@ export function useCloseMarket() {
           data: encodeCloseSlab(authorityEpoch),
         });
 
-        const { blockhash } = await connection.getLatestBlockhash("confirmed");
-        const tx = new Transaction({
-          recentBlockhash: blockhash,
-          feePayer: walletCompat.publicKey,
+        // UX WP-9 (audit §3.11, MM-2): ONE approval. The own-portfolio cleanups, the main tx
+        // (pre-resolve cranks + ResolveMarket + CloseSlab, or CloseSlab alone) and
+        // PRESIGNED_CLOSE_RESENDS CloseSlab copies are signed together; a copy is broadcast only
+        // while the slab still reads as a live market (P1 F4: CloseSlab can return Ok WITHOUT
+        // closing — a fee-leg re-book). The v17 wrapper needs the full heap frame first
+        // (buildBatchTx adds it); 1.4M covers the pre-resolve cranks (≤ 250k).
+        const payer = walletCompat.publicKey;
+        const [blockhash, fee] = await Promise.all([getFreshBlockhash(connection, true), getPriorityFee(connection)]);
+        const mk = (instructions: TransactionInstruction[], units: number, i: number) =>
+          buildBatchTx({ instructions, computeUnits: units, priorityFeeMicroLamports: fee + i, blockhash, feePayer: payer });
+        const mainIxs = [...preResolveCranks, ...(resolveIx ? [resolveIx] : []), ix];
+        // Pre-sign verdict on what can be simulated now (the cleanups were simulated when planned;
+        // with cleanups pending, CloseSlab can only succeed after them, so it is not simulated).
+        if (cleanupGroups.length === 0) {
+          const g = await simulateForGate(connection, payer, mainIxs);
+          if (g.err) throw new SimulationRefusal(g.err, g.logs, g.simulated);
+        }
+        const closed = await closeInOneApproval({
+          cleanup: cleanupGroups.map((g, i) => mk(g, CLEANUP_CU, i)),
+          main: mk(mainIxs, 1_400_000, cleanupGroups.length),
+          resends: Array.from({ length: PRESIGNED_CLOSE_RESENDS }, (_, i) => mk([ix], 1_400_000, cleanupGroups.length + 1 + i)),
+          signAll: (txs) => signAllCompat(walletCompat, txs),
+          broadcast: (t) => broadcastSignedTx(connection, t),
+          readState: (s) => readCloseSlabStateAfter(connection, slabPk, s),
+          rebookedMessage: COPY.closeRebooked,
         });
-        // v17 wrapper installs a custom 128KB heap allocator and aborts unless the
-        // tx requests the full heap frame. Must be the FIRST instruction. (issue #176)
-        tx.add(ComputeBudgetProgram.requestHeapFrame({ bytes: 131072 }));
-        tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }));
-        if (resolveIx) tx.add(resolveIx);
-        tx.add(ix);
+        let sig = closed.signature;
 
-        const signed = await walletCompat.signTransaction(tx);
-        const sig = await connection.sendRawTransaction(signed.serialize(), {
-          skipPreflight: false,
-          preflightCommitment: "confirmed",
-        });
-        await connection.confirmTransaction(sig, "confirmed");
 
         // Clean up localStorage
         localStorage.removeItem("percolator-pending-slab-keypair");
@@ -216,7 +298,9 @@ export function useCloseMarket() {
         const msg = err instanceof Error ? err.message : String(err);
 
         // Parse common CloseSlab failures
-        if (msg.includes("0xd") || msg.includes("EngineInsufficientBalance")) {
+        if (msg === COPY.closeRebooked) {
+          setError(msg);
+        } else if (msg.includes("0xd") || msg.includes("EngineInsufficientBalance")) {
           setError(
             "Cannot close: the slab vault or insurance fund still has tokens. " +
             "Complete market creation to use those funds, or contact support to drain them."
@@ -225,7 +309,7 @@ export function useCloseMarket() {
           setError("Cannot close: there are still open user accounts on this market.");
         } else if (msg.includes("User rejected") || msg.includes("WalletSign")) {
           setError("Transaction cancelled.");
-        } else if (/custom program error:\s*0x15\b/i.test(msg) || msg.includes("EngineLockActive")) {
+        } else if (new RegExp(`custom program error:\\s*0x${WRAPPER_ERR.EngineLockActive.toString(16)}\\b`, "i").test(msg) || msg.includes("EngineLockActive")) {
           // 0x15 = Custom(21) = EngineLockActive: CloseSlab's preconditions aren't met.
           // It is not a transient lock — waiting never helps. The Live-market case is
           // handled above (ResolveMarket is prepended), and capital/portfolios are
@@ -241,11 +325,13 @@ export function useCloseMarket() {
           // wizard uses (SDK PERCOLATOR_ERRORS hint table) instead of dumping the raw
           // simulation log, so an unrecognised code still gets a real explanation where
           // possible rather than an opaque "custom program error: 0xNN".
+          // UX WP-1: the one resolver first; the create-market decoder only for codes it
+          // does not own, and never raw simulation text.
           const decoded = parseMarketCreationError(err);
           setError(
-            decoded.startsWith("Transaction failed:")
-              ? `Failed to close slab: ${msg.slice(0, 200)}`
-              : `Cannot close: ${decoded}`
+            plainMessage(err, { surface: "close-market" }, () =>
+              decoded.startsWith("Transaction failed:") ? "Something went wrong and nothing was sent." : decoded,
+            )
           );
         }
 

@@ -1,65 +1,37 @@
 import { NextResponse } from "next/server";
-import { getBackendUrl, getRpcEndpoint } from "@/lib/config";
+import { getServerConnection } from "@/lib/server-rpc";
+import { hasIndexerDb, pingIndexerDb } from "@/lib/indexer-db";
+
 export const dynamic = "force-dynamic";
 
-async function checkWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs = 3000
-): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+/**
+ * GET /api/health — liveness of what the app itself depends on.
+ *
+ * It used to probe the retired percolator-api (`${API_URL}/health`) and the raw RPC endpoint
+ * (getRpcEndpoint: the exhausted Helius key on devnet), so it reported `offline` / 503 while
+ * the app worked. Now:
+ *   rpc      getSlot through getServerConnection (DEVNET_RPC_URL + Origin, as every route uses);
+ *   indexer  `select 1` on INDEXER_DATABASE_URL, or null when the indexer DB isn't configured.
+ * 200 when rpc is up and the indexer is up or not configured; otherwise 503.
+ */
+async function rpcOk(timeoutMs = 3000): Promise<boolean> {
   try {
-    const res = await fetch(url, { ...init, signal: controller.signal });
-    return res.ok;
+    await Promise.race([
+      getServerConnection("confirmed").getSlot("confirmed"),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), timeoutMs)),
+    ]);
+    return true;
   } catch {
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 export async function GET() {
-  let API_URL: string;
-  try {
-    API_URL = getBackendUrl();
-  } catch {
-    // getBackendUrl() throws in non-production when env vars are missing.
-    // Return a degraded response instead of crashing the route at import time.
-    return NextResponse.json(
-      { status: "offline", api: false, rpc: false, ts: Date.now(), error: "Backend URL not configured" },
-      { headers: { "Cache-Control": "no-store, max-age=0" } }
-    );
-  }
-  const RPC_URL = getRpcEndpoint();
-
-  const [apiOk, rpcOk] = await Promise.all([
-    checkWithTimeout(`${API_URL}/health`, {}, 3000),
-    checkWithTimeout(
-      RPC_URL,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
-      },
-      3000
-    ),
-  ]);
-
-  const status = apiOk && rpcOk ? "online" : apiOk ? "degraded" : "offline";
-
-  // GH#1820: Return appropriate HTTP status codes based on service health.
-  // - 200 OK: All services online
-  // - 503 Service Unavailable: API or RPC offline/unhealthy
-  const statusCode = apiOk && rpcOk ? 200 : 503;
-
+  const [rpc, indexer] = await Promise.all([rpcOk(), hasIndexerDb() ? pingIndexerDb() : Promise.resolve(null)]);
+  const healthy = rpc && indexer !== false;
+  const status = healthy ? "online" : rpc ? "degraded" : "offline";
   return NextResponse.json(
-    { status, api: apiOk, rpc: rpcOk, ts: Date.now() },
-    {
-      status: statusCode,
-      headers: {
-        "Cache-Control": "no-store, max-age=0",
-      },
-    }
+    { status, rpc, indexer, ts: Date.now() },
+    { status: healthy ? 200 : 503, headers: { "Cache-Control": "no-store, max-age=0" } },
   );
 }

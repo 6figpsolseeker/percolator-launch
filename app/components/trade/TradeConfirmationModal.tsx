@@ -304,12 +304,14 @@ export const TradeConfirmationModal: FC<TradeConfirmationModalProps> = ({
         <div className="flex gap-3">
           <button
             onClick={onCancel}
+            data-testid="trade-cancel"
             className="flex-1 rounded-none border border-[var(--border)] py-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-secondary)] transition-colors hover:border-[var(--text-muted)] hover:text-[var(--text)]"
           >
             Cancel
           </button>
           <button
             onClick={handleConfirm}
+            data-testid="trade-confirm"
             disabled={submitting}
             // Contrast: white-on-#14F195 (--long) is ~1.5:1 and white-on-#FF3B5C
             // (--short) is ~3.5:1 at this size — both fail WCAG AA (4.5:1) for

@@ -21,6 +21,7 @@ import { Connection, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { getConfig } from "@/lib/config";
+import { keepAppMessage, plainMessage } from "@/lib/limits/user-message";
 
 export type FaucetStep = "idle" | "sol" | "usdc" | "deposit" | "done" | "error";
 
@@ -248,9 +249,22 @@ export function useDevnetFaucet(): DevnetFaucetState {
     setError(null);
     lastOpFailedRef.current = false;
     try {
-      // PERC-808: Try Helius devnet faucet first (more reliable, higher limits)
+      // UX WP-10 (FA-1): the server faucet first — it sends from the playground's server wallet
+      // when that is configured (the public airdrop below is usually rate-limited).
       let sig: string | null = null;
-      if (HELIUS_DEVNET_RPC) {
+      try {
+        const resp = await fetch("/api/faucet", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet: publicKey.toBase58(), type: "sol" }),
+        });
+        const data = (await resp.json().catch(() => ({}))) as { signature?: string };
+        if (resp.ok && data.signature) sig = data.signature;
+      } catch {
+        sig = null;
+      }
+      // PERC-808: Try Helius devnet faucet next (more reliable, higher limits)
+      if (!sig && HELIUS_DEVNET_RPC) {
         try {
           const heliusConn = new Connection(HELIUS_DEVNET_RPC, "confirmed");
           sig = await heliusConn.requestAirdrop(publicKey, 2 * LAMPORTS_PER_SOL);
@@ -293,7 +307,7 @@ export function useDevnetFaucet(): DevnetFaucetState {
       await refreshBalances();
     } catch (e) {
       lastOpFailedRef.current = true;
-      setError(e instanceof Error ? e.message : "SOL airdrop failed — devnet may be rate-limiting. Try the Solana Faucet.");
+      setError(plainMessage(e, { surface: "faucet" }, (raw) => keepAppMessage(raw) === raw ? raw : "SOL airdrop failed — devnet may be rate-limiting. Try the Solana Faucet."));
     } finally {
       setLoading(false);
     }
@@ -309,7 +323,7 @@ export function useDevnetFaucet(): DevnetFaucetState {
       const resp = await fetch("/api/faucet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: publicKey.toBase58() }),
+        body: JSON.stringify({ wallet: publicKey.toBase58(), type: "usdc" }),
       });
       const data = await resp.json();
       if (resp.status === 429) {

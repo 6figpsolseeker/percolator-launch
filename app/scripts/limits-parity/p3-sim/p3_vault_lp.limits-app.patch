@@ -1,0 +1,740 @@
+diff --git a/tests/p3_vault_lp.rs b/tests/p3_vault_lp.rs
+index 06fa2fd7..152be226 100644
+--- a/tests/p3_vault_lp.rs
++++ b/tests/p3_vault_lp.rs
+@@ -3330,3 +3330,735 @@ fn p3_recall_cap_is_post_maintenance_fee() {
+     assert!(after_equity >= 0);
+     env.assert_conserved("recall post-fee");
+ }
++
++// ── limits-UI lane repro (NOT part of the P3 branch; local worktree only) ────────────────
++/// Earn seniors after Resolve when LP fees were still harvestable at resolution:
++/// 77 (bound) refuses VaultLpHarvestPending while H != 0, and 78 is Live-only.
++#[test]
++fn limits_ui_repro_resolved_redemption_with_pending_fees() {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    let lp = env.bind(1_000);
++    let admin = env.admin.insecure_clone();
++    let d = env.new_depositor();
++    env.earn_deposit(&d, 10_000_000, Some(lp.portfolio)).expect("earn");
++    env.junior_deposit_as(&admin, lp.portfolio, 60_000_000).expect("junior");
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 50 * POS).expect("open");
++    env.svm.expire_blockhash();
++    env.trade(&t, &lp, -50 * POS).expect("close");
++    // Nobody cranked 78 before the market resolved.
++    env.resolve();
++    env.svm.expire_blockhash();
++    let crank_after = env.crank_fees(true);
++    println!("REPRO 78 after resolve: {crank_after:?}");
++    let junior_dest = env.token_account(env.mint, admin.pubkey(), 0);
++    env.settle_resolved(&Keypair::new(), lp.portfolio, 0, junior_dest).expect("settle vault LP");
++    let registry = env.registry;
++    env.permissionless_close_portfolio(lp.portfolio, registry).expect("vault LP cleanup");
++    env.trader_close_resolved(&t);
++    let towner = t.kp.pubkey();
++    env.permissionless_close_portfolio(t.portfolio, towner).expect("trader cleanup");
++    let shares = env.lp_shares(&d);
++    env.earn_request(&d, shares);
++    env.svm.expire_blockhash();
++    // 07a1d0eb: 77 still refuses 84 while fees are pending, but 78 now runs once the market is
++    // terminal-flat (it was Live-only before) and then 77 pays.
++    let r0 = env.earn_execute(&d, Some(lp.portfolio));
++    assert!(r0.as_ref().err().map(|e| e.contains(&code(PercolatorError::VaultLpHarvestPending))).unwrap_or(false), "84 before the harvest: {r0:?}");
++    assert!(crank_after.is_err(), "78 before terminal-flat is still refused: {crank_after:?}");
++    env.svm.expire_blockhash();
++    let crank_again = env.crank_fees(true);
++    println!("REPRO 78 after terminal-flat: {crank_again:?}");
++    crank_again.expect("78 runs on a terminal-flat Resolved bound vault (07a1d0eb)");
++    env.svm.expire_blockhash();
++    let r = env.earn_execute(&d, Some(lp.portfolio));
++    println!("REPRO 77 after resolve with pending fees: {r:?}");
++    assert!(r.is_ok(), "Earn senior cannot redeem after Resolve: {r:?}");
++}
++
++/// Control for the repro above: identical, but 78 runs BEFORE resolve.
++/// 77 (bound) refuses VaultLpHarvestPending while H != 0, and 78 is Live-only.
++#[test]
++fn limits_ui_repro_control_harvest_before_resolve_redeems() {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    let lp = env.bind(1_000);
++    let admin = env.admin.insecure_clone();
++    let d = env.new_depositor();
++    env.earn_deposit(&d, 10_000_000, Some(lp.portfolio)).expect("earn");
++    env.junior_deposit_as(&admin, lp.portfolio, 60_000_000).expect("junior");
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 50 * POS).expect("open");
++    env.svm.expire_blockhash();
++    env.trade(&t, &lp, -50 * POS).expect("close");
++    // CONTROL: the harvest runs while Live.
++    env.svm.expire_blockhash();
++    env.crank_fees(true).expect("harvest while live");
++    env.resolve();
++    env.svm.expire_blockhash();
++    let crank_after = env.crank_fees(true);
++    println!("REPRO 78 after resolve: {crank_after:?}");
++    let junior_dest = env.token_account(env.mint, admin.pubkey(), 0);
++    env.settle_resolved(&Keypair::new(), lp.portfolio, 0, junior_dest).expect("settle vault LP");
++    let registry = env.registry;
++    env.permissionless_close_portfolio(lp.portfolio, registry).expect("vault LP cleanup");
++    env.trader_close_resolved(&t);
++    let towner = t.kp.pubkey();
++    env.permissionless_close_portfolio(t.portfolio, towner).expect("trader cleanup");
++    let shares = env.lp_shares(&d);
++    env.earn_request(&d, shares);
++    env.svm.expire_blockhash();
++    let r = env.earn_execute(&d, Some(lp.portfolio));
++    println!("REPRO 77 after resolve with pending fees: {r:?}");
++    env.svm.expire_blockhash();
++    let crank_again = env.crank_fees(true);
++    println!("REPRO 78 again: {crank_again:?}");
++    assert!(r.is_ok(), "Earn senior cannot redeem after Resolve: {r:?} (78 after resolve: {crank_after:?})");
++}
++
++// ═══════════════════════════════════════════════════════════════════════════════════════
++// limits-UI lane (percolator-launch feat/limits-ui, round 4): the P3 journey with every
++// instruction the APP sends built by the APP — spawned from
++// app/scripts/limits-parity/p3-app-ixs.ts, which calls the same lib functions the hooks use
++// (buildP3BindIxs, earnTxPlan + buildEarnDepositIxs / buildEarnExecuteIxs, planResolvedExit +
++// exitStepIxs on RAW account bytes). Protocol-only steps (99 / 95), the trader's trades and
++// ResolveMarket are the harness's. Requires LIMITS_APP_DIR and TSX_BIN.
++// ═══════════════════════════════════════════════════════════════════════════════════════
++
++const LIMITS_ATA_PROGRAM: Pubkey = solana_sdk::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
++
++fn limits_b64(b: &[u8]) -> String {
++    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
++    let mut s = String::new();
++    for c in b.chunks(3) {
++        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
++        s.push(T[(n >> 18) as usize & 63] as char);
++        s.push(T[(n >> 12) as usize & 63] as char);
++        s.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
++        s.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
++    }
++    s
++}
++
++fn limits_app(cmd: &str, args: serde_json::Value) -> serde_json::Value {
++    let app = std::env::var("LIMITS_APP_DIR").expect("LIMITS_APP_DIR (percolator-launch app/ dir)");
++    let tsx = std::env::var("TSX_BIN").expect("TSX_BIN");
++    let out = std::process::Command::new(tsx)
++        .current_dir(&app)
++        .args(["--tsconfig", "tsconfig.json", "scripts/limits-parity/p3-app-ixs.ts", cmd, &args.to_string()])
++        .output()
++        .expect("spawn app builder");
++    assert!(out.status.success(), "app builder {cmd} failed: {}", String::from_utf8_lossy(&out.stderr));
++    serde_json::from_slice(&out.stdout).expect("app builder json")
++}
++
++fn limits_ixs(v: &serde_json::Value) -> Vec<Instruction> {
++    v["ixs"]
++        .as_array()
++        .expect("ixs")
++        .iter()
++        .map(|ix| {
++            let hex = ix["dataHex"].as_str().unwrap();
++            let data = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
++            let accounts = ix["keys"]
++                .as_array()
++                .unwrap()
++                .iter()
++                .map(|k| {
++                    let pk: Pubkey = k["pubkey"].as_str().unwrap().parse().unwrap();
++                    let s = k["isSigner"].as_bool().unwrap();
++                    if k["isWritable"].as_bool().unwrap() { AccountMeta::new(pk, s) } else { AccountMeta::new_readonly(pk, s) }
++                })
++                .collect();
++            Instruction { program_id: ix["programId"].as_str().unwrap().parse().unwrap(), accounts, data }
++        })
++        .collect()
++}
++
++impl Env {
++    fn limits_add_ata_program(&mut self) {
++        let mut p = spl_token_program_path();
++        p.set_file_name("spl_associated_token_account-1.1.1.so");
++        self.svm.add_program(LIMITS_ATA_PROGRAM, &std::fs::read(p).expect("ATA BPF"));
++    }
++    fn limits_b64_of(&self, k: &Pubkey) -> String {
++        limits_b64(&self.svm.get_account(k).map(|a| a.data).unwrap_or_default())
++    }
++    /// Send APP instructions (fee payer = harness payer) and book the SPL vault delta into the
++    /// conservation counters.
++    fn limits_send(&mut self, ixs: Vec<Instruction>, extra: &[&Keypair]) -> Result<(), String> {
++        let mut instructions = vec![
++            ComputeBudgetInstruction::request_heap_frame(128 * 1024),
++            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
++        ];
++        instructions.extend(ixs);
++        let mut signers = vec![&self.payer];
++        signers.extend_from_slice(extra);
++        let before = self.tok(self.vault_token) as u128;
++        self.svm.expire_blockhash();
++        let tx = Transaction::new_signed_with_payer(&instructions, Some(&self.payer.pubkey()), &signers, self.svm.latest_blockhash());
++        let r = self.svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{e:?}"));
++        let after = self.tok(self.vault_token) as u128;
++        if after > before { self.paid_in += after - before } else { self.paid_out += before - after }
++        r
++    }
++    fn limits_earn_json(&self, user: &Keypair, extra: serde_json::Value) -> serde_json::Value {
++        let mut v = serde_json::json!({
++            "programId": self.pid.to_string(), "market": self.market.to_string(), "domain": DOMAIN,
++            "user": user.pubkey().to_string(), "lpMint": self.lp_mint.to_string(), "vaultToken": self.vault_token.to_string(),
++            "vaultAuthority": self.vault_authority.to_string(), "escrow": self.escrow.to_string(),
++            "marketB64": self.limits_b64_of(&self.market), "registryB64": self.limits_b64_of(&self.registry),
++            "vaultLpStateB64": self.limits_b64_of(&self.vault_lp),
++        });
++        for (k, x) in extra.as_object().unwrap() { v[k] = x.clone(); }
++        v
++    }
++    fn limits_exit_json(&self, portfolios: &[Pubkey]) -> serde_json::Value {
++        let ps: Vec<serde_json::Value> = portfolios
++            .iter()
++            .filter(|p| self.svm.get_account(p).map(|a| !a.data.is_empty()).unwrap_or(false))
++            .map(|p| {
++                let (pid_, seq, pep) = self.identity(*p);
++                serde_json::json!({"key": p.to_string(), "dataB64": self.limits_b64_of(p), "portfolioId": pid_.to_string(), "matcherSequence": seq.to_string(), "positionEpoch": pep.to_string()})
++            })
++            .collect();
++        serde_json::json!({
++            "programId": self.pid.to_string(), "market": self.market.to_string(), "domain": DOMAIN,
++            "marketB64": self.limits_b64_of(&self.market), "registryB64": self.limits_b64_of(&self.registry),
++            "vaultLpStateB64": self.limits_b64_of(&self.vault_lp), "portfolios": ps,
++            "nowSlot": self.svm.get_sysvar::<solana_sdk::clock::Clock>().slot.to_string(),
++            "payer": self.payer.pubkey().to_string(), "mint": self.mint.to_string(),
++            "vaultToken": self.vault_token.to_string(), "vaultAuthority": self.vault_authority.to_string(),
++        })
++    }
++}
++
++/// Wizard M4p bind + Earn deposit/redeem with the bound tails + the 78 prepend + the full
++/// resolved sweep, all APP-BUILT, on real wrapper + matcher BPF.
++#[test]
++fn limits_app_p3_end_to_end() {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    env.limits_add_ata_program();
++    let admin = env.admin.insecure_clone();
++    // Earn seed (the wizard's M4a) BEFORE binding: InitVaultLp seeds C from it.
++    let seed = env.new_depositor();
++    env.earn_deposit(&seed, 10_000_000, None).expect("earn seed (unbound)");
++
++    // 1. APP wizard M4p: createAccount(vault LP) + 94 (path A, creator = marketauth) + 96.
++    let lp_kp = Keypair::new();
++    let ctx_kp = Keypair::new();
++    let junior_src = env.token_account(env.mint, admin.pubkey(), 60_000_000);
++    let rent = env.svm.minimum_balance_for_rent_exemption(env.plen);
++    let ctx_rent = env.svm.minimum_balance_for_rent_exemption(MATCHER_CONTEXT_LEN);
++    let v = limits_app("bind", serde_json::json!({
++        "programId": env.pid.to_string(), "market": env.market.to_string(), "domain": DOMAIN,
++        "creator": admin.pubkey().to_string(), "vaultLpPortfolio": lp_kp.pubkey().to_string(),
++        "portfolioLen": env.plen, "rent": rent, "floorBps": 2_000, "juniorAtoms": "60000000",
++        "matcherProgram": CANONICAL_MATCHER.to_string(), "matcherCtx": ctx_kp.pubkey().to_string(), "ctxRent": ctx_rent,
++        "creatorAta": junior_src.to_string(), "vaultToken": env.vault_token.to_string(),
++    }));
++    let bind = limits_ixs(&v);
++    assert_eq!(bind.len(), 4, "createAccount(LP) + createAccount(ctx) + 94 + 96");
++    assert_eq!(bind[2].accounts.len(), 11, "94 carries the auto-pin tail [8] matcher, [9] ctx, [10] delegate");
++    env.limits_send(bind, &[&admin, &lp_kp, &ctx_kp]).expect("APP wizard bind (ctx + 94 auto-pin + 96)");
++    assert_eq!(env.vlp().junior_deposited_atoms, 60_000_000, "junior funded by the app");
++    assert_eq!(env.vlp().junior_owner, admin.pubkey().to_bytes(), "path A: creator is the junior owner");
++    assert_eq!(env.vlp().lp_portfolio, lp_kp.pubkey().to_bytes());
++    // 2. AUTO-PIN (07a1d0eb): no protocol step. Tag 94 approved the canonical matcher and pinned
++    // the ctx; the market trades right away.
++    assert_eq!(env.asset_rec().approved_matcher_program, CANONICAL_MATCHER.to_bytes());
++    let delegate = Pubkey::find_program_address(
++        &[b"matcher", env.market.as_ref(), lp_kp.pubkey().as_ref(), env.registry.as_ref(), CANONICAL_MATCHER.as_ref(), ctx_kp.pubkey().as_ref()],
++        &env.pid,
++    ).0;
++    let lp = Lp { portfolio: lp_kp.pubkey(), owner_key: env.registry, ctx: ctx_kp.pubkey(), delegate };
++    let early = env.new_trader(20_000_000);
++    env.trade(&early, &lp, 5 * POS).expect("a trade lands immediately after the app's bind");
++    env.svm.expire_blockhash();
++    env.trade(&early, &lp, -5 * POS).expect("and closes");
++    if let Ok(path) = std::env::var("LIMITS_DUMP_VAULT_LP") {
++        let d = env.svm.get_account(&lp_kp.pubkey()).unwrap().data;
++        let j = serde_json::json!({"programId": env.pid.to_string(), "market": env.market.to_string(), "registry": env.registry.to_string(),
++            "vaultLp": lp_kp.pubkey().to_string(), "ctx": ctx_kp.pubkey().to_string(), "delegate": delegate.to_string(),
++            "matcher": CANONICAL_MATCHER.to_string(), "dataB64": limits_b64(&d), "headP3": "4b1a5d30"});
++        std::fs::write(path, j.to_string()).unwrap();
++    }
++
++    // 3. APP Earn deposit on the BOUND vault: tail [11]/[12] present.
++    let d = env.new_depositor();
++    let v = limits_app("deposit", env.limits_earn_json(&d.kp, serde_json::json!({
++        "lpAta": d.lp_ata.to_string(), "source": d.source.to_string(), "amount": "5000000"})));
++    assert_eq!(v["tail"], serde_json::json!(true), "bound registry => the app sends the tail");
++    let dep = limits_ixs(&v);
++    // NEGATIVE CONTROL (real BPF): the same app ix with the tail stripped is refused.
++    let mut stripped = dep.clone();
++    let last = stripped.last_mut().unwrap();
++    last.accounts.truncate(11);
++    assert!(env.limits_send(stripped, &[&d.kp.insecure_clone()]).is_err(), "bound vault must refuse a tail-less deposit");
++    env.limits_send(dep, &[&d.kp.insecure_clone()]).expect("APP bound Earn deposit");
++
++    // 4. Trades against the vault LP accrue LP fees (harvestable H > 0).
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 50 * POS).expect("open");
++    env.svm.expire_blockhash();
++    env.trade(&t, &lp, -50 * POS).expect("close");
++
++    // 5. APP redemption while LIVE: the plan prepends 78 (P3-K1), tail [13]/[14].
++    let shares = env.lp_shares(&d);
++    env.earn_request(&d, shares);
++    let v = limits_app("execute", env.limits_earn_json(&d.kp, serde_json::json!({
++        "redemption": d.redemption.to_string(), "dest": d.dest.to_string()})));
++    assert_eq!(v["prependHarvest"], serde_json::json!(true), "fees pending => the app harvests first");
++    let ex = limits_ixs(&v);
++    // NEGATIVE CONTROL: without the prepended 78 the program refuses VaultLpHarvestPending.
++    let only77 = vec![ex.last().unwrap().clone()];
++    let e = env.limits_send(only77, &[&d.kp.insecure_clone()]).unwrap_err();
++    assert!(e.contains(&code(PercolatorError::VaultLpHarvestPending)), "{e}");
++    env.limits_send(ex, &[&d.kp.insecure_clone()]).expect("APP 78 + 77 redemption");
++    let paid = env.tok(d.dest);
++    println!("LIMITS-APP P3: live redemption paid {paid}");
++    assert!(paid > 0);
++
++    // 5b. APP junior withdraw (97) while the vault LP is flat, above the floor.
++    let jdest = env.token_account(env.mint, admin.pubkey(), 0);
++    let v = limits_app("junior-withdraw", serde_json::json!({
++        "programId": env.pid.to_string(), "market": env.market.to_string(), "domain": DOMAIN,
++        "owner": admin.pubkey().to_string(), "dest": jdest.to_string(), "vaultToken": env.vault_token.to_string(),
++        "vaultAuthority": env.vault_authority.to_string(), "vaultLpStateB64": env.limits_b64_of(&env.vault_lp),
++        "amount": "1000000"}));
++    env.limits_send(limits_ixs(&v), &[&admin]).expect("APP junior withdraw (97)");
++    assert_eq!(env.tok(jdest), 1_000_000, "junior paid to the junior owner");
++    // NEGATIVE CONTROL: a stranger cannot withdraw the junior (97 owner-gated).
++    let stranger = Keypair::new();
++    env.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
++    let v = limits_app("junior-withdraw", serde_json::json!({
++        "programId": env.pid.to_string(), "market": env.market.to_string(), "domain": DOMAIN,
++        "owner": stranger.pubkey().to_string(), "dest": env.token_account(env.mint, stranger.pubkey(), 0).to_string(), "vaultToken": env.vault_token.to_string(),
++        "vaultAuthority": env.vault_authority.to_string(), "vaultLpStateB64": env.limits_b64_of(&env.vault_lp),
++        "amount": "1"}));
++    assert!(env.limits_send(limits_ixs(&v), &[&stranger]).is_err(), "97 must be junior-owner-gated");
++
++    // 6. Resolve; the APP plans and runs the terminal sweep from raw account bytes.
++    env.resolve();
++    let ports = [lp_kp.pubkey(), t.portfolio, early.portfolio];
++    let mut phases = Vec::new();
++    for round in 0..10 {
++        let v = limits_app("exit", env.limits_exit_json(&ports));
++        let phase = v["phase"].as_str().unwrap().to_string();
++        phases.push(format!("{phase}:{}", v["steps"].as_array().map(|s| s.first().map(|x| x["kind"].as_str().unwrap_or("").to_string()).unwrap_or_default()).unwrap_or_default()));
++        if phase == "ready" { break; }
++        let ixs = limits_ixs(&v);
++        assert!(!ixs.is_empty(), "round {round}: the app planned nothing but the market is not ready ({v})");
++        env.limits_send(ixs, &[]).unwrap_or_else(|e| panic!("round {round} app exit step refused: {e}\nplan {v}"));
++    }
++    println!("LIMITS-APP P3: sweep {phases:?}");
++    assert_eq!(phases.last().map(|s| s.starts_with("ready")), Some(true), "sweep reached terminal-flat: {phases:?}");
++
++    // 7. APP redemption AFTER resolve for the seed depositor: H == 0 (harvested at step 5).
++    let s2 = env.lp_shares(&seed);
++    env.earn_request(&seed, s2);
++    let v = limits_app("execute", env.limits_earn_json(&seed.kp, serde_json::json!({
++        "redemption": seed.redemption.to_string(), "dest": seed.dest.to_string()})));
++    assert!(v.get("blocked").is_none(), "no harvest pending => not blocked: {v}");
++    env.limits_send(limits_ixs(&v), &[&seed.kp.insecure_clone()]).expect("APP resolved redemption");
++    println!("LIMITS-APP P3: resolved redemption paid {}", env.tok(seed.dest));
++    assert!(env.tok(seed.dest) > 0);
++    env.assert_conserved("limits app P3");
++}
++
++/// 07a1d0eb: fees left unharvested at resolution. The APP's sweep runs 78 once the market is
++/// terminal-flat (step "harvest"), and the APP's redemption then pays (it also prepends 78 if
++/// fees are still pending).
++#[test]
++fn limits_app_p3_resolved_harvest_then_redeem() {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    env.limits_add_ata_program();
++    let lp = env.bind(1_000);
++    let admin = env.admin.insecure_clone();
++    let d = env.new_depositor();
++    env.earn_deposit(&d, 10_000_000, Some(lp.portfolio)).expect("earn");
++    env.junior_deposit_as(&admin, lp.portfolio, 60_000_000).expect("junior");
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 50 * POS).expect("open");
++    env.svm.expire_blockhash();
++    env.trade(&t, &lp, -50 * POS).expect("close");
++    env.resolve();
++    let ports = [lp.portfolio, t.portfolio];
++    let mut phases = Vec::new();
++    for round in 0..10 {
++        let v = limits_app("exit", env.limits_exit_json(&ports));
++        let phase = v["phase"].as_str().unwrap().to_string();
++        phases.push(format!("{phase}:{}", v["steps"].as_array().and_then(|s| s.first()).map(|x| x["kind"].as_str().unwrap_or("").to_string()).unwrap_or_default()));
++        if phase == "ready" { break; }
++        let ixs = limits_ixs(&v);
++        assert!(!ixs.is_empty(), "round {round}: nothing planned ({v})");
++        env.limits_send(ixs, &[]).unwrap_or_else(|e| panic!("round {round}: {e}\nplan {v}"));
++    }
++    println!("LIMITS-APP P3 resolved harvest: {phases:?}");
++    assert!(phases.iter().any(|p| p.ends_with(":harvest")), "the sweep harvested after terminal-flat: {phases:?}");
++    let shares = env.lp_shares(&d);
++    env.earn_request(&d, shares);
++    let v = limits_app("execute", env.limits_earn_json(&d.kp, serde_json::json!({
++        "redemption": d.redemption.to_string(), "dest": d.dest.to_string()})));
++    assert!(v.get("blocked").is_none(), "{v}");
++    env.limits_send(limits_ixs(&v), &[&d.kp.insecure_clone()]).expect("APP resolved redemption after the harvest");
++    println!("LIMITS-APP P3 resolved harvest: redemption paid {}", env.tok(d.dest));
++    assert!(env.tok(d.dest) > 10_000_000, "the senior got its share of the harvested fees");
++}
++
++/// UX WP-8 "Finish now" (audit §3.9), on real wrapper + matcher BPF: the APP builds the WHOLE
++/// finish list from ONE snapshot right after resolve (vault LP settle copies, the trader's
++/// CloseResolved copies + top-up claim, the empty-portfolio closes, the harvest, and the Earn
++/// depositor's own 76 last), each tx at the APP's per-step compute budget. The driver re-plans
++/// before each item with the APP's skip rule. Asserts: every broadcast item lands (the
++/// pre-built identities stay valid through the closes), unneeded copies are never sent, the
++/// market ends terminal-flat, the request landed, and the depositor's 77 then pays.
++#[test]
++fn limits_app_p3_finish_now_one_approval() {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    env.limits_add_ata_program();
++    let lp = env.bind(1_000);
++    let admin = env.admin.insecure_clone();
++    let d = env.new_depositor();
++    env.earn_deposit(&d, 10_000_000, Some(lp.portfolio)).expect("earn");
++    env.junior_deposit_as(&admin, lp.portfolio, 60_000_000).expect("junior");
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 50 * POS).expect("open (left open at resolve)");
++    let flat = env.new_trader(20_000_000);
++    env.trade(&flat, &lp, 5 * POS).expect("open");
++    env.svm.expire_blockhash();
++    env.trade(&flat, &lp, -5 * POS).expect("close before resolve");
++    env.resolve();
++
++    let ports = [lp.portfolio, t.portfolio, flat.portfolio];
++    let shares = env.lp_shares(&d);
++    let mut args = env.limits_exit_json(&ports);
++    args["redeemer"] = serde_json::json!(d.kp.pubkey().to_string());
++    args["redeemerLpAta"] = serde_json::json!(d.lp_ata.to_string());
++    args["shares"] = serde_json::json!(shares.to_string());
++    let v = limits_app("finish", args);
++    let items = v["items"].as_array().expect("items").clone();
++    println!("LIMITS-APP finish: phase {} estimate {} items {}", v["phase"], v["estimate"], items.len());
++    assert_eq!(items.last().unwrap()["item"]["step"]["kind"], "earn-request", "the user's request rides last");
++
++    let (mut sent, mut skipped) = (Vec::new(), 0usize);
++    for (i, it) in items.iter().enumerate() {
++        let mut q = env.limits_exit_json(&ports);
++        q["item"] = it["item"].clone();
++        if !limits_app("finish-needed", q)["needed"].as_bool().unwrap() {
++            skipped += 1;
++            continue;
++        }
++        let kind = it["item"]["step"]["kind"].as_str().unwrap().to_string();
++        let measure = std::env::var("LIMITS_FINISH_MEASURE").is_ok();
++        let cu = if measure { 1_400_000 } else { it["cu"].as_u64().unwrap() as u32 };
++        let mut ixs = vec![
++            ComputeBudgetInstruction::request_heap_frame(128 * 1024),
++            ComputeBudgetInstruction::set_compute_unit_limit(cu),
++            ComputeBudgetInstruction::set_compute_unit_price(1_000 + i as u64 + 1),
++        ];
++        ixs.extend(limits_ixs(it));
++        let kp = d.kp.insecure_clone();
++        let extra: Vec<&Keypair> = if kind == "earn-request" { vec![&kp] } else { vec![] };
++        let mut signers = vec![&env.payer];
++        signers.extend(extra);
++        env.svm.expire_blockhash();
++        let before = env.tok(env.vault_token) as u128;
++        let tx = Transaction::new_signed_with_payer(&ixs, Some(&env.payer.pubkey()), &signers, env.svm.latest_blockhash());
++        let r = env.svm.send_transaction(tx);
++        let after = env.tok(env.vault_token) as u128;
++        if after > before { env.paid_in += after - before } else { env.paid_out += before - after }
++        if let Ok(m) = &r { println!("LIMITS-APP finish CU: {kind} consumed {} (app budget {})", m.compute_units_consumed, it["cu"]); }
++        let r = r.map_err(|e| format!("{e:?}"));
++        assert!(r.is_ok(), "item {i} ({kind} copy {}) refused at the app's {cu} CU: {r:?}", it["item"]["copy"]);
++        sent.push(format!("{kind}#{}", it["item"]["copy"]));
++    }
++    println!("LIMITS-APP finish: sent {} {sent:?}, skipped {skipped}", sent.len());
++    assert!(skipped > 0, "some pre-signed copies were unneeded and never sent");
++    assert_eq!(sent.len() + skipped, items.len());
++    let fin = limits_app("plan", env.limits_exit_json(&ports));
++    assert_eq!(fin["phase"], "ready", "one Finish-now run reached terminal-flat: {fin}");
++    assert!(sent.iter().any(|s| s.starts_with("earn-request")), "the request landed in the same run");
++
++    // The payout (the WP-4 second prompt): the app's 77 for the request made above.
++    let v = limits_app("execute", env.limits_earn_json(&d.kp, serde_json::json!({
++        "redemption": d.redemption.to_string(), "dest": d.dest.to_string()})));
++    assert!(v.get("blocked").is_none(), "{v}");
++    env.limits_send(limits_ixs(&v), &[&d.kp.insecure_clone()]).expect("APP 77 after Finish now");
++    println!("LIMITS-APP finish: redemption paid {}", env.tok(d.dest));
++    assert!(env.tok(d.dest) > 0);
++    env.assert_conserved("limits app finish now");
++}
++
++/// E2E B12 (app side): a trader's OWN portfolio on a Resolved market is cleaned up by the APP's
++/// owner-signed groups (useCloseMarket -> lib/limits/own-portfolio-cleanup.ts): 30 then 8, with
++/// the documented fallback (group without the 8) when the 8 cannot land in the same tx.
++#[test]
++fn limits_app_p3_own_cleanup_before_reclaim() {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    env.limits_add_ata_program();
++    let lp = env.bind(1_000);
++    let admin = env.admin.insecure_clone();
++    env.junior_deposit_as(&admin, lp.portfolio, 60_000_000).expect("junior");
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 50 * POS).expect("open");
++    env.svm.expire_blockhash();
++    env.trade(&t, &lp, -50 * POS).expect("close");
++    env.resolve();
++    // settle the vault LP first (the sweep's rule) so the trader's close is not progress-only
++    let junior_dest = env.token_account(env.mint, admin.pubkey(), 0);
++    env.settle_resolved(&Keypair::new(), lp.portfolio, 0, junior_dest).expect("settle vault LP");
++    env.paid_out += env.tok(junior_dest) as u128; // the junior's SPL from 101 (harness books it here)
++    let mut j = env.limits_exit_json(&[t.portfolio]);
++    j["owner"] = serde_json::json!(t.kp.pubkey().to_string());
++    let v = limits_app("own-cleanup", j);
++    assert_eq!(v["kind"], serde_json::json!("close-resolved"), "{v}");
++    let with_close = limits_ixs(&serde_json::json!({"ixs": v["withClose"]}));
++    let without = limits_ixs(&serde_json::json!({"ixs": v["withoutClose"]}));
++    let tk = t.kp.insecure_clone();
++    let ata = Pubkey::find_program_address(&[t.kp.pubkey().as_ref(), spl_token::ID.as_ref(), env.mint.as_ref()], &LIMITS_ATA_PROGRAM).0;
++    let before_count = { let (_, g) = env.market_state(); g.materialized_portfolio_count };
++    let r = env.limits_send(with_close, &[&tk]);
++    let route = if r.is_ok() { "30+8" } else { env.limits_send(without, &[&tk]).expect("fallback without the 8"); "30 only" };
++    let (_, g) = env.market_state();
++    println!("LIMITS-APP B12: route {route}; materialized {before_count} -> {}; owner ATA paid {}", g.materialized_portfolio_count, env.tok(ata));
++    assert!(env.tok(ata) > 0, "the resolved payout went to the owner's ATA");
++    assert_eq!(route, "30+8", "on this path the 8 lands in the same tx");
++    assert_eq!(g.materialized_portfolio_count, before_count - 1, "the trader's portfolio is dematerialized");
++    env.assert_conserved("B12 own cleanup");
++}
++
++// ═══════════════════════════════════════════════════════════════════════════════════════
++// limits app (58e379f1, F14-Q2): the wizard creates the market from the APP's InitMarket args
++// (lib/create-market-args.ts: slabSizeFor + buildV17InitMarketArgs), then binds with the app's
++// M4p. P3 args => 1 slot => the bind lands and a trade follows; the legacy args (14 slots) are
++// the negative control => tag 94 refuses with 86 VaultLpMultiAssetMarket.
++// ═══════════════════════════════════════════════════════════════════════════════════════
++
++impl Env {
++    /// Point every derived key at `market` (a fresh market the APP created in this svm).
++    fn limits_retarget(&mut self, market: Pubkey) {
++        self.market = market;
++        self.vault_authority = Pubkey::find_program_address(&[b"vault", market.as_ref()], &self.pid).0;
++        self.vault_token = canonical_vault_ata(&self.vault_authority, &self.mint);
++        let (vt, va, mint) = (self.vault_token, self.vault_authority, self.mint);
++        self.svm
++            .set_account(vt, Account { lamports: 1_000_000_000, data: make_token_data(mint, va, 0), owner: spl_token::ID, executable: false, rent_epoch: 0 })
++            .unwrap();
++        self.registry = derive_lp_vault_registry(&self.pid, &market).0;
++        self.lp_mint = derive_lp_vault_mint(&self.pid, &market).0;
++        self.escrow = derive_lp_escrow(&self.pid, &market).0;
++        self.ledger = derive_lp_backing_ledger(&self.pid, &market, DOMAIN).0;
++        self.sibling = derive_lp_backing_ledger(&self.pid, &market, DOMAIN ^ 1).0;
++        self.vault_lp = derive_vault_lp_state(&self.pid, &market).0;
++    }
++}
++
++/// Create a market with the APP's M1 (createAccount(slab) + InitMarket), finish the harness
++/// setup (auth mark + CreateLpVault + Earn seed), then run the APP's M4p bind.
++fn limits_app_market_then_bind(p3: bool) -> (Env, Result<(), String>, Option<Lp>) {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    env.limits_add_ata_program();
++    let admin = env.admin.insecure_clone();
++    let slab = Keypair::new();
++    let v = limits_app("init-market", serde_json::json!({
++        "programId": env.pid.to_string(), "market": slab.pubkey().to_string(), "domain": DOMAIN, "p3": p3,
++        "initialPriceE6": PRICE.to_string(), "tradingFeeBps": 30, "initialMarginBps": 1_000, "lpCollateral": "60000000",
++        "funder": env.payer.pubkey().to_string(), "lamports": 1_000_000_000u64,
++        "admin": admin.pubkey().to_string(), "mint": env.mint.to_string(),
++    }));
++    let slots: usize = if p3 { 1 } else { 14 };
++    assert_eq!(v["maxPortfolioAssets"].as_u64().unwrap() as usize, slots, "app slot count");
++    assert_eq!(
++        v["space"].as_u64().unwrap() as usize,
++        state::market_account_len_for_capacity(slots).unwrap(),
++        "the app's slab size == the program's length for the app's slot count"
++    );
++    env.limits_send(limits_ixs(&v), &[&admin, &slab]).expect("APP createAccount(slab) + InitMarket");
++    let d = env.svm.get_account(&slab.pubkey()).unwrap().data;
++    assert_eq!(state::market_slot_capacity(&d).unwrap(), slots, "on-chain slot capacity");
++    env.limits_retarget(slab.pubkey());
++    let seq = env.oracle_seq() + 1;
++    env.send(
++        ProgInstruction::ConfigureAuthMark { market_id: 1, asset_index: 0, now_slot: 1, initial_mark_e6: PRICE, observation_sequence: seq },
++        vec![AccountMeta::new(admin.pubkey(), true), AccountMeta::new(env.market, false)],
++        &[&admin],
++    )
++    .expect("configure auth mark");
++    let (market, registry, lp_mint) = (env.market, env.registry, env.lp_mint);
++    env.send(
++        ProgInstruction::CreateLpVault { fee_share_bps: 5_000, redemption_cooldown_slots: 0, oi_reservation_threshold_bps: 0, domain: DOMAIN },
++        vec![
++            AccountMeta::new(admin.pubkey(), true),
++            AccountMeta::new(market, false),
++            AccountMeta::new(registry, false),
++            AccountMeta::new(lp_mint, false),
++            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
++            AccountMeta::new_readonly(spl_token::ID, false),
++        ],
++        &[&admin],
++    )
++    .expect("create lp vault");
++    let seed = env.new_depositor();
++    env.earn_deposit(&seed, 10_000_000, None).expect("earn seed (unbound)");
++
++    let lp_kp = Keypair::new();
++    let ctx_kp = Keypair::new();
++    let junior_src = env.token_account(env.mint, admin.pubkey(), 60_000_000);
++    let rent = env.svm.minimum_balance_for_rent_exemption(env.plen);
++    let ctx_rent = env.svm.minimum_balance_for_rent_exemption(MATCHER_CONTEXT_LEN);
++    let b = limits_app("bind", serde_json::json!({
++        "programId": env.pid.to_string(), "market": env.market.to_string(), "domain": DOMAIN,
++        "creator": admin.pubkey().to_string(), "vaultLpPortfolio": lp_kp.pubkey().to_string(),
++        "portfolioLen": env.plen, "rent": rent, "floorBps": 2_000, "juniorAtoms": "60000000",
++        "matcherProgram": CANONICAL_MATCHER.to_string(), "matcherCtx": ctx_kp.pubkey().to_string(), "ctxRent": ctx_rent,
++        "creatorAta": junior_src.to_string(), "vaultToken": env.vault_token.to_string(),
++    }));
++    let r = env.limits_send(limits_ixs(&b), &[&admin, &lp_kp, &ctx_kp]);
++    let lp = r.is_ok().then(|| {
++        let delegate = Pubkey::find_program_address(
++            &[b"matcher", env.market.as_ref(), lp_kp.pubkey().as_ref(), env.registry.as_ref(), CANONICAL_MATCHER.as_ref(), ctx_kp.pubkey().as_ref()],
++            &env.pid,
++        )
++        .0;
++        Lp { portfolio: lp_kp.pubkey(), owner_key: env.registry, ctx: ctx_kp.pubkey(), delegate }
++    });
++    (env, r, lp)
++}
++
++#[test]
++fn limits_app_p3_single_asset_market_binds_and_trades() {
++    let (mut env, r, lp) = limits_app_market_then_bind(true);
++    r.expect("APP P3 market (1 slot) + APP bind");
++    let lp = lp.unwrap();
++    assert_eq!(env.vlp().junior_deposited_atoms, 60_000_000);
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 5 * POS).expect("a trade lands on the app-created single-asset market");
++    env.svm.expire_blockhash();
++    env.trade(&t, &lp, -5 * POS).expect("and closes");
++    env.assert_conserved("app single-asset market");
++}
++
++#[test]
++fn limits_app_legacy_14_slot_market_is_refused_by_94_negative_control() {
++    let (env, r, _) = limits_app_market_then_bind(false);
++    err_has(&r, PercolatorError::VaultLpMultiAssetMarket);
++    assert!(env.svm.get_account(&env.vault_lp).map(|a| a.data.is_empty()).unwrap_or(true), "no vault-LP state");
++}
++
++// ═══════════════════════════════════════════════════════════════════════════════════════
++// limits app (58e379f1, F-14): the whole terminal order with APP-BUILT instructions —
++// sweep (101 moves no SPL; 78 absorbs the claim-free residual) -> every senior's 77 -> the
++// junior's 102 Resolved (physical - C). Nothing strands.
++// ═══════════════════════════════════════════════════════════════════════════════════════
++
++fn limits_app_bind(env: &mut Env, admin: &Keypair) -> Lp {
++    let lp_kp = Keypair::new();
++    let ctx_kp = Keypair::new();
++    let junior_src = env.token_account(env.mint, admin.pubkey(), 60_000_000);
++    let rent = env.svm.minimum_balance_for_rent_exemption(env.plen);
++    let ctx_rent = env.svm.minimum_balance_for_rent_exemption(MATCHER_CONTEXT_LEN);
++    let v = limits_app("bind", serde_json::json!({
++        "programId": env.pid.to_string(), "market": env.market.to_string(), "domain": DOMAIN,
++        "creator": admin.pubkey().to_string(), "vaultLpPortfolio": lp_kp.pubkey().to_string(),
++        "portfolioLen": env.plen, "rent": rent, "floorBps": 2_000, "juniorAtoms": "60000000",
++        "matcherProgram": CANONICAL_MATCHER.to_string(), "matcherCtx": ctx_kp.pubkey().to_string(), "ctxRent": ctx_rent,
++        "creatorAta": junior_src.to_string(), "vaultToken": env.vault_token.to_string(),
++    }));
++    env.limits_send(limits_ixs(&v), &[admin, &lp_kp, &ctx_kp]).expect("APP bind");
++    let delegate = Pubkey::find_program_address(
++        &[b"matcher", env.market.as_ref(), lp_kp.pubkey().as_ref(), env.registry.as_ref(), CANONICAL_MATCHER.as_ref(), ctx_kp.pubkey().as_ref()],
++        &env.pid,
++    )
++    .0;
++    Lp { portfolio: lp_kp.pubkey(), owner_key: env.registry, ctx: ctx_kp.pubkey(), delegate }
++}
++
++impl Env {
++    fn limits_junior_release_json(&self, owner: &Keypair, amount: Option<u64>) -> serde_json::Value {
++        let mut v = serde_json::json!({
++            "programId": self.pid.to_string(), "market": self.market.to_string(), "domain": DOMAIN,
++            "owner": owner.pubkey().to_string(), "mint": self.mint.to_string(),
++            "vaultToken": self.vault_token.to_string(), "vaultAuthority": self.vault_authority.to_string(),
++            "marketB64": self.limits_b64_of(&self.market), "vaultLpStateB64": self.limits_b64_of(&self.vault_lp),
++        });
++        if let Some(a) = amount { v["amount"] = serde_json::json!(a.to_string()); }
++        v
++    }
++}
++
++#[test]
++fn limits_app_p3_f14_terminal_order_101_78_77_102() {
++    let mut env = Env::new(Params { fee_bps: 30, ..Params::default() });
++    env.limits_add_ata_program();
++    let admin = env.admin.insecure_clone();
++    let seed = env.new_depositor();
++    env.earn_deposit(&seed, 10_000_000, None).expect("earn seed (unbound)");
++    let lp = limits_app_bind(&mut env, &admin);
++    // A second senior, through the APP's bound deposit.
++    let d = env.new_depositor();
++    let v = limits_app("deposit", env.limits_earn_json(&d.kp, serde_json::json!({
++        "lpAta": d.lp_ata.to_string(), "source": d.source.to_string(), "amount": "5000000"})));
++    env.limits_send(limits_ixs(&v), &[&d.kp.insecure_clone()]).expect("APP bound senior deposit");
++    // Fees accrue; one trader is still OPEN at resolution (101 must close the vault LP out).
++    let t = env.new_trader(20_000_000);
++    env.trade(&t, &lp, 50 * POS).expect("open");
++    env.svm.expire_blockhash();
++    env.trade(&t, &lp, -20 * POS).expect("partial close");
++    let vault_before_sweep = env.tok(env.vault_token);
++    env.resolve();
++
++    // 1. APP sweep to terminal-flat. 101 moves no SPL (F-14): the vault's SPL is unchanged by it.
++    let ports = [lp.portfolio, t.portfolio];
++    let mut phases = Vec::new();
++    for round in 0..12 {
++        let v = limits_app("exit", env.limits_exit_json(&ports));
++        let phase = v["phase"].as_str().unwrap().to_string();
++        let kind = v["steps"].as_array().and_then(|s| s.first()).map(|x| x["kind"].as_str().unwrap_or("").to_string()).unwrap_or_default();
++        phases.push(format!("{phase}:{kind}"));
++        if phase == "ready" { break; }
++        let before = env.tok(env.vault_token);
++        env.limits_send(limits_ixs(&v), &[]).unwrap_or_else(|e| panic!("round {round} app exit step refused: {e}\nplan {v}"));
++        if kind == "settle-vault-lp" {
++            assert_eq!(env.tok(env.vault_token), before, "F-14: 101 moves no SPL");
++        }
++    }
++    println!("LIMITS-APP F14: sweep {phases:?}");
++    assert!(phases.iter().any(|p| p.contains("settle-vault-lp")), "sweep ran 101: {phases:?}");
++    assert_eq!(phases.last().map(|s| s.starts_with("ready")), Some(true), "terminal-flat: {phases:?}");
++    let _ = vault_before_sweep;
++
++    // 2. Every senior exits through the APP's 77 (78 prepended if anything is still pending).
++    for (who, dep) in [("second", &d), ("seed", &seed)] {
++        let shares = env.lp_shares(dep);
++        env.earn_request(dep, shares);
++        let v = limits_app("execute", env.limits_earn_json(&dep.kp, serde_json::json!({
++            "redemption": dep.redemption.to_string(), "dest": dep.dest.to_string()})));
++        assert!(v.get("blocked").is_none(), "{who}: not blocked: {v}");
++        env.limits_send(limits_ixs(&v), &[&dep.kp.insecure_clone()]).unwrap_or_else(|e| panic!("{who} APP 77: {e}\n{v}"));
++        println!("LIMITS-APP F14: senior {who} paid {}", env.tok(dep.dest));
++        assert!(env.tok(dep.dest) > 0, "{who} paid");
++        if who == "second" { assert!(env.tok(dep.dest) >= 5_000_000, "senior whole: {}", env.tok(dep.dest)); }
++        if who == "seed" { assert!(env.tok(dep.dest) >= 10_000_000 - 1_000, "senior whole less dead-share dust: {}", env.tok(dep.dest)); }
++    }
++    // Every senior share is redeemed; only the registry's dead-share dust keeps a claim
++    // (upstream's own F-14 test: "full claim less dead-share dust").
++    let c_left = env.vlp().senior_claim_atoms;
++    assert!(c_left < 10_000, "every senior exited, C is dead-share dust only: {c_left}");
++    println!("LIMITS-APP F14: C left after all seniors = {c_left} (dead-share dust)");
++
++    // 3. The junior's 102 Resolved via the APP (useJuniorTranche.releaseResolved).
++    let v = limits_app("junior-release", env.limits_junior_release_json(&admin, None));
++    let amount: u64 = v["amount"].as_str().unwrap().parse().unwrap();
++    let ata: Pubkey = v["ownerAta"].as_str().unwrap().parse().unwrap();
++    assert!(amount > 0, "junior has a surplus to take: {v}");
++    // NEGATIVE CONTROL (real BPF): one atom over physical - C is refused.
++    let over = limits_app("junior-release", env.limits_junior_release_json(&admin, Some(amount + 1)));
++    err_has(&env.limits_send(limits_ixs(&over), &[&admin]), PercolatorError::VaultLpReleaseRefused);
++    env.limits_send(limits_ixs(&v), &[&admin]).expect("APP junior 102 Resolved");
++    assert_eq!(env.tok(ata), amount, "junior paid physical - C to its own ATA");
++    println!("LIMITS-APP F14: junior 102 paid {amount} (needHarvest {})", v["needHarvest"]);
++    let after = limits_app("junior-release", env.limits_junior_release_json(&admin, None));
++    assert_eq!(after["amount"], serde_json::json!("0"), "nothing left for the junior: {after}");
++    assert_eq!(after["ixs"].as_array().unwrap().len(), 0, "the app plans nothing once released");
++    env.assert_conserved("limits app F-14 terminal order");
++}

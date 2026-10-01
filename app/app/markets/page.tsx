@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useMemo, useRef, useCallback, useSyncExternalStore, Suspense, type FC } from "react";
+import { baseSymbol } from "@/lib/symbol-utils";
+import { useEffect, useState, useMemo, useRef, Suspense } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { useConnectionCompat } from "@/hooks/useWalletCompat";
@@ -11,9 +12,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMarketDiscovery } from "@/hooks/useMarketDiscovery";
 import { computeMarketHealth, computeMarketHealthFromStats, sanitizeOnChainValue } from "@/lib/health";
 import { HealthBadge } from "@/components/market/HealthBadge";
-import { formatTokenAmount, formatUsdFromNumber } from "@/lib/format";
-import { isZombieMarket } from "@/lib/activeMarketFilter";
-import { BLOCKED_SLAB_ADDRESSES } from "@/lib/blocklist";
+import { formatTokenAmount } from "@/lib/format";
 import type { Database } from "@/lib/database.types";
 
 type MarketWithStats = Database['public']['Views']['markets_with_stats']['Row'];
@@ -26,17 +25,17 @@ import { useMultiTokenMeta } from "@/hooks/useMultiTokenMeta";
 import { useAllMarketStats } from "@/hooks/useAllMarketStats";
 import { MarketLogo } from "@/components/market/MarketLogo";
 import { WatchButton } from "@/components/market/WatchButton";
+import { MarketHealthBadges } from "@/components/market/MarketHealthBadges";
+import { useMarketHealth } from "@/hooks/useMarketHealth";
+import { MAX_HEALTH_SLABS } from "@/lib/market-health";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { detectOracleMode, resolveMarketPriceE6, priceE6ToUsd, sanitizePriceE6, applyInvert } from "@/lib/oraclePrice";
-import { subscribeSlab, getSnapshot } from "@/lib/priceStore/priceStore";
+import { LiveRowPrice } from "@/components/market/LiveRowPrice";
 import { formatStatValue } from "@/lib/format";
 import { qToUsd, Q_DECIMALS, rowVolumeUsd } from "@/lib/q-usd";
 import { MIN_VAULT_FOR_OI } from "@/lib/phantom-oi";
+import { isListedMarketRow, MAX_SANE_PRICE_USD } from "@/lib/listed-markets";
 
-/** Max sane price (USD) for both active-market filtering and display capping.
- *  Mirrors /api/stats sanitizePrice() cap. Corrupt oracle prices (e.g. $7.9T)
- *  exceed this and are nulled/excluded. */
-const MAX_SANE_PRICE_USD = 1_000_000;
 
 /** GH#1483: Upper bound for UI leverage display. The Solana program enforces margin
  *  requirements at execution time, so this is display-only protection against corrupt
@@ -85,19 +84,6 @@ function resolveDiscoveredPriceE6(oc: DiscoveredMarket): bigint {
   if (!oc.config?.indexFeedId) return 0n;
   return resolveMarketPriceE6(oc.config);
 }
-
-/** Live-ticking price cell. Subscribes this row's slab to the shared price
- *  store (the same WS feed the trade page ticks off), so list prices move in
- *  real time instead of freezing at the discovery/stats snapshot. Falls back
- *  to the static snapshot price until the first tick arrives — markets the
- *  feed doesn't stream (or no WS configured) keep the previous behavior.
- *  Isolated as a component so ticks re-render only this cell, not the list. */
-const LiveRowPrice: FC<{ slab: string; fallback: number | null }> = ({ slab, fallback }) => {
-  const subscribe = useCallback((cb: () => void) => subscribeSlab(slab, cb), [slab]);
-  const getSnap = useCallback(() => getSnapshot(slab).priceUsd, [slab]);
-  const live = useSyncExternalStore(subscribe, getSnap, () => null);
-  return <>{formatUsdFromNumber(live ?? fallback)}</>;
-};
 
 function isPlaceholderMarketSymbol(sym: string | null | undefined, addresses: Array<string | null | undefined>): boolean {
   if (!sym) return true;
@@ -407,39 +393,13 @@ function MarketsPageInner() {
   //   3. Duplicate of shared isZombieMarket() logic, creating drift risk.
   // Fix: use isZombieMarket() from activeMarketFilter.ts with explicit Number() coercion.
   const activeMarkets = useMemo(() => {
-    // GH#1536: Coerce NUMERIC (string from Supabase) → number | null before
-    // isZombieMarket(). TypeScript's `as number | null` is compile-time only.
-    const numericOrNull = (v: unknown): number | null => {
-      if (v == null) return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-    // GH#1536: Use sanitizedPrice for zombie check (mirrors /api/markets GH#1506 fix).
-    // Raw DB prices > $1M are stale garbage; sanitizePrice nulls them for output but
-    // passing raw to isZombieMarket() can make hasActivity=true → not zombie (wrong).
-    const sanitizePrice = (v: unknown): number | null => {
-      const n = numericOrNull(v);
-      if (n == null || n <= 0 || n > MAX_SANE_PRICE_USD) return null;
-      return n;
-    };
     return effectiveMarkets.filter((m) => {
       // GH#1539: Exclude blocked markets — mirrors /api/markets BLOCKED_MARKET_ADDRESSES filter.
       // Without this, blocked slab addresses (from lib/blocklist.ts) appear in the UI count
       // but not the API total, causing a 2-market discrepancy (170 vs 168).
-      if (BLOCKED_SLAB_ADDRESSES.has(m.slabAddress)) return false;
-
       // GH#1531: Show all non-zombie Supabase markets — counter matches /api/markets total.
-      if (m.supabase) {
-        const zombie = isZombieMarket({
-          vault_balance: numericOrNull(m.supabase.vault_balance),
-          c_tot: numericOrNull(m.supabase.c_tot),
-          last_price: sanitizePrice(m.supabase.last_price),
-          volume_24h: numericOrNull(m.supabase.volume_24h),
-          total_open_interest: numericOrNull(m.supabase.total_open_interest),
-          total_accounts: numericOrNull(m.supabase.total_accounts),
-        });
-        return !zombie;
-      }
+      // isListedMarketRow is shared with the landing rail (blocklist + zombie, coerced).
+      if (m.supabase) return isListedMarketRow(m.slabAddress, m.supabase);
 
       // GH#1346: On-chain-only markets (no Supabase stats) are NOT shown —
       // /api/markets only sees Supabase data, so including them inflates the count.
@@ -685,6 +645,12 @@ function MarketsPageInner() {
   }, [debouncedSearch, leverageFilter, oracleFilter, sortBy]);
 
   const displayedMarkets = filtered.slice(0, displayCount);
+  // P0b: v18 health (LP depleted / payout haircut / resolved) for the visible rows.
+  const healthSlabs = useMemo(
+    () => displayedMarkets.slice(0, MAX_HEALTH_SLABS).map((m) => m.slabAddress),
+    [displayedMarkets],
+  );
+  const { health: marketHealth } = useMarketHealth(healthSlabs);
   const loading = discoveryLoading || statsLoading;
   const showDegradedBanner = Boolean(loadErrorMessage && !loading && filtered.length > 0);
 
@@ -756,13 +722,25 @@ function MarketsPageInner() {
             </div>
             {/* Sort tabs + market count (mobile) on same row */}
             <div className="flex items-center gap-3 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-              <div className="relative flex gap-1 rounded-sm border border-[var(--border)] bg-[var(--bg-elevated)] p-1" role="group" aria-label="Sort markets">
-                {([
-                  { key: "volume" as SortKey, label: "VOLUME" },
-                  { key: "oi" as SortKey, label: "OI" },
-                  { key: "health" as SortKey, label: "HEALTH" },
-                  { key: "recent" as SortKey, label: "RECENT" },
-                ]).map((opt) => (
+              {/* UX WP-10 (§4.8): on phones the sort is one "Sort ▾" select; tabs from md up. */}
+              <label className="md:hidden flex shrink-0 items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+                <span>Sort</span>
+                <select
+                  data-testid="markets-sort-select"
+                  aria-label="Sort markets"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortKey)}
+                  className="min-h-[44px] rounded-sm border border-[var(--border)] bg-[var(--bg-elevated)] px-3 text-[12px] text-[var(--text)]"
+                >
+                  {MARKET_SORT_OPTIONS.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="relative hidden md:flex gap-1 rounded-sm border border-[var(--border)] bg-[var(--bg-elevated)] p-1" role="group" aria-label="Sort markets">
+                {MARKET_SORT_OPTIONS.map((opt) => (
                   <button
                     key={opt.key}
                     onClick={() => setSortBy(opt.key)}
@@ -781,10 +759,10 @@ function MarketsPageInner() {
               </div>
 
               {/* Separator — mobile only */}
-              <span className="sm:hidden h-6 w-px bg-[var(--border)] shrink-0" />
+              <span className="md:hidden h-6 w-px bg-[var(--border)] shrink-0" />
 
               {/* Results count — mobile only, beside sort tabs */}
-              <span className="sm:hidden ml-auto shrink-0 whitespace-nowrap text-sm font-semibold uppercase tracking-[0.08em] text-[var(--text)] tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>
+              <span className="md:hidden ml-auto shrink-0 whitespace-nowrap text-sm font-semibold uppercase tracking-[0.08em] text-[var(--text)] tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>
                 {loading
                   ? <>&hellip; MARKETS</>
                   : (hasSearch || hasActiveFilters) && filtered.length !== activeMarkets.length
@@ -896,7 +874,7 @@ function MarketsPageInner() {
             )}
 
             {/* Results count — desktop only, in filter row */}
-            <span className="hidden sm:inline-block ml-auto text-xs font-semibold uppercase tracking-[0.08em] text-[var(--text)] shrink-0 whitespace-nowrap tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>
+            <span className="hidden md:inline-block ml-auto text-xs font-semibold uppercase tracking-[0.08em] text-[var(--text)] shrink-0 whitespace-nowrap tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>
               {(hasSearch || hasActiveFilters) && filtered.length !== activeMarkets.length
                 ? `${filtered.length} / ${activeMarkets.length} MARKETS`
                 : `${activeMarkets.length} ${activeMarkets.length !== 1 ? "MARKETS" : "MARKET"}`}
@@ -953,10 +931,10 @@ function MarketsPageInner() {
                 </>
               ) : (
                 <>
-                  <h3 className="text-2xl font-medium tracking-tight text-[var(--text)]" style={{ fontFamily: "var(--font-display)" }}>no markets yet. be the main character.</h3>
+                  <h3 data-testid="markets-empty" className="text-2xl font-medium tracking-tight text-[var(--text)]" style={{ fontFamily: "var(--font-display)" }}>No markets yet — create the first one</h3>
                   <div className="mt-4">
-                    <Link href="/create">
-                      <GlowButton>launch first market</GlowButton>
+                    <Link href="/create" data-testid="markets-empty-create">
+                      <GlowButton>Create a market</GlowButton>
                     </Link>
                   </div>
                 </>
@@ -964,18 +942,19 @@ function MarketsPageInner() {
             </div>
           ) : (
             <>
-              <div className="relative rounded-sm border border-[var(--border)] hud-corners after:pointer-events-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-6 after:z-20 after:bg-gradient-to-l after:from-[var(--bg-surface)] after:to-transparent sm:after:hidden">
-              <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
+              <div className="relative rounded-sm border border-[var(--border)] hud-corners after:pointer-events-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-6 after:z-20 after:bg-gradient-to-l after:from-[var(--bg-surface)] after:to-transparent max-md:after:hidden md:after:hidden">
+              {/* UX WP-10 (MB-1, §4.8): below md the table becomes card rows; no inner horizontal scroll. */}
+              <div className="md:overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
                 {/* Header row: xs=4 cols (name|price|lev|health), sm+=7 cols */}
                 {/* GH#1775: sticky inside overflow-x-auto is broken by CSS spec (overflow clips stacking context).
                     Removed sticky top-0 z-10 — header scrolls with content on mobile.
                     Desktop (sm+) is unaffected since the table fits in viewport width. */}
-                <div className="grid w-full min-w-[500px] sm:min-w-[700px] grid-cols-[minmax(120px,2.5fr)_minmax(80px,1.2fr)_minmax(50px,0.6fr)_minmax(75px,0.8fr)] sm:grid-cols-[minmax(160px,3fr)_minmax(90px,1.2fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(65px,0.8fr)_minmax(80px,0.9fr)] gap-2 sm:gap-4 border-b border-[var(--border)] bg-[var(--bg-surface)] px-3 sm:px-5 py-2.5 text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--text)]">
+                <div className="hidden md:grid w-full md:min-w-[700px] md:grid-cols-[minmax(160px,3fr)_minmax(90px,1.2fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(65px,0.8fr)_minmax(80px,0.9fr)] gap-2 sm:gap-4 border-b border-[var(--border)] bg-[var(--bg-surface)] px-3 sm:px-5 py-2.5 text-[9px] sm:text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--text)]">
                   <div>token</div>
                   <div className="text-right">price</div>
                   <div className="hidden sm:block text-right">OI</div>
                   <div className="hidden sm:block text-right">vol</div>
-                  <div className="hidden sm:block text-right">market lp</div>
+                  <div className="hidden sm:block text-right">liquidity</div>
                   <div className="text-right"><span className="sm:hidden">lev</span><span className="hidden sm:inline">max lev</span></div>
                   <div className="text-right">health</div>
                 </div>
@@ -1123,6 +1102,8 @@ function MarketsPageInner() {
                   return (
                     <Link
                       key={m.slabAddress}
+                      data-testid="market-row"
+                      data-market={m.slabAddress}
                       href={`/trade/${m.slabAddress}`}
                       // prefetch={true}: /trade/[slab] is a DYNAMIC route, so the
                       // default Link prefetch only fetches up to its loading.tsx
@@ -1141,13 +1122,30 @@ function MarketsPageInner() {
                       // like a handful of rows. contain-intrinsic-size reserves each
                       // off-screen row's box (auto width kept, ~52px tall) so the
                       // scrollbar doesn't jump. Ignored gracefully where unsupported.
-                      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 52px" }}
+                      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 56px" }}
                       className={[
-                        "grid w-full min-w-[500px] sm:min-w-[700px] grid-cols-[minmax(120px,2.5fr)_minmax(80px,1.2fr)_minmax(50px,0.6fr)_minmax(75px,0.8fr)] sm:grid-cols-[minmax(160px,3fr)_minmax(90px,1.2fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(65px,0.8fr)_minmax(80px,0.9fr)] gap-2 sm:gap-4 items-center px-3 sm:px-5 py-3 transition-all duration-200 hover:bg-[var(--accent)]/[0.06] border-l-2 border-l-transparent hover:border-l-[var(--accent)]/40",
+                        "flex flex-col md:grid w-full md:min-w-[700px] md:grid-cols-[minmax(160px,3fr)_minmax(90px,1.2fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(65px,0.8fr)_minmax(80px,0.9fr)] gap-2 sm:gap-4 md:items-center px-3 sm:px-5 py-3 transition-all duration-200 hover:bg-[var(--accent)]/[0.06] border-l-2 border-l-transparent hover:border-l-[var(--accent)]/40",
                         i > 0 ? "border-t border-[var(--border)]" : "",
                         i % 2 === 1 ? "bg-[var(--bg-elevated)]/[0.05]" : "",
                       ].join(" ")}
                     >
+                      {/* Mobile card row: [logo] SYM/USD  $price, then OI · Vol · up to N×. */}
+                      <div data-testid="market-card" className="md:hidden flex min-h-[44px] w-full items-center gap-3">
+                        <MarketLogo logoUrl={m.supabase?.logo_url} mintAddress={logoMintAddress} mainnetCa={m.supabase?.mainnet_ca ?? null} symbol={displaySymbol ?? undefined} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="truncate text-sm font-semibold text-[var(--text)]">{displaySymbol ? `${baseSymbol(displaySymbol)}/USD` : shortenAddress(m.slabAddress)}</span>
+                            <span className="shrink-0 text-sm tabular-nums text-[var(--text)]" style={{ fontFamily: "var(--font-jetbrains-mono)" }}>
+                              <LiveRowPrice slab={m.slabAddress} fallback={lastPrice} />
+                            </span>
+                          </div>
+                          <div className="truncate text-[11px] text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
+                            OI {oiDisplay} · Vol {volumeDisplay ?? "\u2014"} · up to {m.maxLeverage}×
+                          </div>
+                        </div>
+                        <span aria-hidden="true" className="shrink-0 text-[var(--text-secondary)]">›</span>
+                      </div>
+                      <div className="hidden md:contents">
                       <div>
                         <div className="flex min-w-0 items-center gap-2">
                           <MarketLogo
@@ -1164,7 +1162,7 @@ function MarketsPageInner() {
                               Without these the row collides with the price
                               column instead of truncating. */}
                           <span className="min-w-0 truncate font-semibold text-[var(--text)] text-sm">
-                            {displaySymbol ? `${displaySymbol}/USD` : shortenAddress(m.slabAddress)}
+                            {displaySymbol ? `${baseSymbol(displaySymbol)}/USD` : shortenAddress(m.slabAddress)}
                           </span>
                           {m.isAdminOracle && (
                             <span className="border border-[var(--text-dim)]/30 bg-[var(--text-dim)]/[0.08] px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-wider text-[var(--text-secondary)]">manual</span>
@@ -1179,6 +1177,7 @@ function MarketsPageInner() {
                               no price
                             </span>
                           )}
+                          <MarketHealthBadges row={marketHealth[m.slabAddress]} compact hideInfo />
                           {/* After the status badges, so it never splits that
                               cluster; shrink-0 so it survives truncation. */}
                           <WatchButton slab={m.slabAddress} symbol={displaySymbol} />
@@ -1199,6 +1198,7 @@ function MarketsPageInner() {
                       <div className="hidden sm:block text-right text-sm text-[var(--text)] truncate tabular-nums" style={{ fontFamily: "var(--font-jetbrains-mono)", fontVariantNumeric: "tabular-nums" }}>{marketLpDisplay}</div>
                       <div className="text-right text-sm text-[var(--text-secondary)] tabular-nums" style={{ fontVariantNumeric: "tabular-nums" }}>{m.maxLeverage}x</div>
                       <div className="text-right"><HealthBadge level={effectiveHealth.level} /></div>
+                      </div>
                     </Link>
                   );
                 })}
@@ -1211,7 +1211,7 @@ function MarketsPageInner() {
                   {[1, 2].map((i) => (
                     <div
                       key={i}
-                      className="grid w-full min-w-[500px] sm:min-w-[700px] grid-cols-[minmax(120px,2.5fr)_minmax(80px,1.2fr)_minmax(50px,0.6fr)_minmax(75px,0.8fr)] sm:grid-cols-[minmax(160px,3fr)_minmax(90px,1.2fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(65px,0.8fr)_minmax(80px,0.9fr)] gap-2 sm:gap-4 items-center px-3 sm:px-5 py-3"
+                      className="hidden md:grid w-full md:min-w-[700px] md:grid-cols-[minmax(160px,3fr)_minmax(90px,1.2fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(90px,1fr)_minmax(65px,0.8fr)_minmax(80px,0.9fr)] gap-2 sm:gap-4 items-center px-3 sm:px-5 py-3"
                     >
                       <div className="flex items-center gap-2">
                         <ShimmerSkeleton className="h-8 w-8 rounded-full shrink-0" />
@@ -1252,6 +1252,15 @@ function MarketsPageInner() {
     </div>
   );
 }
+
+
+/** Sort choices, shared by the phone select and the desktop tabs (UX WP-10 §4.8). */
+const MARKET_SORT_OPTIONS: readonly { key: SortKey; label: string; name: string }[] = [
+  { key: "volume", label: "VOLUME", name: "Volume" },
+  { key: "oi", label: "OI", name: "Open interest" },
+  { key: "health", label: "HEALTH", name: "Health" },
+  { key: "recent", label: "RECENT", name: "Newest" },
+];
 
 export default function MarketsPage() {
   return (

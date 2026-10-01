@@ -88,16 +88,17 @@ describe("GET /api/markets on-chain discovery: completeness filter (#2641)", () 
     vi.resetModules();
   });
 
-  it("hides a registered market whose marketauth never rotated to the stake pool; keeps complete + curated", async () => {
+  it("hides a registered market whose marketauth never rotated to the stake pool; keeps complete ones", async () => {
     mocks.discovered = [
       market(USER_COMPLETE, STAKE_POOL_PDA),
       market(USER_INCOMPLETE, CREATOR),
-      // A curated seed is exempt even if its marketauth reads as not-rotated.
+      // Relaunch (2026-10-01): PLAYGROUND_SLAB_META is empty, so a former curated seed gets no
+      // exemption any more — not rotated means hidden, like any other market.
       market(CURATED_SLAB, CREATOR),
     ];
     const slabs = await listSlabs();
     expect(slabs).toContain(USER_COMPLETE.toBase58());
-    expect(slabs).toContain(CURATED_SLAB.toBase58());
+    expect(slabs).not.toContain(CURATED_SLAB.toBase58());
     expect(slabs).not.toContain(USER_INCOMPLETE.toBase58());
   });
 });

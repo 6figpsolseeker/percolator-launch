@@ -5,6 +5,7 @@
  * messages instead of raw hex codes.
  */
 import { humanizeError, LIGHTHOUSE_USER_MESSAGE } from "@/lib/errorMessages";
+import { resolveDevnetProgramIds } from "@/lib/program-ids";
 
 const LIGHTHOUSE_PROGRAM_ID_STR = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95";
 
@@ -25,7 +26,8 @@ describe("humanizeError — Lighthouse/Blowfish detection", () => {
   });
 
   it("does NOT classify generic 0x31 (Percolator error 49) as Lighthouse", () => {
-    const raw = `Transaction simulation failed: custom program error: 0x31`;
+    // attributed to the wrapper (a Custom(n) is decoded only by the program that raised it)
+    const raw = `Transaction simulation failed: custom program error: 0x31\nProgram ${resolveDevnetProgramIds().wrapper} failed: custom program error: 0x31`;
     const result = humanizeError(raw);
     expect(result).not.toBe(LIGHTHOUSE_USER_MESSAGE);
     expect(result).toContain("Insufficient margin");

@@ -35,18 +35,8 @@
  * SOL-denominated price saw its $1,000 cap read as $9.57.
  */
 import { Connection, PublicKey } from "@solana/web3.js";
-import {
-  V17_PORTFOLIO_IDENTITY_TRAILER_LEN,
-  decodePortfolioMatcherControl,
-} from "@percolatorct/sdk";
 import { PLAYGROUND_SLAB_META } from "@/lib/playground-slab-meta";
-
-/** v17 portfolio account magic (first 8 bytes, little-endian): PERCV16\0 */
-const V17_PORTFOLIO_MAGIC = Buffer.from([0x00, 0x36, 0x31, 0x56, 0x43, 0x52, 0x45, 0x50]);
-/** Provenance header offset of market_group_id. */
-const PORTFOLIO_PROVENANCE_MARKET_GROUP_OFF = 16;
-/** sizeof(PortfolioMatcherConfigV16), appended at the end of the account. */
-const PORTFOLIO_MATCHER_CONFIG_LEN = 104;
+import { resolveMarketLp } from "@/lib/market-lp";
 
 /**
  * Start of the vAMM context inside the matcher context account
@@ -109,18 +99,6 @@ export function parseMatcherCaps(data: Buffer): MatcherCaps | null {
   };
 }
 
-/** Read the PortfolioMatcherConfigV16.matcher_context, or null when disabled.
- *  v18: an identity trailer follows the config, so anchor off the end minus BOTH
- *  the trailer and the config; the trailing u64 is a packed control word. */
-function readMatcherContext(data: Buffer): PublicKey | null {
-  const trailerLen = V17_PORTFOLIO_IDENTITY_TRAILER_LEN;
-  if (data.length < PORTFOLIO_MATCHER_CONFIG_LEN + trailerLen) return null;
-  const off = data.length - PORTFOLIO_MATCHER_CONFIG_LEN - trailerLen;
-  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  if (!decodePortfolioMatcherControl(dv.getBigUint64(off + 96, true)).enabled) return null;
-  return new PublicKey(data.subarray(off + 32, off + 64));
-}
-
 /**
  * Caps and the ctx address are NEARLY immutable — but not actually: the LP
  * owner can re-point or disable the matcher config at any time via
@@ -151,35 +129,18 @@ async function resolveCtxAddress(
   const cached = ctxAddressCache.get(key);
   if (cached && Date.now() - cached.ts < CAPS_TTL_MS) return cached.pk;
 
-  // The market's LP portfolio holds the matcher config. Curated markets pin it
-  // in PLAYGROUND_SLAB_META (one getAccountInfo); everything else scans.
-  let matcherCtx: PublicKey | null = null;
-
-  const knownLp = PLAYGROUND_SLAB_META[slabPk.toBase58()]?.lp_portfolio_address;
-  if (knownLp) {
-    try {
-      const info = await connection.getAccountInfo(new PublicKey(knownLp), "confirmed");
-      if (info) matcherCtx = readMatcherContext(Buffer.from(info.data));
-    } catch {
-      /* fall through to the scan */
-    }
+  // The market's LP portfolio holds the matcher config. The LP is chosen by on-chain
+  // identity (lib/market-lp.ts), never "the first enabled matcher": any portfolio owner can
+  // enable one, and its caps would then size every user's closes.
+  const known = PLAYGROUND_SLAB_META[slabPk.toBase58()]?.lp_portfolio_address;
+  let knownPk: PublicKey | null = null;
+  try {
+    knownPk = known ? new PublicKey(known) : null;
+  } catch {
+    knownPk = null;
   }
-
-  if (!matcherCtx) {
-    const accounts = await connection.getProgramAccounts(programId, {
-      filters: [
-        { memcmp: { offset: 0, bytes: V17_PORTFOLIO_MAGIC.toString("base64"), encoding: "base64" } },
-        { memcmp: { offset: PORTFOLIO_PROVENANCE_MARKET_GROUP_OFF, bytes: slabPk.toBase58() } },
-      ],
-    });
-    for (const { account } of accounts) {
-      const ctx = readMatcherContext(Buffer.from(account.data));
-      if (ctx) {
-        matcherCtx = ctx;
-        break;
-      }
-    }
-  }
+  const lp = await resolveMarketLp(connection, programId, slabPk, knownPk);
+  const matcherCtx: PublicKey | null = lp ? lp.matcherCtx : null;
 
   if (matcherCtx) ctxAddressCache.set(key, { pk: matcherCtx, ts: Date.now() });
   return matcherCtx;

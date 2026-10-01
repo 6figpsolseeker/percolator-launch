@@ -1,5 +1,6 @@
 import { humanizeError } from "@/lib/errorMessages";
 
+import { WRAPPER_ERR } from "@/lib/wrapper-errors";
 /**
  * Error mapping for WithdrawCreatorFee (tag 90) — the creator fee-claim flow.
  *
@@ -43,11 +44,11 @@ import { humanizeError } from "@/lib/errorMessages";
  */
 
 const CLAIM_ERROR_MESSAGES: Record<number, string> = {
-  8: "Not authorized — only this market's insurance operator (the creator) can claim its fees. Connect the creator wallet.",
-  9: "Nothing to claim — the claim amount was zero. This market has not accrued any creator fees yet.",
-  21: "The market cannot pay the claim right now — it is not live, or the fees are momentarily reserved elsewhere. Nothing was deducted; try again later or claim a smaller amount.",
-  25: "Creator fee accounting is inconsistent on-chain — nothing was claimed. Please report this to the team.",
-  62: "Claim exceeds the creator fees this market has accrued. The claim is exact-amount and does not partial-fill — nothing was deducted. Refresh the balance and claim that exact amount or less.",
+  [WRAPPER_ERR.Unauthorized]: "Not authorized — only this market's insurance operator (the creator) can claim its fees. Connect the creator wallet.",
+  [WRAPPER_ERR.InvalidInstruction]: "Nothing to claim — the claim amount was zero. This market has not accrued any creator fees yet.",
+  [WRAPPER_ERR.EngineLockActive]: "The market cannot pay the claim right now — it is not live, or the fees are momentarily reserved elsewhere. Nothing was deducted; try again later or claim a smaller amount.",
+  [WRAPPER_ERR.EngineCounterUnderflow]: "Creator fee accounting is inconsistent on-chain — nothing was claimed. Please report this to the team.",
+  [WRAPPER_ERR.CreatorFeeOverClaim]: "Claim exceeds the creator fees this market has accrued. The claim is exact-amount and does not partial-fill — nothing was deducted. Refresh the balance and claim that exact amount or less.",
 };
 
 function extractCustomCode(msg: string): number | null {

@@ -61,7 +61,7 @@ export const HowToContribute: FC<Props> = ({
         </h2>
         <p className="text-base text-[var(--text-muted)]">
           Join {contributorCount > 0 ? contributorCount : "our"} contributor
-          {contributorCount !== 1 ? "s" : ""} building permissionless perps
+          {contributorCount !== 1 ? "s" : ""} building open perps
         </p>
       </div>
 

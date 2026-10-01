@@ -145,6 +145,7 @@ export const ClosePositionModal: FC<ClosePositionModalProps> = ({
       <div
         ref={modalRef}
         role="dialog"
+        data-testid="close-modal"
         aria-modal="true"
         aria-labelledby="close-position-title"
         className="relative w-full max-w-md rounded-none border border-[var(--border)] bg-[var(--bg)] p-6 shadow-2xl"

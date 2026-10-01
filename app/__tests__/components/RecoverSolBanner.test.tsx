@@ -118,7 +118,7 @@ describe("RecoverSolBanner", () => {
     const onResume = vi.fn();
     render(<RecoverSolBanner onResume={onResume} />);
     // PERC-511: banner text updated to reflect recoverability
-    expect(screen.getByText(/Stuck Slab — SOL Recoverable/i)).toBeDefined();
+    expect(screen.getByText(/Unfinished market: SOL recoverable/i)).toBeDefined();
     expect(screen.getByRole("button", { name: /RECLAIM/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /RETRY INITIALIZATION/i })).toBeDefined();
     expect(screen.getByText(/VIEW ON EXPLORER/i)).toBeDefined();

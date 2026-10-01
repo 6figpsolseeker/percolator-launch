@@ -174,7 +174,7 @@ export function VaultGrid({
                     ? `No vaults matching "${searchQuery}"`
                     : error
                       ? "Couldn't load vaults — please try again shortly"
-                      : 'No LP vaults are live yet.'}
+                      : 'No Earn vaults are live yet.'}
               </p>
             </div>
           ) : (

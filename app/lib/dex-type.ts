@@ -40,7 +40,10 @@ export function normalizeDexType(raw: string | null | undefined): KeeperDexType 
   if (!raw) return null;
   const v = raw.trim().toLowerCase();
   if ((KEEPER_DEX_TYPES as readonly string[]).includes(v)) return v as KeeperDexType;
-  if (v === "meteora" || v === "meteora-damm" || v === "meteoradlmm") return "meteora-dlmm";
+  // "meteora" is a DexScreener id that covers DLMM AND DAMM, so this is only a
+  // hint; the route classifies by owner and refuses when it can't. "meteora-damm"
+  // is never mapped: a DAMM pool is not a DLMM pool (E2E B21).
+  if (v === "meteora" || v === "meteoradlmm") return "meteora-dlmm";
   if (v === "raydium" || v === "raydium-cpmm" || v === "raydium-amm") return "raydium-clmm";
   if (v === "pumpswap" || v === "pump" || v === "pumpfun" || v === "pump-swap") return "pumpswap";
   return null;

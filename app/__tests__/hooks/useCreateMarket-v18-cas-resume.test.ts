@@ -28,21 +28,21 @@ describe("useCreateMarket v18 CAS + resume wiring", () => {
   });
 
   it("batched funding txs bind the post-hand-off authority_epoch, never a literal 0", () => {
-    // M3a backing seeds, M3b TopUpInsurance and M4b UpdateFeeSplit are CAS-bound
+    // M3b TopUpInsurance and M4b UpdateFeeSplit are CAS-bound
     // to asset 0's authority_epoch, which the co-signed UpdateAssetAuthority
     // advances to 1 before M3a. The literal 0 made every keeper launch's M3a
     // revert EngineStale (Custom 19).
     expect(batchSource).not.toMatch(/authorityEpoch:\s*0n/);
     expect(batchSource).toContain("freshLaunchAuthorityEpoch(cosignTx !== null)");
     const uses = batchSource.match(/authorityEpoch: assetZeroAuthorityEpoch/g) ?? [];
-    expect(uses.length).toBe(3);
+    expect(uses.length).toBe(2); // M3b TopUpInsurance + M4b UpdateFeeSplit (M3a backing seed removed, C-1)
   });
 
-  it("no backing seed is stamped with the reserved LP-vault sentinel expiry", () => {
-    // TopUpBackingBucket refuses expiry == u64::MAX/2 with Custom 9.
-    expect(hookSource).not.toMatch(/expirySlot:\s*MAX_BACKING_BUCKET_EXPIRY_SLOT\.toString\(\)/);
-    const seeds = hookSource.match(/expirySlot: DIRECT_BACKING_TOPUP_EXPIRY_SLOT\.toString\(\)/g) ?? [];
-    expect(seeds.length).toBe(2); // batched M3a + sequential Step 3
+  it("no direct backing top-up remains in either create path (C-1)", () => {
+    // A direct TopUpBackingBucket makes CreateLpVault fail Custom(63); the
+    // domains are funded by DepositToLpVault instead (lib/earn-vault-seed.ts).
+    expect(hookSource).not.toMatch(/encodeTopUpBackingBucket|ACCOUNTS_TOP_UP_BACKING_BUCKET|DIRECT_BACKING_TOPUP_EXPIRY_SLOT/);
+    expect(hookSource.match(/buildEarnVaultSeedInstructions\(/g)?.length).toBe(2); // batched M4a + sequential Step 4
   });
 
   it("a batch failure hands Retry the step to resume from, not step 0", () => {

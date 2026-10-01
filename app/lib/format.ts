@@ -357,3 +357,8 @@ export function formatFundingRate(bpsPerSlot: bigint): string {
   const sign = annualized > 0 ? "+" : "";
   return `${sign}${annualized.toFixed(2)}%`;
 }
+
+/** UX WP-10 (audit §5.1): basis points are shown as a percentage ("30 bps" -> "0.30%"). */
+export function bpsPct(bps: number | bigint, dp = 2): string {
+  return `${(Number(bps) / 100).toFixed(dp)}%`;
+}

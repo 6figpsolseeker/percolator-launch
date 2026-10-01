@@ -9,6 +9,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { MAINNET_PROGRAM_IDS, resolveDevnetProgramIds } from "@/lib/program-ids";
 import { PublicKey } from "@solana/web3.js";
 import { getServiceClient, getServerNetwork } from "@/lib/supabase";
 import { getServerConnection } from "@/lib/server-rpc";
@@ -51,7 +52,7 @@ export const dynamic = "force-dynamic";
  * hand-copied literal.
  *
  * CUTOVER (2026-07): the FRESH devnet stake program
- * (GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3) deploys 392-byte pool accounts
+ * (DEVNET_PROGRAM_IDS.stake) deploys 392-byte pool accounts
  * (the v2 layout: adds pendingAdmin / HWM / tranche fields after `pool_mode`).
  * The retired program (51CeUNpb…) used 352-byte accounts. This route previously
  * hardcoded 352, so `getProgramAccounts({ filters: [{ dataSize: 352 }] })`
@@ -172,11 +173,11 @@ export async function GET() {
     const isDevnet = net === "devnet";
     let stakeProgramId: PublicKey;
     try {
-      // v17 devnet: stake/vault program is GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3
+      // devnet stake/vault program: DEVNET_PROGRAM_IDS.stake (relaunch VmpVUArRnVkrjaPXQ2qaqCQa3ZrZFgsz7rjeALitF5w)
       // mainnet: DC5fovFQD5SZYsetwvEqd4Wi4PFY1Yfnc669VMe6oa7F
       const programIdStr = isDevnet
-        ? (process.env.STAKE_PROGRAM_ID ?? "GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3")
-        : "DC5fovFQD5SZYsetwvEqd4Wi4PFY1Yfnc669VMe6oa7F";
+        ? resolveDevnetProgramIds().stake // single source; no ungated server override (relaunch: a stale env would point at the abandoned stake program)
+        : MAINNET_PROGRAM_IDS.stake;
       stakeProgramId = new PublicKey(programIdStr);
     } catch {
       return NextResponse.json({ pools: [] }, {

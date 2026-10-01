@@ -1,5 +1,6 @@
 "use client";
 
+import { bpsPct } from "@/lib/format";
 import { FC, useMemo } from "react";
 
 interface FeeSliderProps {
@@ -41,7 +42,7 @@ export const FeeSlider: FC<FeeSliderProps> = ({
         </label>
         <div className="flex items-center gap-2">
           <span className="text-[13px] font-bold font-mono text-[var(--accent)]">
-            {value} bps
+            {bpsPct(value)}
           </span>
           {showPercent && (
             <span className="text-[10px] text-[var(--text-secondary)]">
@@ -69,8 +70,8 @@ export const FeeSlider: FC<FeeSliderProps> = ({
         />
       </div>
       <div className="flex items-center justify-between mt-1">
-        <span className="text-[9px] text-[var(--text-secondary)]">{min} bps</span>
-        <span className="text-[9px] text-[var(--text-secondary)]">{max} bps</span>
+        <span className="text-[9px] text-[var(--text-secondary)]">{bpsPct(min)}</span>
+        <span className="text-[9px] text-[var(--text-secondary)]">{bpsPct(max)}</span>
       </div>
     </div>
   );

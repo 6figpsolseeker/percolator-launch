@@ -1292,3 +1292,14 @@ input[type="range"].leverage-slider:focus-visible::-moz-range-thumb {
   }
 }
 
+
+/* UX WP-10 (audit §4.7 / §4.8, AC4): on phones every tap target is at least 44 px high.
+   Buttons stay their own width; only the hit area grows (content stays centred). */
+@media (max-width: 767.98px) {
+  button,
+  [role="button"],
+  [role="menuitem"],
+  [role="tab"] {
+    min-height: 44px;
+  }
+}

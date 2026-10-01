@@ -82,7 +82,7 @@ export default function Home() {
         <ScrollReveal delay={0.12}>
           <p className="mt-6 max-w-[52ch] text-[15px] leading-relaxed text-[var(--text-secondary)]">
             Every market carries its own insurance fund, prices off live Solana DEX pools, and
-            can burn its own admin key. Fully on-chain, permissionless, and open to any token.
+            can burn its own admin key. Fully on-chain, open to anyone, and open to any token.
           </p>
         </ScrollReveal>
 

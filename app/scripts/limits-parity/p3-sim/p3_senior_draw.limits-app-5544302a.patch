@@ -1,0 +1,492 @@
+--- a/tests/p3_senior_draw.rs
++++ b/tests/p3_senior_draw.rs
+@@ -2258,4 +2258,489 @@
+     eprintln!("D1o: W paid {paid} (null control {null}); drawn {drawn_c}/{drawn_n}");
+     assert!(null > 2_000_000, "vacuity: W had a profit");
+     assert!(paid + 2 >= null, "D-1 opposite pot: untouched winner W paid {paid} < null {null}");
++}
++
++
++// ═══════════════════════════════════════════════════════════════════════════════════════
++// limits app (39b138c8 senior draw): APP-BUILT instructions (percolator-launch app/, bridge
++// scripts/limits-parity/p3-app-ixs.ts) on the real wrapper BPF.
++//  - "Earn absorbed": the app's decoder reads senior_draw_outstanding / drawn from real bytes.
++//  - Logs: the app's parser reads p3_senior_draw_restored from a real app-built 75.
++//  - B24 / 88: a senior's app 77 after a draw + recovery is refused 88; the app's 88 repair
++//    (recall-variants: the same list sendTx simulates) inserts 98 before the 77 and the senior
++//    is paid; 75/77 carry the vault LP WRITABLE.
++// ═══════════════════════════════════════════════════════════════════════════════════════
++
++fn la_b64(b: &[u8]) -> String {
++    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
++    let mut s = String::new();
++    for c in b.chunks(3) {
++        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
++        s.push(T[(n >> 18) as usize & 63] as char);
++        s.push(T[(n >> 12) as usize & 63] as char);
++        s.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
++        s.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
++    }
++    s
++}
++
++fn la_app(cmd: &str, args: serde_json::Value) -> serde_json::Value {
++    let app = std::env::var("LIMITS_APP_DIR").expect("LIMITS_APP_DIR (percolator-launch app/ dir)");
++    let tsx = std::env::var("TSX_BIN").expect("TSX_BIN");
++    let out = std::process::Command::new(tsx)
++        .current_dir(&app)
++        .args(["--tsconfig", "tsconfig.json", "scripts/limits-parity/p3-app-ixs.ts", cmd, &args.to_string()])
++        .output()
++        .expect("spawn app builder");
++    assert!(out.status.success(), "app builder {cmd} failed: {}", String::from_utf8_lossy(&out.stderr));
++    serde_json::from_slice(&out.stdout).expect("app builder json")
++}
++
++fn la_ixs(v: &serde_json::Value) -> Vec<Instruction> {
++    v.as_array()
++        .expect("ixs")
++        .iter()
++        .map(|ix| {
++            let hex = ix["dataHex"].as_str().unwrap();
++            let data = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
++            let accounts = ix["keys"]
++                .as_array()
++                .unwrap()
++                .iter()
++                .map(|k| {
++                    let pk: Pubkey = k["pubkey"].as_str().unwrap().parse().unwrap();
++                    let s = k["isSigner"].as_bool().unwrap();
++                    if k["isWritable"].as_bool().unwrap() { AccountMeta::new(pk, s) } else { AccountMeta::new_readonly(pk, s) }
++                })
++                .collect();
++            Instruction { program_id: ix["programId"].as_str().unwrap().parse().unwrap(), accounts, data }
++        })
++        .collect()
++}
++
++impl P3 {
++    fn la_b64_of(&self, k: &Pubkey) -> String {
++        la_b64(&self.env.svm.get_account(k).map(|a| a.data).unwrap_or_default())
++    }
++    /// Send APP instructions (fee payer = harness payer); returns the program logs.
++    fn la_send(&mut self, ixs: Vec<Instruction>, signers: &[&Keypair]) -> Result<Vec<String>, String> {
++        let payer = self.env.payer.insecure_clone();
++        let mut all = vec![heap_ix(), cu_ix()];
++        all.extend(ixs);
++        let mut s: Vec<&Keypair> = vec![&payer];
++        s.extend_from_slice(signers);
++        self.env.svm.expire_blockhash();
++        let tx = solana_sdk::transaction::Transaction::new_signed_with_payer(&all, Some(&payer.pubkey()), &s, self.env.svm.latest_blockhash());
++        self.env.svm.send_transaction(tx).map(|m| m.logs).map_err(|e| format!("{e:?}"))
++    }
++    fn la_earn_json(&self, user: &Keypair, extra: serde_json::Value) -> serde_json::Value {
++        let mut v = serde_json::json!({
++            "programId": self.env.program_id.to_string(), "market": self.env.market.to_string(), "domain": 0,
++            "user": user.pubkey().to_string(), "lpMint": self.lp_mint.to_string(), "vaultToken": self.env.vault.to_string(),
++            "vaultAuthority": self.env.vault_authority.to_string(), "escrow": self.escrow.to_string(),
++            "marketB64": self.la_b64_of(&self.env.market), "registryB64": self.la_b64_of(&self.registry),
++            "vaultLpStateB64": self.la_b64_of(&self.state_pda), "lpB64": self.la_b64_of(&self.lp),
++        });
++        for (k, x) in extra.as_object().unwrap() { v[k] = x.clone(); }
++        v
++    }
++}
++
++#[test]
++fn limits_app_senior_draw_absorbed_logs_and_88_recall_then_redeem() {
++    let (mut w, seniors, _t) = q1_world(9_000_000, 1_000_000, 1_000_000, 6);
++    assert_eq!(outstanding(&w), 0, "vacuity: nothing booked yet (the loss is pending on the vault LP)");
++    // 0. The FIRST C-reading instruction is an APP-built Earn deposit (75, vault LP writable, 78
++    //    prepended when fees are pending): it draws/books the loss, and the app's parser reads
++    //    "Earn absorbed" from that transaction's real logs.
++    let first = Keypair::new();
++    w.env.ensure_signer_account(first.pubkey());
++    let f_ata = w.lp_share_ata(first.pubkey());
++    let f_src = w.token(first.pubkey(), 1_000);
++    let v = la_app("deposit", w.la_earn_json(&first, serde_json::json!({ "lpAta": f_ata.to_string(), "source": f_src.to_string(), "amount": "1000" })));
++    let logs0 = w.la_send(la_ixs(&v["ixs"]), &[&first]).expect("APP 75 books the pending draw");
++    let out0 = outstanding(&w);
++    assert!(out0 > 0, "vacuity: the app tx booked a senior draw");
++    let p0 = la_app("draw-logs", serde_json::json!({ "programId": w.env.program_id.to_string(), "market": w.env.market.to_string(), "logs": logs0 }));
++    println!("LIMITS-APP DRAW: first 75 logs -> {}", p0["summary"]);
++    assert_eq!(p0["summary"]["earnAbsorbed"], serde_json::json!(out0.to_string()), "Earn absorbed, read from the app tx's logs: {p0}");
++
++    // 1. "Earn absorbed" from REAL bytes through the app decoder.
++    let ea = la_app("earn-absorbed", serde_json::json!({ "programId": w.env.program_id.to_string(), "market": w.env.market.to_string(), "vaultLpStateB64": w.la_b64_of(&w.state_pda) }));
++    assert_eq!(ea["outstanding"], serde_json::json!(out0.to_string()), "{ea}");
++    assert_eq!(ea["drawn"], serde_json::json!(drawn(&w).to_string()), "{ea}");
++    println!("LIMITS-APP DRAW: Earn absorbed {} (drawn {})", out0, drawn(&w));
++
++    // 2. Recovery: the junior re-funds; an APP-built Earn deposit (75, vault LP writable) books
++    //    the seniors-first restore, and the app's log parser reads it from the real logs.
++    let admin = w.env.admin.insecure_clone();
++    w.junior_deposit(&admin, 2_000_000).unwrap();
++    let lp = w.lp;
++    let _ = w.crank(lp);
++    let dep = Keypair::new();
++    w.env.ensure_signer_account(dep.pubkey());
++    let lp_ata = w.lp_share_ata(dep.pubkey());
++    let src = w.token(dep.pubkey(), 1_000);
++    let v = la_app("deposit", w.la_earn_json(&dep, serde_json::json!({ "lpAta": lp_ata.to_string(), "source": src.to_string(), "amount": "1000" })));
++    let dixs = la_ixs(&v["ixs"]);
++    let d75 = dixs.last().unwrap();
++    assert!(d75.accounts[12].is_writable, "d119eebd: 75 passes the vault LP WRITABLE");
++    assert!(d75.accounts[7].is_writable && d75.accounts[10].is_writable, "both pot ledgers writable");
++    let logs = w.la_send(dixs, &[&dep]).expect("APP 75 (books the restore)");
++    let parsed = la_app("draw-logs", serde_json::json!({ "programId": w.env.program_id.to_string(), "market": w.env.market.to_string(), "logs": logs }));
++    println!("LIMITS-APP DRAW: 75 logs -> {}", parsed["summary"]);
++    assert_eq!(parsed["summary"]["earnRestored"], serde_json::json!(out0.to_string()), "the app reads the restore from the logs: {parsed}");
++    assert_eq!(outstanding(&w), 0, "restored in full");
++    let ea2 = la_app("earn-absorbed", serde_json::json!({ "programId": w.env.program_id.to_string(), "market": w.env.market.to_string(), "vaultLpStateB64": w.la_b64_of(&w.state_pda) }));
++    assert_eq!(ea2["outstanding"], serde_json::json!("0"));
++    assert_eq!(ea2["restored"], serde_json::json!(out0.to_string()));
++
++    // 3. B24 / 88: the senior's APP 77 is refused 88 (the pot can't fund it; value sits in the LP).
++    let (k, ata) = (&seniors[0].0.insecure_clone(), seniors[0].1);
++    let shares = w.tok(&ata) as u128;
++    let (c_before, s_before) = (w.c(), w.registry_shares());
++    let fair = c_before * shares / s_before;
++    w.request_redeem(k, ata, shares).unwrap();
++    let red = state::derive_lp_redemption(&w.env.program_id, &w.registry, &k.pubkey()).0;
++    let dest = w.token(k.pubkey(), 0);
++    let rv = la_app("recall-variants", w.la_earn_json(k, serde_json::json!({ "redemption": red.to_string(), "dest": dest.to_string() })));
++    let plain = la_ixs(&rv["plain"]);
++    let p77 = plain.last().unwrap();
++    assert!(p77.accounts[14].is_writable, "d119eebd: 77 passes the vault LP WRITABLE");
++    assert!(p77.accounts[8].is_writable && p77.accounts[11].is_writable, "both pot ledgers writable");
++    let e = w.la_send(plain, &[k]).unwrap_err();
++    assert!(e.contains("Custom(88)"), "NEGATIVE CONTROL: the plain app 77 is refused 88 VaultLpRedeemNeedsRecall: {e}");
++    // 4. The app's repair: first candidate that lands (sendTx simulates them in this order).
++    let mut paid = None;
++    for var in rv["variants"].as_array().unwrap() {
++        let r = w.la_send(la_ixs(&var["ixs"]), &[k]);
++        println!("LIMITS-APP 88: recall {} -> {:?}", var["amount"], r.as_ref().err());
++        if r.is_ok() {
++            paid = Some((var["amount"].as_str().unwrap().to_string(), w.tok(&dest)));
++            break;
++        }
++    }
++    let (amt, got) = paid.expect("the app's recall-then-redeem path lands");
++    println!("LIMITS-APP 88: recalled {amt}, senior paid {got}");
++    println!("LIMITS-APP 88: fair pro-rata claim {fair} (C {c_before}, shares {shares} / {s_before})");
++    assert!(got as u128 + 2 >= fair, "senior paid its full pro-rata claim: {got} < {fair}");
++    conserved(&w, "limits app 88");
+ }
++
++/// 39b138c8 gate-100: a large live redeem through a pot whose ledger principal is too small is
++/// refused 25 (EngineCounterUnderflow) BEFORE the 88 check. The app's repair
++/// (redeemRepairVariants, the lists sendTx simulates) tries: the other pot, a recall, then the
++/// other pot + a recall into it. Seniors split across pots (1M in d0, 9M in d1), four states:
++/// draw outstanding / restored x the d0 / d1 senior. Every one ends paid its pro-rata claim.
++#[test]
++fn limits_app_redeem_repair_25_pot_mismatch_and_88() {
++    let mut seen_25 = false;
++    for scen in 0..4 {
++        let (mut w, seniors, _t) = q1_world(1_000_000, 9_000_000, 1_000_000, 6);
++        let first = Keypair::new();
++        w.env.ensure_signer_account(first.pubkey());
++        let f_ata = w.lp_share_ata(first.pubkey());
++        let f_src = w.token(first.pubkey(), 1_000);
++        let v = la_app("deposit", w.la_earn_json(&first, serde_json::json!({ "lpAta": f_ata.to_string(), "source": f_src.to_string(), "amount": "1000" })));
++        w.la_send(la_ixs(&v["ixs"]), &[&first]).expect("75 books the draw");
++        if scen >= 2 {
++            let admin = w.env.admin.insecure_clone();
++            w.junior_deposit(&admin, 2_000_000).unwrap();
++            let lp = w.lp;
++            let _ = w.crank(lp);
++            let d2 = Keypair::new();
++            w.env.ensure_signer_account(d2.pubkey());
++            let a2 = w.lp_share_ata(d2.pubkey());
++            let s2 = w.token(d2.pubkey(), 1_000);
++            let v = la_app("deposit", w.la_earn_json(&d2, serde_json::json!({ "lpAta": a2.to_string(), "source": s2.to_string(), "amount": "1000" })));
++            w.la_send(la_ixs(&v["ixs"]), &[&d2]).expect("75 books the restore");
++        }
++        let (k, ata) = (&seniors[scen % 2].0.insecure_clone(), seniors[scen % 2].1);
++        let shares = w.tok(&ata) as u128;
++        let fair = w.c() * shares / w.registry_shares();
++        w.request_redeem(k, ata, shares).unwrap();
++        let red = state::derive_lp_redemption(&w.env.program_id, &w.registry, &k.pubkey()).0;
++        let dest = w.token(k.pubkey(), 0);
++        let rv = la_app("recall-variants", w.la_earn_json(k, serde_json::json!({ "redemption": red.to_string(), "dest": dest.to_string() })));
++        let plain = w.la_send(la_ixs(&rv["plain"]), &[k]);
++        if scen == 0 {
++            plain.expect("control: the small d0 senior redeems from its own pot, no repair");
++            assert!(w.tok(&dest) as u128 + 2 >= fair);
++            continue;
++        }
++        // 221cf006+ (rehearsal-23 HIGH): a senior larger than one pot redeems across BOTH pots, so
++        // the plain app 77 can land with no repair; it must still pay the pro-rata claim.
++        let e = match plain {
++            Ok(_) => {
++                let paid = w.tok(&dest) as u128;
++                println!("LIMITS-APP REPAIR scen {scen}: plain lands (both pots), paid {paid} (fair {fair})");
++                assert!(paid + 2 >= fair, "scen {scen}: plain paid {paid} < fair {fair}");
++                conserved(&w, "redeem plain");
++                continue;
++            }
++            Err(e) => e,
++        };
++        assert!(e.contains("Custom(25)") || e.contains("Custom(88)"), "scen {scen}: plain 77 refused 25/88: {e}");
++        seen_25 |= e.contains("Custom(25)");
++        let mut landed = None;
++        for var in rv["variants"].as_array().unwrap() {
++            if w.la_send(la_ixs(&var["ixs"]), &[k]).is_ok() {
++                landed = Some(var["kind"].as_str().unwrap().to_string());
++                break;
++            }
++        }
++        let kind = landed.unwrap_or_else(|| panic!("scen {scen}: no repair variant landed"));
++        let paid = w.tok(&dest) as u128;
++        println!("LIMITS-APP REPAIR scen {scen}: plain {} -> {kind}, paid {paid} (fair {fair})", if e.contains("Custom(25)") { 25 } else { 88 });
++        assert!(paid + 2 >= fair, "scen {scen}: paid {paid} < fair {fair}");
++        conserved(&w, "redeem repair");
++    }
++    // 39b138c8 returned 25 in scen 1 (counter gate before 88); 4b1a5d30 returns 88 there.
++    println!("LIMITS-APP REPAIR: 25 seen = {seen_25}");
++}
++
++/// UX WP-2 (SH-2): the keeper stops CRANKING (prices still pushed): the engine clock lags. The
++/// APP's catch-up (bridge `catch-up` = lib/self-heal planCatchUp +
++/// buildCatchUpCrankIx) prepends k cranks of the vault LP and the SAME trade then lands in one
++/// tx. Also measures one crank's CU (recorded as CATCH_UP_CRANK_CU) and the beyond-cap case.
++#[test]
++fn limits_app_catch_up_cranks_then_trade() {
++    let (mut w, _seniors, _t) = q1_world(9_000_000, 1_000_000, 1_000_000, 0);
++    let lp = w.lp;
++    let (t2, tp2) = w.trader(20_000_000);
++    for _ in 0..5_000 {
++        if w.env.market_state().1.assets[0].slot_last >= w.slot() { break; }
++        w.env.svm.expire_blockhash();
++        let _ = w.crank(lp);
++    }
++    assert!(w.env.market_state().1.assets[0].slot_last >= w.slot(), "vacuity: the clock starts current");
++    // keeper keeps PUSHING prices but stops cranking (this world: max_accrual_dt_slots = 1,
++    // so a 5-slot lag needs ~6 cranks, inside the 1.2M CU budget)
++    let start = w.slot();
++    w.env.svm.warp_to_slot(start + 5);
++    w.push(MARK.with(|c| c.get()));
++    let trade_ix = |w: &P3| {
++        let (aid, _, aep) = w.env.portfolio_identity(tp2);
++        let (bid, bseq, bep) = w.env.portfolio_identity(w.lp);
++        Instruction {
++            program_id: w.env.program_id,
++            accounts: vec![
++                AccountMeta::new(t2.pubkey(), true),
++                AccountMeta::new(w.env.market, false),
++                AccountMeta::new(tp2, false),
++                AccountMeta::new(w.lp, false),
++                AccountMeta::new_readonly(w.matcher, false),
++                AccountMeta::new(w.ctx, false),
++                AccountMeta::new_readonly(w.delegate, false),
++            ],
++            data: ProgInstruction::TradeCpi {
++                account_a_portfolio_id: aid, account_a_position_epoch: aep,
++                account_b_portfolio_id: bid, account_b_position_epoch: bep,
++                market_id: 1, account_b_matcher_sequence: bseq, asset_index: 0,
++                size_q: U / 10, fee_bps: 0, limit_price: 0, backing_fee_cap_bps: 10_000,
++            }.encode(),
++        }
++    };
++    // On 4b1a5d30 a trade catches the engine up itself (probe `limits_probe_lag`: lags to 20,000
++    // slots with price moves all trade), so the catch-up is a repair for the refusals that remain
++    // (planSelfHeal only prepends it after a SIMULATED 19/21). Here: the app's cranks are valid
++    // on a lagging clock and land together with the trade in one tx.
++    let read_slot = w.slot();
++    let v = la_app("catch-up", serde_json::json!({
++        "programId": w.env.program_id.to_string(), "market": w.env.market.to_string(),
++        "marketB64": w.la_b64_of(&w.env.market), "readSlot": read_slot.to_string(), "userCu": 200_000,
++        "cranker": w.env.payer.pubkey().to_string(), "portfolio": lp.to_string(),
++    }));
++    let k = v["k"].as_u64().unwrap() as usize;
++    println!("LIMITS-APP CATCHUP: lag {} dt {} -> k {k} | real slot_last {} now {} header {}", v["lagSlots"], v["dtSlots"], w.env.market_state().1.assets[0].slot_last, read_slot, 0);
++    assert!(k >= 1 && !v["beyondCap"].as_bool().unwrap());
++    // one crank's CU on these bytes
++    let crank_only = la_ixs(&v["ixs"]).into_iter().take(1).collect::<Vec<_>>();
++    let payer = w.env.payer.insecure_clone();
++    let mut probe = vec![heap_ix(), cu_ix()];
++    probe.extend(crank_only);
++    let tx = solana_sdk::transaction::Transaction::new_signed_with_payer(&probe, Some(&payer.pubkey()), &[&payer], w.env.svm.latest_blockhash());
++    let cu = w.env.svm.simulate_transaction(solana_sdk::transaction::VersionedTransaction::from(tx)).map(|m| m.compute_units_consumed).unwrap_or(0);
++    println!("LIMITS-APP CATCHUP: one crank = {cu} CU");
++    // The app's CATCH_UP_CRANK_CU (lib/self-heal.ts) must cover one crank: 17,010 on 4b1a5d30,
++    // 20,846 on ede691b6 -> budget 25,000.
++    assert!(cu > 0 && cu <= 25_000, "CATCH_UP_CRANK_CU (25,000) covers one crank: {cu}");
++    // the app's healed tx: [cranks x k, the same trade] lands in ONE transaction
++    let mut healed = la_ixs(&v["ixs"]);
++    healed.push(trade_ix(&w));
++    w.la_send(healed, &[&t2]).expect("catch-up cranks + trade land in one tx");
++    assert!(w.env.market_state().1.assets[0].slot_last >= read_slot, "engine clock caught up");
++    // beyond the cap: a 5,000-slot lag needs 250 cranks -> not attempted (keeper catches up; SH-3)
++    let s2 = w.slot();
++    w.env.svm.warp_to_slot(s2 + 5_000);
++    w.push(MARK.with(|c| c.get()));
++    let v2 = la_app("catch-up", serde_json::json!({
++        "programId": w.env.program_id.to_string(), "market": w.env.market.to_string(),
++        "marketB64": w.la_b64_of(&w.env.market), "readSlot": w.slot().to_string(), "userCu": 200_000,
++        "cranker": w.env.payer.pubkey().to_string(), "portfolio": lp.to_string(),
++    }));
++    assert_eq!(v2["k"], serde_json::json!(0));
++    assert_eq!(v2["beyondCap"], serde_json::json!(true));
++}
++
++
++impl P3 {
++    /// The app's Earn preview (earn-price bridge: lib/limits/earn.ts earnPanelPricing) from RAW
++    /// bytes, with the NAV the page gives it (useInsuranceLP vaultTotalAtoms = registry shares +
++    /// fee_distribution_total_atoms).
++    fn la_price(&self, shares: u128) -> serde_json::Value {
++        let reg = self.env.svm.get_account(&self.registry).and_then(|a| state::read_lp_vault_registry(&a.data).ok()).expect("registry");
++        let backing = reg.total_lp_shares_outstanding + reg.fee_distribution_total_atoms;
++        la_app("earn-price", serde_json::json!({
++            "programId": self.env.program_id.to_string(), "market": self.env.market.to_string(),
++            "marketB64": self.la_b64_of(&self.env.market), "lpB64": self.la_b64_of(&self.lp),
++            "vaultLpStateB64": self.la_b64_of(&self.state_pda), "registryB64": self.la_b64_of(&self.registry),
++            "backing": backing.to_string(), "shares": shares.to_string(),
++        }))
++    }
++    fn la_redeem(&mut self, k: &Keypair) -> Result<u64, String> {
++        let red = state::derive_lp_redemption(&self.env.program_id, &self.registry, &k.pubkey()).0;
++        let dest = self.token(k.pubkey(), 0);
++        let v = la_app("execute", self.la_earn_json(k, serde_json::json!({ "redemption": red.to_string(), "dest": dest.to_string() })));
++        assert!(v["blocked"].is_null(), "app 77 planned: {v}");
++        self.la_send(la_ixs(&v["ixs"]), &[k])?;
++        Ok(self.tok(&dest))
++    }
++}
++
++/// ede691b6 (Earn exit priced at the WORSE of effective vs pending target): the app's preview —
++/// earnPanelPricing -> earnSeniorPricing, the one port of `vault_lp_equity_lag_bounds_ro` + the 77
++/// Live rule — equals the program's 77 payout to the atom, with and without a pending move.
++/// Control (no move): preview == payout == the plain pre-ede691b6 number. Move (3x target, eff
++/// lagging at 20 bps / slot): the bounds are evaluated from real bytes (worse < better); the
++/// program keeps the bound LP's exposure within its equity at the target, so the move stays inside
++/// the junior and the preview equals the payout exactly (the binding branches — C_price below C and
++/// the LP valued at max(worse, 0) when nav < C — are pinned by earn-pricing.test.ts).
++#[test]
++fn limits_app_worse_of_77_payout_matches_preview() {
++    // The lagging-price market (max 20 bps / slot, 5x): the effective price trails a pushed mark.
++    TL_IM.with(|c| c.set(2_000));
++    let s1 = Keypair::new();
++    let s2 = Keypair::new();
++    let (mut w, atas) = P3::bound(&[(&s1, 5_000_000), (&s2, 5_000_000)], 300_000, 1_000);
++    // The vault LP may run 5x its equity (99 SetVaultLpRisk), so a move can exceed the junior.
++    let up = w.upgrade.insecure_clone();
++    w.set_risk(&up, 50_000).expect("99 vault LP 5x");
++    let (t, tp) = w.trader(50_000_000);
++    w.trade_vs_lp(&t, tp, 14 * U / 10).expect("trader long 1.4 vs the vault LP (LP short 1.4)");
++    crank_lp_until_current(&mut w);
++    let sh1 = w.tok(&atas[0]) as u128;
++    let sh2 = w.tok(&atas[1]) as u128;
++    w.request_redeem(&s1, atas[0], sh1).expect("76 s1");
++    w.request_redeem(&s2, atas[1], sh2).expect("76 s2");
++
++    // CONTROL: no pending move.
++    let p1 = w.la_price(sh1);
++    println!("LIMITS-APP WORSE-OF control: {p1}");
++    assert_eq!(p1["eff"], p1["tgt"], "vacuity: no catch-up in the control");
++    assert_eq!(p1["withdrawAtoms"], p1["plainWithdrawAtoms"], "no move => the plain number");
++    let paid1 = w.la_redeem(&s1).expect("app 77 s1 (control)");
++    println!("LIMITS-APP WORSE-OF control: preview {} paid {paid1}", p1["withdrawAtoms"]);
++    assert_eq!(p1["withdrawAtoms"], serde_json::json!(paid1.to_string()), "control: preview == payout");
++
++    // The keeper publishes 3x (the vault LP's short is ~0.27 after the exposure clamp, equity ~0.3):
++    // the effective price lags (max 20 bps / slot), so the move is pending, not realised, and at
++    // the target it exceeds the junior.
++    println!("LIMITS-APP WORSE-OF before push: lp pos {} trader pos {}", w.pos(w.lp), w.pos(tp));
++    w.push(PRICE * 3);
++    println!("LIMITS-APP WORSE-OF after push: lp pos {} trader pos {}", w.pos(w.lp), w.pos(tp));
++    let lp_ = w.lp;
++    let r = w.crank(lp_);
++    println!("LIMITS-APP WORSE-OF one crank: {:?} lp pos {} trader pos {} eff {}", r.as_ref().map_err(|e| code(e)), w.pos(w.lp), w.pos(tp), w.env.market_state().1.assets[0].effective_price);
++    crank_lp_until_current(&mut w);
++    println!("LIMITS-APP WORSE-OF after cranks: lp pos {} trader pos {}", w.pos(w.lp), w.pos(tp));
++    let p2 = w.la_price(sh2);
++    println!("LIMITS-APP WORSE-OF move: {p2}");
++    let lpst = w.lp_state();
++    for l in lpst.legs.iter().filter(|l| l.active) { println!("LIMITS-APP WORSE-OF rust leg: asset {} side {:?} basis {}", l.asset_index, l.side, l.basis_pos_q); }
++    let (eff, tgt): (u128, u128) = (p2["eff"].as_str().unwrap().parse().unwrap(), p2["tgt"].as_str().unwrap().parse().unwrap());
++    assert!(tgt > eff, "vacuity: the effective price lags the target ({eff} vs {tgt})");
++    let (pre, plain): (u128, u128) = (p2["withdrawAtoms"].as_str().unwrap().parse().unwrap(), p2["plainWithdrawAtoms"].as_str().unwrap().parse().unwrap());
++    let (worse, better): (i128, i128) = (p2["worse"].as_str().unwrap().parse().unwrap(), p2["better"].as_str().unwrap().parse().unwrap());
++    assert!(worse < better, "the lag bounds are evaluated on a pending move: worse {worse} < better {better}");
++    // On this build the crank re-stamps the bound vault LP's leg so its exposure fits its equity AT
++    // THE TARGET (short 1.4 -> ~0.14 here), so a pending move stays inside the junior (worse >= 0):
++    // "a move the junior absorbs changes nothing for seniors" — the preview must say exactly that.
++    assert!(worse >= 0, "reachable state: the junior absorbs the pending move (worse {worse})");
++    assert_eq!(pre, plain, "junior-absorbed move: the exit price is unchanged");
++    let paid2 = w.la_redeem(&s2).expect("app 77 s2 (move pending)") as u128;
++    println!("LIMITS-APP WORSE-OF move: preview {pre} paid {paid2} plain {plain} (worse {})", p2["worse"]);
++    assert_eq!(pre, paid2, "preview == the program's payout, to the atom");
++    conserved(&w, "worse-of 77");
++}
++
++impl P3 {
++    /// UX WP-6 bridge: the app's first-trade txs (lib/first-trade.ts) for `owner` / `portfolio`.
++    fn la_first_trade(&mut self, owner: &Keypair, portfolio: &Keypair, src: Pubkey, size: i128, real: bool) -> serde_json::Value {
++        let rent = self.env.svm.minimum_balance_for_rent_exemption(state::portfolio_account_len_for_market_slots(1).unwrap().max(9_600));
++        let mut j = serde_json::json!({
++            "programId": self.env.program_id.to_string(), "market": self.env.market.to_string(),
++            "owner": owner.pubkey().to_string(), "portfolio": portfolio.pubkey().to_string(),
++            "userAta": src.to_string(), "vaultToken": self.env.vault.to_string(), "depositAtoms": "1000000",
++            "lp": self.lp.to_string(), "matcherProg": self.matcher.to_string(), "matcherCtx": self.ctx.to_string(),
++            "matcherDelegate": self.delegate.to_string(), "lpB64": self.la_b64_of(&self.lp),
++            "marketB64": self.la_b64_of(&self.env.market), "size": size.to_string(), "limitPriceE6": (PRICE * 2).to_string(),
++            "rent": rent,
++        });
++        if real {
++            j["portfolioB64"] = serde_json::json!(self.la_b64_of(&portfolio.pubkey()));
++        }
++        la_app("first-trade", j)
++    }
++}
++
++/// UX WP-6 (audit §3.2): the first trade in ONE signature. The app builds tx A [CreateAccount,
++/// InitPortfolio] and tx B [Deposit, TradeCpi] BEFORE A lands (both signed together), B bound to
++/// the PREDICTED portfolio id read from the market bytes (asset 0 AssetOracleProfileV16
++/// .next_portfolio_id @480, what handle_init_portfolio allocates). A lands, then B, and the new
++/// account holds the position. Race: another wallet initialises in between; B is refused 16
++/// EngineProvenanceMismatch (the app's classifier says "race"), and B rebuilt with the REAL id lands.
++#[test]
++fn limits_app_first_trade_one_signature_and_race() {
++    let s = Keypair::new();
++    let (mut w, _) = P3::bound(&[(&s, 10_000_000)], 1_000_000, 1_000);
++    let size: i128 = 100_000;
++
++    // 1. The happy path: A then B, both built before A landed.
++    let u = Keypair::new();
++    w.env.ensure_signer_account(u.pubkey());
++    let src = w.token(u.pubkey(), 2_000_000);
++    let pf = Keypair::new();
++    let v = w.la_first_trade(&u, &pf, src, size, false);
++    println!("LIMITS-APP FIRST-TRADE: next {} predicted {}", v["next"], v["predicted"]);
++    let (a, b) = (la_ixs(&v["a"]), la_ixs(&v["b"]));
++    w.la_send(a, &[&u, &pf]).expect("A: create + InitPortfolio");
++    let (pid, seq, ep) = w.env.portfolio_identity(pf.pubkey());
++    assert_eq!(serde_json::json!(pid.to_string()), v["predicted"], "InitPortfolio assigned the predicted id");
++    assert_eq!((seq, ep), (0, 0), "a fresh portfolio: sequence 0, position epoch 0");
++    w.la_send(b, &[&u]).expect("B: Deposit + TradeCpi at the predicted id");
++    assert_eq!(w.pos(pf.pubkey()), size, "the first trade opened the position");
++    println!("LIMITS-APP FIRST-TRADE: id {pid}, position {}, capital {}", w.pos(pf.pubkey()), w.env.portfolio_state(pf.pubkey()).capital);
++
++    // 2. The race: another wallet initialises between the build and A.
++    let u2 = Keypair::new();
++    w.env.ensure_signer_account(u2.pubkey());
++    let src2 = w.token(u2.pubkey(), 2_000_000);
++    let pf2 = Keypair::new();
++    let v2 = w.la_first_trade(&u2, &pf2, src2, size, false);
++    let (a2, b2) = (la_ixs(&v2["a"]), la_ixs(&v2["b"]));
++    let _other = w.trader(1_000_000); // takes the predicted id
++    w.la_send(a2, &[&u2, &pf2]).expect("A2 lands with the next id");
++    let (pid2, _, _) = w.env.portfolio_identity(pf2.pubkey());
++    assert_ne!(serde_json::json!(pid2.to_string()), v2["predicted"], "vacuity: the id moved");
++    let e = w.la_send(b2, &[&u2]).unwrap_err();
++    assert!(e.contains("Custom(16)"), "B at the stale id is refused EngineProvenanceMismatch: {e}");
++    let cls = la_app("first-trade-classify", serde_json::json!({ "programId": w.env.program_id.to_string(), "market": w.env.market.to_string(), "error": e, "depositIndex": 2 }));
++    assert_eq!(cls["race"], serde_json::json!(true), "the app recognises the race: {cls}");
++    assert_eq!(cls["leg"], serde_json::json!("deposit"), "the refused leg is the deposit: {cls}");
++    let v3 = w.la_first_trade(&u2, &pf2, src2, size, true);
++    assert_eq!(v3["usedId"], serde_json::json!(pid2.to_string()));
++    w.la_send(la_ixs(&v3["b"]), &[&u2]).expect("B rebuilt with the real id lands (the one extra prompt)");
++    assert_eq!(w.pos(pf2.pubkey()), size);
++    conserved(&w, "first trade");
++}

@@ -48,7 +48,8 @@ describe("the create page does not claim a uniform fee", () => {
     // CONTROL. Removing the false half must not remove the true half — the
     // creator does need to know what their market will charge.
     expect(CONTROL_ROOM).toMatch(/Trading fee/);
-    expect(CONTROL_ROOM).toMatch(/\$\{tradingFeeBps\}\s*bps/);
+    // UX WP-10 (§5.1): the fee is shown as a percentage of the same value.
+    expect(CONTROL_ROOM).toMatch(/\$\{bpsPct\(tradingFeeBps\)\}/);
   });
 });
 

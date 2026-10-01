@@ -19,7 +19,7 @@ the seams are.
 | 1 | **The slab account** | the launch tx | existence, config, balances, LP caps | Solana |
 | 2 | **Supabase `markets`** | app `POST /api/markets` **and** indexer `syncMarkets()` | display metadata (symbol, name, logo, deployer) | Supabase |
 | 3 | **Supabase `market_stats`** | indexer | volume / trade count / last price only | Supabase |
-| 4 | **Blob `playground/registered-markets.json`** | app `POST /api/playground/keeper-register` | which markets the keeper is *told* to price | Vercel Blob |
+| 4 | **Blob `playground/registered-markets/v<seq>.json`** (immutable snapshots; the legacy `registered-markets.json` only seeds v1) | app `POST /api/playground/keeper-register` | which markets the keeper is *told* to price | Vercel Blob |
 | 5 | **Keeper `registry.json`** | keeper `register-poll` | which markets the keeper *actually* prices | oracle-keeper host |
 | 6 | **Two blocklists** | humans, by hand | which markets are retired | two repos |
 

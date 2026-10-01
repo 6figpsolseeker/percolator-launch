@@ -97,7 +97,7 @@ describe("parseMarketCreationError", () => {
     const longMsg = "x".repeat(300);
     const msg = parseMarketCreationError(new Error(longMsg));
     expect(msg.length).toBeLessThan(250);
-    expect(msg).toContain("...");
+    expect(msg).toBe("Something went wrong and nothing was sent."); // UX WP-1: raw text only in Details
   });
 
   it("handles non-Error objects", () => {
@@ -109,7 +109,8 @@ describe("parseMarketCreationError", () => {
     const msg = parseMarketCreationError(
       new Error("custom program error: 0xFF")
     );
-    expect(msg).toContain("code 255");
+    expect(msg).toBe("Something went wrong and nothing was sent.");
+    expect(msg).not.toMatch(/code 255|0xFF/);
   });
 
   // Anchored program-error routing — a successful Tokenkeg CPI in the logs

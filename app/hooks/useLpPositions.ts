@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
 import { bigintToFloat } from "@/lib/formatters";
 import { PublicKey, SystemProgram } from '@solana/web3.js';
 import { useWalletCompat, useConnectionCompat } from '@/hooks/useWalletCompat';
@@ -9,6 +10,7 @@ import { deriveDepositPda } from '@percolatorct/sdk';
 import { getConfig } from '@/lib/config';
 import { pollWhenVisible } from '@/lib/pollWhenVisible';
 import { getMultipleAccountsInfoChunked } from '@/lib/rpc-chunk';
+import { readPoolTotalLpSupply, stakeValueAtoms } from '@/lib/stake-position';
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -155,7 +157,7 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
       // (getConfig().vaultProgramId), NOT the SDK's default stake program id.
       const stakeProgramPk = new PublicKey(
         (getConfig() as { vaultProgramId?: string }).vaultProgramId
-        ?? 'GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3'
+        ?? DEVNET_PROGRAM_IDS.stake
       );
 
       // 2a. Batch-fetch LP + collateral mint accounts to read per-mint decimals (PERC-8197).
@@ -190,6 +192,10 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
           return null;
         }
       });
+      // Fresh pool + vault reads for the valuation (lib/stake-position.ts): the cached
+      // /api/stake/pools snapshot predates a first deposit and valued the stake at 0.
+      const poolBatchKeys = pools.map((p) => { try { return new PublicKey(p.poolAddress); } catch { return SystemProgram.programId; } });
+      const vaultAcctKeys = pools.map((p) => { try { return new PublicKey(p.vault); } catch { return SystemProgram.programId; } });
       const ataBatchKeys = userLpAtas.map((k) => k ?? SystemProgram.programId);
       const depositBatchKeys = depositPdas.map((k) => k ?? SystemProgram.programId);
 
@@ -199,12 +205,14 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
       const [lpMintInfos, collateralMintInfos, combinedAccountInfos, slotNow] = await Promise.all([
         getMultipleAccountsInfoChunked(connection, lpMintKeys),
         getMultipleAccountsInfoChunked(connection, collateralMintKeys),
-        getMultipleAccountsInfoChunked(connection, [...ataBatchKeys, ...depositBatchKeys]),
+        getMultipleAccountsInfoChunked(connection, [...ataBatchKeys, ...depositBatchKeys, ...poolBatchKeys, ...vaultAcctKeys]),
         connection.getSlot(),
       ]);
       if (stale()) return;
       const ataInfos = combinedAccountInfos.slice(0, pools.length);
-      const depositInfos = combinedAccountInfos.slice(pools.length);
+      const depositInfos = combinedAccountInfos.slice(pools.length, 2 * pools.length);
+      const poolInfos = combinedAccountInfos.slice(2 * pools.length, 3 * pools.length);
+      const vaultInfos = combinedAccountInfos.slice(3 * pools.length);
 
       const lpDecimalsByMint: Record<string, number> = {};
       for (let i = 0; i < pools.length; i++) {
@@ -262,11 +270,23 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
         // deliberate fallback here — this feeds a list row, and a missing position
         // reads better than a confident wrong one.
         const lpBalance = bigintToFloat(lpBalanceRaw, lpMintDecimals) ?? 0;
-        const totalLpSupply = pool.totalLpSupply;
-        const tvlRaw = BigInt(pool.tvlRaw);
+        // Prefer FRESH on-chain pool supply + vault balance over the cached API snapshot.
+        let totalLpSupply = pool.totalLpSupply;
+        let tvlRaw = BigInt(pool.tvlRaw);
+        try {
+          const poolInfo = poolInfos[i];
+          const vaultInfo = vaultInfos[i];
+          const chainSupply = poolInfo ? readPoolTotalLpSupply(poolInfo.data) : null;
+          if (chainSupply !== null && vaultInfo && vaultInfo.data.length >= 72) {
+            totalLpSupply = Number(chainSupply);
+            tvlRaw = new DataView(vaultInfo.data.buffer, vaultInfo.data.byteOffset, vaultInfo.data.byteLength).getBigUint64(64, true);
+          }
+        } catch {
+          // keep the API snapshot
+        }
 
         const redeemableRaw: bigint = totalLpSupply > 0
-          ? (lpBalanceRaw * tvlRaw) / BigInt(Math.round(totalLpSupply))
+          ? stakeValueAtoms(lpBalanceRaw, BigInt(Math.round(totalLpSupply)), tvlRaw) ?? 0n
           : 0n;
         // Redeemable value is in the pool's collateral token — look up actual decimals.
         const collateralDecimals = collateralDecimalsByMint[pool.collateralMint] ?? 6;

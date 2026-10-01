@@ -2,7 +2,8 @@
 
 import { FC, useMemo } from "react";
 import { BACKING_SEED_PCT_OF_LP } from "@/lib/market-params";
-import { DEFAULT_SLAB_SIZE } from "@/hooks/useCreateMarket";
+import { wizardSlabBytes } from "@/lib/create-market-args";
+import { p3WizardEnabled } from "@/lib/limits/flags";
 import { V17_PORTFOLIO_ACCOUNT_LEN, MATCHER_CONTEXT_LEN } from "@percolatorct/sdk";
 
 interface CostEstimateProps {
@@ -65,12 +66,14 @@ export interface CreateMarketSolCostBreakdown {
  * (they previously used two independently-hand-rolled formulas with different
  * TX_FEE_ESTIMATE_SOL constants on top of the missing LP-portfolio/matcher rent).
  */
-export function computeCreateMarketSolCost(): CreateMarketSolCostBreakdown {
-  // BUG 1 fix: the v17 slab account length is FIXED at v17MarketAccountLen(14)
-  // (DEFAULT_SLAB_SIZE) regardless of tier — InitMarket always encodes
-  // maxPortfolioAssets:14, so it always sizes/rents the slab the same way no matter
-  // which tier the user picks.
-  const dataSize = DEFAULT_SLAB_SIZE;
+export function computeCreateMarketSolCost(
+  opts: { p3?: boolean } = {},
+): CreateMarketSolCostBreakdown {
+  // BUG 1 fix: the v17 slab account length is fixed per market kind, never per tier.
+  // Legacy markets encode maxPortfolioAssets:14 (DEFAULT_SLAB_SIZE); P3 markets are
+  // single-asset (tag 94 refuses anything but one slot), so they encode 1 and the
+  // slab is v17MarketAccountLen(1). wizardSlabBytes is the same helper create() uses.
+  const dataSize = wizardSlabBytes(opts.p3 === true);
 
   // Rent-exempt minimum for the slab account
   const slabRentSol = Math.ceil((dataSize + RENT_OVERHEAD_BYTES) * RENT_PER_BYTE) / LAMPORTS_PER_SOL;
@@ -113,7 +116,7 @@ export const CostEstimate: FC<CostEstimateProps> = ({
   className = "",
 }) => {
   const estimate = useMemo(() => {
-    const sol = computeCreateMarketSolCost();
+    const sol = computeCreateMarketSolCost({ p3: p3WizardEnabled() });
 
     // Token costs.
     // W11 fix (2026-07-08): useCreateMarket.ts no longer transfers a 500-token vault
@@ -148,7 +151,7 @@ export const CostEstimate: FC<CostEstimateProps> = ({
       backingTokens,
       totalTokens,
       tokenUsdValue,
-      dataSize: DEFAULT_SLAB_SIZE,
+      dataSize: wizardSlabBytes(p3WizardEnabled()),
       tokenDecimals,
     };
   }, [lpCollateral, insuranceAmount, tokenPriceUsd, tokenDecimals]);
@@ -167,7 +170,7 @@ export const CostEstimate: FC<CostEstimateProps> = ({
           {/* v17 slabs are always sized to max capacity — there is no tier to
               display here (see DEFAULT_SLAB_SIZE doc comment above). */}
           <span className="text-[var(--text-secondary)]">
-            Slab account rent (max capacity)
+            Market account rent (max capacity)
           </span>
           <span className="font-mono text-[var(--text)]">{estimate.slabRentSol} SOL</span>
         </div>
@@ -176,7 +179,7 @@ export const CostEstimate: FC<CostEstimateProps> = ({
           <span className="font-mono text-[var(--text)]">{estimate.tokenAccountRentSol} SOL</span>
         </div>
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-[var(--text-secondary)]">LP portfolio & matcher ctx</span>
+          <span className="text-[var(--text-secondary)]">Liquidity account rent</span>
           <span className="font-mono text-[var(--text)]">{estimate.lpPortfolioMatcherRentSol} SOL</span>
         </div>
         <div className="flex items-center justify-between text-[11px]">
@@ -198,7 +201,7 @@ export const CostEstimate: FC<CostEstimateProps> = ({
       {/* Token Costs */}
       <div className="px-4 py-3 space-y-2">
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-[var(--text-secondary)]">LP Collateral</span>
+          <span className="text-[var(--text-secondary)]">Starting liquidity</span>
           <span className="font-mono text-[var(--text)]">
             {estimate.lpTokens > 0 ? estimate.lpTokens.toLocaleString() : "—"} Sim-USDC
           </span>

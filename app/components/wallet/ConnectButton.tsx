@@ -1,6 +1,7 @@
 "use client";
 
 import { FC, useCallback, useMemo, useState, useRef, useEffect } from "react";
+import { useToast } from "@/hooks/useToast";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -72,6 +73,10 @@ const ConnectButtonAdapterInner: FC = () => {
   const { wallets, wallet, select, connect, disconnect, connected, publicKey, connecting } =
     useWallet();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { toast } = useToast();
+  const setConnectError = useCallback((m: string | null) => {
+    if (m) toast(m, "error");
+  }, [toast]);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const displayAddress = useMemo(() => {
@@ -112,12 +117,14 @@ const ConnectButtonAdapterInner: FC = () => {
       // Small tick to let select() propagate before connect()
       await Promise.resolve();
       try {
+        setConnectError(null);
         await connect();
-      } catch {
-        // Wallet rejected or not installed — user can retry
+      } catch (e) {
+        // UX WP-10 (CN-1): never swallowed. A cancel is quiet; anything else gets one plain line.
+        setConnectError(connectErrorLine(e, walletName));
       }
     },
-    [select, connect],
+    [select, connect, setConnectError],
   );
 
   if (connecting) {
@@ -136,6 +143,8 @@ const ConnectButtonAdapterInner: FC = () => {
       <div className="relative" ref={menuRef}>
         <button
           onClick={() => setMenuOpen((v) => !v)}
+          data-testid="wallet-connect"
+          data-state="connected"
           className="min-h-10 max-w-[10rem] truncate rounded-sm border border-[var(--accent)]/30 bg-[var(--accent)]/[0.06] px-4 text-[13px] font-medium text-[var(--accent)] transition-all duration-200 hover:bg-[var(--accent)]/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           aria-label={`Wallet: ${displayAddress}`}
         >
@@ -196,6 +205,8 @@ const ConnectButtonAdapterInner: FC = () => {
     return (
       <button
         onClick={() => void handleConnect(readyWallets[0].adapter.name)}
+        data-testid="wallet-connect"
+        data-state="disconnected"
         className="min-h-10 rounded-sm border border-[var(--accent)] bg-[var(--accent)]/20 px-4 text-[13px] font-medium text-[var(--text)] transition-all hover:bg-[var(--accent)]/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
       >
         Connect {readyWallets[0].adapter.name}
@@ -208,6 +219,8 @@ const ConnectButtonAdapterInner: FC = () => {
     <div className="relative" ref={menuRef}>
       <button
         onClick={() => setMenuOpen((v) => !v)}
+        data-testid="wallet-connect"
+        data-state="disconnected"
         className="min-h-10 rounded-sm border border-[var(--accent)] bg-[var(--accent)]/20 px-4 text-[13px] font-medium text-[var(--text)] transition-all hover:bg-[var(--accent)]/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
       >
         Connect Wallet
@@ -232,3 +245,15 @@ const ConnectButtonAdapterInner: FC = () => {
     </div>
   );
 };
+
+/**
+ * UX WP-10 (audit CN-1): one plain line for a failed connect (never swallowed). A cancel in the
+ * wallet is quiet (null): the user just tries again.
+ */
+export function connectErrorLine(e: unknown, walletName: string): string | null {
+  const msg = e instanceof Error ? `${e.name} ${e.message}` : String(e);
+  if (/reject|cancel|declin|closed/i.test(msg)) return null;
+  if (/not ?installed|not found|NotReady/i.test(msg)) return `${walletName} isn't installed in this browser. Install it, then connect again.`;
+  if (/locked|unlock/i.test(msg)) return `Unlock ${walletName} and try again.`;
+  return `Couldn't connect to ${walletName}. Try again.`;
+}

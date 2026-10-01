@@ -13,22 +13,14 @@
  * (lib/priceStore/*) needs to change if this is later pointed at the real
  * backend instead.
  *
- * HYBRID price source (2026-07-10):
- *   - Pyth Hermes SSE stream for the 4 majors that HAVE a Pyth feed (SOL,
- *     JUP, TRUMP, PENGU) — continuous ~2-3 updates/sec, like Hyperliquid's
- *     index price. A single mainnet DEX pool's spot only moves on swaps
- *     (measured: majors sat FROZEN at 1 distinct price for 19s under
- *     DEX-only polling), so Pyth is the right source for anything that has
- *     a feed.
- *   - Mainnet DEX-pool polling (via `../lib/priceStore/dexPoolReader.ts`,
- *     a cited, function-for-function port of `~/percolator-oracle-keeper/
- *     src/cross-cluster/price-reader.ts`'s `readPoolPriceE6`) for the 2
- *     pump.fun coins with NO Pyth feed (BURNIE, Percolator). These are
- *     WSOL-quoted PumpSwap pools, so their USD conversion uses the
- *     latest Pyth SOL/USD price captured from the stream above (falling
- *     back to a one-off DEX read of the SOL pool if Pyth SOL hasn't
- *     arrived yet) — no separate continuous SOL poll needed, which keeps
- *     Helius RPC load to just these 2 pools most cycles.
+ * Price source (2026-10-01, no Pyth):
+ *   - Mainnet DEX-pool polling (via `../lib/priceStore/dexPoolReader.ts`, a cited,
+ *     function-for-function port of `~/percolator-oracle-keeper/src/cross-cluster/
+ *     price-reader.ts`'s `readPoolPriceE6`) for every market registered for the keeper.
+ *   - SOL/USD (the USD conversion of the WSOL-quoted pools) from Jupiter's Price API
+ *     (lib/jupiter-price.ts), refreshed every SOL_REFRESH_MS; when Jupiter is unreachable or its
+ *     value is stale, a one-off DEX read of the SOL/USDC pool instead. The Pyth Hermes stream
+ *     this used before is gone: the playground does not use Pyth.
  *
  * Market list mirrors `app/PLAYGROUND.md`'s "Live markets" table
  * (2026-07-10 born-immortal re-seed).
@@ -49,12 +41,14 @@
  * Optional env:
  *   PRICE_WS_PORT     (default 8787)
  *   PRICE_WS_POLL_MS  (default 500 — DEX-poll interval for the 2 pump.fun markets)
- *   HERMES_BASE       (default https://hermes.pyth.network)
+ *   PRICE_WS_SOL_MS   (default 5000 — Jupiter SOL/USD refresh interval)
  */
 import { Connection, PublicKey } from "@solana/web3.js";
 import { detectDexType } from "@percolatorct/sdk";
 import { WebSocketServer, WebSocket } from "ws";
 import { readPoolPriceE6, type DecimalsCache, type PoolReadEntry } from "../lib/priceStore/dexPoolReader";
+import { fetchJupiterSolUsdE6 } from "../lib/jupiter-price";
+import { pickSolUsdE6 } from "../lib/priceStore/solUsd";
 import { isBlockedSlab } from "../lib/blocklist";
 
 // Railway (and most PaaS) inject PORT and route the public domain to it, so
@@ -64,7 +58,8 @@ const PORT = Number(process.env.PORT ?? process.env.PRICE_WS_PORT ?? 8787);
 // their pool's spot only moves on swaps, so this is a "check for a new
 // swap" cadence, not a continuous tick like Pyth.
 const POLL_INTERVAL_MS = Number(process.env.PRICE_WS_POLL_MS ?? 500);
-const HERMES_BASE = process.env.HERMES_BASE ?? "https://hermes.pyth.network";
+/** Jupiter SOL/USD refresh interval (an HTTP call, no RPC). */
+const SOL_REFRESH_MS = Number(process.env.PRICE_WS_SOL_MS ?? 5000);
 // Shared with the cross-cluster keeper (~/percolator-oracle-keeper/.env) —
 // same Helius mainnet key. Only used for the 2 pump.fun DEX polls (+ an
 // occasional one-off SOL-pool fallback read), so load is far lower than a
@@ -88,25 +83,7 @@ if (!MAINNET_RPC_URL) {
   );
 }
 
-// ── Pyth Hermes: the 4 majors that have a feed ──────────────────────────────
-
-/** Pyth mainnet crypto price-feed IDs, keyed by the CURRENT devnet slab. */
-const PYTH_FEED: Record<string, string> = {
-  "AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", // SOL (v18 GnwdeQr fresh)
-  "HvCDVSx5gStg1WAxBAaXwpouLyTvAHCyBPHJHh3RfVJg": "0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996", // JUP (v18 fresh)
-  "CdN8r7FBYBvCGAS75TKAK5UCzY9Zv9P4HaGHuTJ3VXNg": "879551021853eec7a7dc827578e8e69da7e4fa8148339aa0d3d5296405be4b1a", // TRUMP (v18 fresh)
-  "ENdXK8k6iiWCAx4Z9XfoKLg9oXsEbPL4hEtmEmUqozDZ": "bed3097008b9b5e3c93bec20be79cb43986b85a996475589351a21e67bae9b61", // PENGU (v18 fresh)
-};
-const idToSlab = new Map(Object.entries(PYTH_FEED).map(([slab, id]) => [id.toLowerCase(), slab]));
-const PYTH_LABELS: Record<string, string> = {
-  "AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr": "SOL/USDC",
-  "HvCDVSx5gStg1WAxBAaXwpouLyTvAHCyBPHJHh3RfVJg": "JUP/USDC",
-  "CdN8r7FBYBvCGAS75TKAK5UCzY9Zv9P4HaGHuTJ3VXNg": "TRUMP/USDC",
-  "ENdXK8k6iiWCAx4Z9XfoKLg9oXsEbPL4hEtmEmUqozDZ": "PENGU/USDC",
-};
-const SOL_SLAB = "AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr";
-
-// ── DEX poll: the 2 pump.fun markets with no Pyth feed ──────────────────────
+// ── DEX poll: every keeper-registered market ───────────────────────────────
 
 interface DexMarketEntry extends PoolReadEntry {
   slab: string;
@@ -123,10 +100,11 @@ interface DexMarketEntry extends PoolReadEntry {
  * deployed had no live price at all and only moved when the page re-read
  * on-chain — indistinguishable from a broken price feed.
  */
-const SEED_DEX_MARKETS: DexMarketEntry[] = [
-  { slab: "BeumQKPdWHTBewYnbGDbcUed5EPvr39covYtPPqJkYGV", poolAddress: "5tYFviFWQRKV9BJSTHGitbdqEYC1BGUgRUDnSADUXqJP", dexType: "pumpswap", label: "BURNIE/WSOL" },
-  { slab: "BbuB3mb5DkFmJLfoaumkbM6eEv3wZDjz9YZokhEgVJv3", poolAddress: "Ebs3mXAzqZfzHfsdinTNw7gPy4uNyEAywcCiJxzLRrBW", dexType: "pumpswap", label: "PERC/WSOL" },
-];
+// RELAUNCH (2026-10-01): EMPTY. Both pinned pump.fun slabs were on the abandoned
+// GnwdeQr… wrapper, so polling them cost two mainnet pool reads (three RPC calls each)
+// every cycle for markets no client can list. Relaunch markets come from the database
+// (refreshDbMarkets) as soon as they register.
+const SEED_DEX_MARKETS: DexMarketEntry[] = [];
 
 /**
  * Live DEX market list = the seed above plus every `keeper_status='active'`
@@ -191,7 +169,6 @@ async function refreshDbMarkets(): Promise<void> {
     const discovered: DexMarketEntry[] = [];
     for (const r of rows) {
       if (seeded.has(r.slab_address)) continue;      // already pinned above
-      if (PYTH_FEED[r.slab_address]) continue;        // streamed off Pyth instead
       const dexType = dexTypeByPool.get(r.dex_pool_address);
       if (!dexType) continue;                         // unclassifiable — never guess
       discovered.push({
@@ -214,7 +191,7 @@ async function refreshDbMarkets(): Promise<void> {
     // live (2026-07-31 audit).
     const liveSlabs = new Set(next.map((m) => m.slab));
     for (const slab of lastPriceE6.keys()) {
-      if (!liveSlabs.has(slab) && !PYTH_FEED[slab]) {
+      if (!liveSlabs.has(slab)) {
         lastPriceE6.delete(slab);
         console.log(`[local-price-ws] evicted cached price for removed market ${slab.slice(0, 8)}…`);
       }
@@ -228,7 +205,7 @@ async function refreshDbMarkets(): Promise<void> {
   }
 }
 
-/** Fallback SOL/USDC raydium-clmm pool, used only if Pyth SOL hasn't arrived yet. */
+/** SOL/USDC raydium-clmm pool, read only when Jupiter's SOL/USD is missing or stale. */
 const SOL_FALLBACK_ENTRY: PoolReadEntry = {
   poolAddress: "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj",
   dexType: "raydium-clmm",
@@ -238,8 +215,8 @@ const SOL_FALLBACK_ENTRY: PoolReadEntry = {
 const mainnetConn = new Connection(MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com", "confirmed");
 const decimalsCache: DecimalsCache = new Map();
 
-/** Latest SOL/USD price (e6) captured from the Pyth stream — feeds the 2 WSOL-quoted PumpSwap markets' USD conversion. */
-let latestSolPriceE6: bigint | undefined;
+/** Latest SOL/USD (e6) from Jupiter and when it arrived: the WSOL-quoted pools' USD conversion. */
+let jupiterSol: { e6: bigint; at: number } | null = null;
 
 const lastPriceE6 = new Map<string, bigint>();
 
@@ -302,63 +279,20 @@ wss.on("connection", (ws) => {
   });
 });
 
-// ── Pyth Hermes stream (4 majors) ───────────────────────────────────────────
+// ── SOL/USD from Jupiter ────────────────────────────────────────────────────
 
-type ParsedPrice = { id: string; price: { price: string; expo: number } };
-function applyParsed(parsed: ParsedPrice[]): void {
-  for (const item of parsed) {
-    const slab = idToSlab.get(String(item.id).toLowerCase().replace(/^0x/, ""));
-    if (!slab) continue;
-    const priceUsd = Number(item.price.price) * Math.pow(10, item.price.expo);
-    if (!(priceUsd > 0)) continue;
-    const priceE6 = BigInt(Math.round(priceUsd * 1_000_000));
-    lastPriceE6.set(slab, priceE6);
-    broadcast(slab, priceE6);
-    if (slab === SOL_SLAB) latestSolPriceE6 = priceE6;
-  }
-}
-
-// Live SSE stream from Pyth Hermes: every feed update is pushed the instant Pyth
-// publishes (~2-3×/sec) — continuous ticking, like Hyperliquid's index price.
-// Auto-reconnects.
-async function streamPrices(): Promise<void> {
-  const qs = Object.values(PYTH_FEED).map((id) => `ids[]=0x${id}`).join("&");
-  const url = `${HERMES_BASE}/v2/updates/price/stream?${qs}&parsed=true`;
+async function solLoop(): Promise<void> {
   for (;;) {
-    try {
-      const res = await fetch(url, { headers: { Accept: "text/event-stream" } });
-      if (!res.ok || !res.body) throw new Error(`hermes stream HTTP ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const evt = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const dataLine = evt.split("\n").find((l) => l.startsWith("data:"));
-          if (!dataLine) continue;
-          const json = dataLine.slice(5).trim();
-          if (!json || json === "[DONE]") continue;
-          try {
-            const body = JSON.parse(json) as { parsed?: ParsedPrice[] };
-            if (body.parsed) applyParsed(body.parsed);
-          } catch {
-            /* skip malformed event */
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("[local-price-ws] hermes stream error, reconnecting —", err instanceof Error ? err.message : err);
+    // Idle feed (no markets): no call at all.
+    if (dexMarkets.length > 0) {
+      const e6 = await fetchJupiterSolUsdE6();
+      if (e6 !== null) jupiterSol = { e6, at: Date.now() };
     }
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    await new Promise((r) => setTimeout(r, SOL_REFRESH_MS));
   }
 }
 
-// ── DEX poll (2 pump.fun markets) ───────────────────────────────────────────
+// ── DEX poll ────────────────────────────────────────────────────────────────
 
 // Low-volume skip logging: warn at most once per market per this many
 // consecutive skips, so a persistently-thin/un-seeded pool doesn't spam
@@ -380,26 +314,27 @@ function logSkip(label: string, key: string, reason: string | undefined): void {
  * hiccup, transient 429, etc.) never kills the loop or blocks the other
  * market.
  *
- * The seeded entries are WSOL-quoted PumpSwap pools, so they need a
- * SOL/USD price to convert to USD — prefer the latest value captured off
- * the (continuous, more accurate) Pyth stream; only fall back to a one-off
- * DEX read of the SOL pool if Pyth SOL hasn't arrived yet (e.g. right at
- * startup, before the first stream event lands).
+ * WSOL-quoted pools need a SOL/USD price to convert to USD: Jupiter's (fresh), else a one-off
+ * DEX read of the SOL/USDC pool (lib/priceStore/solUsd.ts pickSolUsdE6).
  */
 async function pollOnce(): Promise<void> {
-  let solPriceE6 = latestSolPriceE6;
-  if (solPriceE6 === undefined) {
-    try {
-      const solResult = await readPoolPriceE6(mainnetConn, SOL_FALLBACK_ENTRY, decimalsCache);
-      if (!solResult.skipped) {
-        solPriceE6 = solResult.priceE6;
-      } else {
+  // Nothing to poll: skip the SOL read as well (an idle feed spends no RPC).
+  if (dexMarkets.length === 0) return;
+  const solPriceE6 = await pickSolUsdE6({
+    jupiter: jupiterSol,
+    now: Date.now(),
+    maxAgeMs: Math.max(30_000, SOL_REFRESH_MS * 6),
+    dexRead: async () => {
+      try {
+        const solResult = await readPoolPriceE6(mainnetConn, SOL_FALLBACK_ENTRY, decimalsCache);
+        if (!solResult.skipped) return solResult.priceE6;
         logSkip(SOL_FALLBACK_ENTRY.label, "sol-fallback", solResult.skipReason);
+      } catch (err) {
+        console.warn("[local-price-ws] SOL fallback read error:", err instanceof Error ? err.message : err);
       }
-    } catch (err) {
-      console.warn("[local-price-ws] SOL fallback read error:", err instanceof Error ? err.message : err);
-    }
-  }
+      return undefined;
+    },
+  });
 
   await Promise.all(
     dexMarkets.map(async (entry) => {
@@ -427,11 +362,8 @@ async function pollLoop(): Promise<void> {
 }
 
 console.log(
-  `[local-price-ws] listening on ws://localhost:${PORT} — hybrid: Pyth Hermes (SSE, ~2-3/s) for 4 majors + DEX poll (${POLL_INTERVAL_MS}ms) for 2 pump.fun markets`,
+  `[local-price-ws] listening on ws://localhost:${PORT} — DEX poll (${POLL_INTERVAL_MS}ms) for ${SEED_DEX_MARKETS.length} pinned + database-registered markets; SOL/USD from Jupiter every ${SOL_REFRESH_MS}ms (DEX fallback)`,
 );
-for (const slab of Object.keys(PYTH_FEED)) {
-  console.log(`  ${(PYTH_LABELS[slab] ?? "?").padEnd(11)} slab=${slab.slice(0, 8)}…  pyth=${PYTH_FEED[slab].slice(0, 8)}…`);
-}
 for (const m of SEED_DEX_MARKETS) {
   console.log(`  ${m.label.padEnd(11)} slab=${m.slab.slice(0, 8)}…  pool=${m.poolAddress.slice(0, 8)}… (${m.dexType})`);
 }
@@ -443,7 +375,7 @@ void (async () => {
   setInterval(() => { void refreshDbMarkets(); }, DB_REFRESH_MS);
 })();
 
-void streamPrices();
+void solLoop();
 void pollLoop();
 
 process.on("SIGINT", () => {

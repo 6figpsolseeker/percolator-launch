@@ -5,23 +5,33 @@ import {
   isOracleStaleError,
   withTransientRetry,
 } from "@/lib/errorMessages";
+import { resolveDevnetProgramIds } from "@/lib/program-ids";
+
+// error-codes-4b1a5d30.md: a Custom(n) is decoded as a WRAPPER code only when the wrapper raised
+// it, so wrapper-code inputs carry the wrapper's failing-program log line (as real errors do).
+const W_ID = resolveDevnetProgramIds().wrapper;
+const byWrapper = (code: number, s: string) => `${s}\nProgram ${W_ID} failed: custom program error: 0x${code.toString(16)}`;
 
 describe("humanizeError", () => {
+  it("an UNATTRIBUTED Custom(n) is not read as a wrapper code (error-codes-4b1a5d30.md)", () => {
+    expect(humanizeError('{"InstructionError":[4,{"Custom":49}]}')).not.toContain("Insufficient margin");
+  });
+
   it("maps known Custom(N) error codes", () => {
-    expect(humanizeError('{"InstructionError":[4,{"Custom":49}]}')).toContain(
+    expect(humanizeError(byWrapper(49, '{"InstructionError":[4,{"Custom":49}]}'))).toContain(
       "Insufficient margin"
     );
   });
 
   it("maps hex error codes", () => {
     // 0x31 = 49 decimal = Insufficient margin
-    expect(humanizeError("custom program error: 0x31")).toContain(
+    expect(humanizeError(byWrapper(49, "custom program error: 0x31"))).toContain(
       "Insufficient margin"
     );
   });
 
   it("provides instruction hint when available", () => {
-    const msg = '{"InstructionError":[4,{"Custom":49}]}';
+    const msg = byWrapper(49, '{"InstructionError":[4,{"Custom":49}]}');
     // Custom(49) = Insufficient margin; humanizeError returns the mapped message directly
     expect(humanizeError(msg)).toContain("Insufficient margin");
   });
@@ -47,15 +57,18 @@ describe("humanizeError", () => {
   });
 
   it("handles timeout", () => {
-    expect(humanizeError("Transaction timeout")).toContain("timed out");
+    // UX WP-10 (§5.3): "Still confirming…", never "check your wallet".
+    expect(humanizeError("Transaction timeout")).toBe("Still confirming. We'll update this when it lands.");
   });
 
   it("handles unknown Custom() codes", () => {
-    expect(humanizeError("Custom(999)")).toContain("Custom(999)");
+    // UX WP-10 (§5.1): an unknown code is never shown raw, but it is named (2026-10-01: never
+    // hide a cause behind "Something went wrong").
+    expect(humanizeError("Custom(999)")).toBe("Solana didn't accept this (error 999), so nothing changed.");
   });
 
   it("handles unknown custom program error", () => {
-    expect(humanizeError("custom program error: 0xff")).toContain("Program error");
+    expect(humanizeError("custom program error: 0xff")).toBe("Solana didn't accept this (error 255), so nothing changed.");
   });
 
   it("trims long unknown messages", () => {
@@ -65,23 +78,23 @@ describe("humanizeError", () => {
   });
 
   it("maps oracle stale error (code 27)", () => {
-    expect(humanizeError('Custom(27)')).toContain("Oracle price is stale");
+    expect(humanizeError(byWrapper(27, 'Custom(27)'))).toContain("Oracle price is stale");
   });
 
   it("maps market paused error (code 32)", () => {
-    expect(humanizeError('Custom(32)')).toContain("paused");
+    expect(humanizeError(byWrapper(32, 'Custom(32)'))).toContain("paused");
   });
 
   it("maps invalid or unsupported instruction error (code 9)", () => {
-    expect(humanizeError('Custom(9)')).toContain("matcher config may be misaligned");
+    expect(humanizeError(byWrapper(9, 'Custom(9)'))).toContain("matcher config may be misaligned");
   });
 
   it("maps insurance errors (code 47)", () => {
-    expect(humanizeError('Custom(47)')).toContain("Insurance");
+    expect(humanizeError(byWrapper(47, 'Custom(47)'))).toContain("Insurance");
   });
 
   it("maps JSON Custom format", () => {
-    expect(humanizeError('"Custom":11')).toContain("Invalid token");
+    expect(humanizeError(byWrapper(11, '"Custom":11'))).toContain("Invalid token");
   });
 });
 

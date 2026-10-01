@@ -12,7 +12,7 @@
  *    lets auto-advance fire).
  *  - race: DexScreener lands, the wizard auto-advances, then resolve lands.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { SystemProgram } from "@solana/web3.js";
 
@@ -21,7 +21,7 @@ const POOL = "HC7ArykAUSamJSAJ1aYLrS8aAamvBb1JvqMf1woUtnKo";
 
 const RESOLVE_BODY = {
   feedId: null, symbol: "e/acc", price: 0.0124, source: "dexscreener",
-  dexPoolAddress: POOL, dexType: "meteora", oracleMode: "hyperp", cached: true,
+  dexPoolAddress: POOL, dexType: "meteora-dlmm", oracleMode: "hyperp", cached: true,
 };
 const DEXSCREENER_BODY = {
   schemaVersion: "1.0.0",
@@ -48,7 +48,7 @@ const fetchLog: string[] = [];
 const json = (b: unknown, status = 200) =>
   new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
 
-globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input instanceof Request ? input.url : input);
   fetchLog.push(url);
   if (url.startsWith("https://api.dexscreener.com/latest/dex/tokens/")) {
@@ -59,6 +59,11 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     await gateResolve.p;
     const g = globalThis as { __resolveReply?: () => Response };
     return g.__resolveReply ? g.__resolveReply() : json(RESOLVE_BODY);
+  }
+  // E2E B21: the pool search classifies candidates by mainnet owner; this pool is DLMM.
+  if (url === "/api/dex/classify-pools") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { addresses?: string[] };
+    return json({ classes: Object.fromEntries((body.addresses ?? []).map((a) => [a, "meteora-dlmm"])) });
   }
   return json({ error: "not mocked" }, 404);
 }) as typeof fetch;
@@ -80,7 +85,11 @@ const connection = {
   getAccountInfo: async () => null,
 };
 vi.mock("@/hooks/useWalletCompat", () => ({
-  useWalletCompat: () => ({ publicKey: SystemProgram.programId, connected: true }),
+  // `__noWallet` models a visitor who has not connected (the wallet gate on leaving step 1).
+  useWalletCompat: () =>
+    (globalThis as { __noWallet?: boolean }).__noWallet
+      ? { publicKey: null, connected: false }
+      : { publicKey: SystemProgram.programId, connected: true },
   useConnectionCompat: () => ({ connection }),
 }));
 
@@ -231,7 +240,7 @@ describe("oracle resolve lands after the advance: edge cases", () => {
     gateResolve.release(); await flush();
     const s = snapshot("failed");
     expect(s.disabled).toBe(true);
-    expect(s.ariaLabel).toMatch(/no supported DEX pool/);
+    expect(s.ariaLabel).toMatch(/pool type we can't price yet/);
     await pressLaunch();
     expect(create).not.toHaveBeenCalled();
   });
@@ -242,7 +251,7 @@ describe("oracle resolve lands after the advance: edge cases", () => {
     gateResolve.release(); await flush();
     const s = snapshot("no pool");
     expect(s.disabled).toBe(true);
-    expect(s.ariaLabel).toMatch(/no supported DEX pool/);
+    expect(s.ariaLabel).toMatch(/pool type we can't price yet/);
     await pressLaunch();
     expect(create).not.toHaveBeenCalled();
   });
@@ -269,13 +278,13 @@ describe("oracle resolve lands after the advance: edge cases", () => {
     expect(create).toHaveBeenCalledTimes(1);
     createState = { ...IDLE, step: 1, error: "Block height exceeded", slabAddress: SystemProgram.programId.toBase58() };
     view.rerender(<CreateMarketWizard />); await flush();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /retry step 2/i })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Continue$/i })); });
     await flush();
     expect(create).toHaveBeenCalledTimes(2);
     for (const [p] of create.mock.calls) {
       expect(p.oracleMode).toBe("keeper");
       expect(p.dexPoolAddress).toBe(POOL);
-      expect(p.dexType).toBe("meteora");
+      expect(p.dexType).toBe("meteora-dlmm");
     }
   });
 
@@ -294,7 +303,7 @@ describe("oracle resolve lands after the advance: edge cases", () => {
     const p = create.mock.calls[0]?.[0];
     expect(p?.oracleMode).toBe("keeper");
     expect(p?.dexPoolAddress).toBe(POOL);
-    expect(p?.dexType).toBe("meteora");
+    expect(p?.dexType).toBe("meteora-dlmm");
   });
 
   it("a failed token-meta fetch in useQuickLaunch shows the error, not a permanent 'Resolving'", async () => {
@@ -327,16 +336,52 @@ describe("oracle resolve lands after the advance: edge cases", () => {
     expect(p?.dexPoolAddress).toBe(POOL);
   });
 
-  it("mainnet: a Pyth feed that lands after the advance replaces the admin placeholder", async () => {
+  it("no Pyth (2026-10-01): a stray feed id that lands after the advance is NOT adopted", async () => {
     g.__network = "mainnet";
     const FEED = "ab".repeat(32);
     g.__resolveReply = () => json({ ...RESOLVE_BODY, feedId: FEED, dexPoolAddress: null, oracleMode: "pyth" });
     await advanceWithResolvePending();
     gateResolve.release(); await flush();
-    const s = snapshot("mainnet pyth");
-    // The wizard now holds the feed, not "Admin Oracle". (The button itself
-    // stays blocked here on the mocked zero token balance, unrelated.)
-    expect(s.priceFeed).toBe(`${FEED.slice(0, 12)}...`);
+    const s = snapshot("mainnet stray feed");
+    // The wizard never takes a Pyth feed any more (the resolver no longer returns one; a stray
+    // id is ignored): with no DEX pool it stays on the admin placeholder.
+    expect(s.priceFeed).not.toBe(`${FEED.slice(0, 12)}...`);
     expect(s.ariaLabel).not.toBe("Resolving price feed");
+  });
+});
+
+// Live report 2026-10-01: with no wallet a user could paste a CA and Continue to the final step.
+describe("leaving step 1 needs a connected wallet", () => {
+  const g = globalThis as { __gateMeta?: ReturnType<typeof deferred>; __noWallet?: boolean };
+  beforeEach(() => {
+    create.mockReset(); localStorage.clear(); sessionStorage.clear();
+    fetchLog.length = 0; gateResolve = deferred(); gateDex = deferred();
+    createState = IDLE;
+    (window.matchMedia as unknown as ReturnType<typeof vi.fn>).mockImplementation((q: string) => ({
+      matches: q.includes("reduce"), media: q, addListener() {}, removeListener() {},
+      addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false, onchange: null,
+    }));
+  });
+  afterEach(() => { delete g.__noWallet; });
+
+  it("no wallet: the token resolves but the wizard stays on step 1 with a connect CTA, then advances once connected", async () => {
+    g.__noWallet = true;
+    g.__gateMeta = deferred();
+    const view = render(<CreateMarketWizard />);
+    fireEvent.change(screen.getByPlaceholderText("Paste mint address..."), { target: { value: MINT } });
+    await act(async () => { await new Promise((r) => setTimeout(r, 450)); });
+    g.__gateMeta.release(); await flush();
+    gateResolve.release(); await flush();
+    gateDex.release(); await flush();
+    // Every gate that used to auto-advance has settled: still step 1, no Continue, the CTA instead.
+    expect(onStep2()).toBe(false);
+    expect(screen.queryByTestId("wizard-next")).toBeNull();
+    expect(screen.getByTestId("wizard-connect-wallet")).toBeTruthy();
+
+    // The user connects: the one-shot auto-advance fires now.
+    g.__noWallet = false;
+    view.rerender(<CreateMarketWizard />); await flush();
+    await waitFor(() => expect(onStep2()).toBe(true));
+    expect(screen.queryByTestId("wizard-connect-wallet")).toBeNull();
   });
 });

@@ -1,63 +1,50 @@
-import { type NextRequest, NextResponse } from "next/server";
-import { proxyToApi } from "@/lib/api-proxy";
+import { NextResponse } from "next/server";
 import { validateSlabParam } from "@/lib/route-validators";
-import { BLOCKED_SLAB_ADDRESSES } from "@/lib/blocklist";
+import { isBlockedSlab } from "@/lib/blocklist";
+import { readCurrentWrapperSlab } from "@/lib/current-wrapper-slab";
+import { readV17MaxAbsFunding } from "@/lib/v17-engine-config";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Blocked slab set: hardcoded list + env var runtime overrides.
- * Mirrors the guard in /api/markets/route.ts.
- */
-const BLOCKED_MARKET_ADDRESSES: ReadonlySet<string> = new Set([
-  ...BLOCKED_SLAB_ADDRESSES,
-  ...(process.env.BLOCKED_MARKET_ADDRESSES ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean),
-]);
-
-/**
- * GET /api/funding/[slab]
+ * GET /api/funding/[slab] — the current funding rate (FundingRateCard).
  *
- * Proxies to percolator-api GET /funding/:slab
- * Removed standalone Supabase impl (GH#1066 — arch cleanup).
+ * Was a proxy to percolator-api (retired: "Application not found"). Now read from the slab:
+ * a market whose `max_abs_funding_e9_per_slot` is 0 has funding structurally OFF (the engine
+ * clamps the applied rate to exactly 0 on every crank; every wizard market is created this way,
+ * lib/create-market-args.ts), so its current rate IS 0 — answered exactly. A market with funding
+ * on: the per-asset applied rate is not decoded by this app yet, so the route says so (404) and
+ * the card keeps its own on-chain fallback rather than showing an invented 0.
  *
- * GH#1357: Return 404 for blocklisted slabs instead of proxying to
- * backend which returns 500 for invalid/corrupt slab addresses.
- * 
- * MEDIUM-003: Added slab parameter validation to prevent injection attacks.
+ * Response (the shape the card maps): { currentRateBpsPerSlot, hourlyRatePercent,
+ * annualizedPercent, netLpPosition, fundingEnabled, source }.
  */
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ slab: string }> }
-) {
+export async function GET(_req: Request, { params }: { params: Promise<{ slab: string }> }) {
   const { slab } = await params;
+  const v = validateSlabParam(slab);
+  if (!v.valid) return v.response;
+  if (isBlockedSlab(v.slab)) return NextResponse.json({ error: "Market not found" }, { status: 404 });
 
-  // Validate slab parameter format
-  const validation = validateSlabParam(slab);
-  if (!validation.valid) {
-    return validation.response;
+  const read = await readCurrentWrapperSlab(v.slab);
+  if (!read.ok) {
+    return read.reason === "rpc"
+      ? NextResponse.json({ error: "Could not read the market right now" }, { status: 503, headers: { "Retry-After": "5" } })
+      : NextResponse.json({ error: "Market not found" }, { status: 404 });
   }
-  const validSlab = validation.slab;
-
-  if (BLOCKED_MARKET_ADDRESSES.has(validSlab)) {
-    return NextResponse.json(
-      { error: "Market not found" },
-      { status: 404 }
-    );
+  const maxAbs = readV17MaxAbsFunding(read.data);
+  if (maxAbs !== 0n) {
+    return NextResponse.json({ error: "Funding rate not available for this market" }, { status: 404 });
   }
-
-  const response = await proxyToApi(req, `/funding/${validSlab}`);
-
-  // GH#1602: If backend returns 500 (e.g. zombie slab with corrupt data),
-  // return 404 instead of propagating the 500 to the client.
-  if (response.status >= 500) {
-    return NextResponse.json(
-      { error: "Market not found or data unavailable" },
-      { status: 404 }
-    );
-  }
-
-  return response;
+  return NextResponse.json(
+    {
+      slabAddress: v.slab,
+      currentRateBpsPerSlot: 0,
+      hourlyRatePercent: 0,
+      annualizedPercent: 0,
+      netLpPosition: "0",
+      fundingEnabled: false,
+      source: "on-chain",
+    },
+    { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } },
+  );
 }

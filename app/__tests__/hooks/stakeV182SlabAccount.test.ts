@@ -62,7 +62,7 @@ import { useStakeWithdrawByPool } from '../../hooks/useStakeWithdrawByPool';
 import { useConnectionCompat, useWalletCompat } from '@/hooks/useWalletCompat';
 import { sendTx } from '@/lib/tx';
 
-const STAKE_PROGRAM = new PublicKey('GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3');
+const STAKE_PROGRAM = new PublicKey('VmpVUArRnVkrjaPXQ2qaqCQa3ZrZFgsz7rjeALitF5w');
 const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const USDC = 'So11111111111111111111111111111111111111112';
 

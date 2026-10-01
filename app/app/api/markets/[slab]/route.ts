@@ -119,6 +119,17 @@ const MARKETS_CACHE_HEADERS = {
  *
  * Returns 404 when the slab doesn't exist or isn't a recognised v17 account.
  */
+/** "current" / "other" wrapper owner, or null when the slab could not be read. */
+async function slabOwnerIfReadable(slab: string): Promise<"current" | "other" | null> {
+  try {
+    const info = await getServerConnection("confirmed").getAccountInfo(new PublicKey(slab));
+    if (!info) return null;
+    return info.owner.toBase58() === getConfig().programId ? "current" : "other";
+  } catch {
+    return null;
+  }
+}
+
 async function onChainSlabFallback(slab: string): Promise<NextResponse> {
   try {
     const slabPk = new PublicKey(slab);
@@ -126,6 +137,10 @@ async function onChainSlabFallback(slab: string): Promise<NextResponse> {
     const info = await connection.getAccountInfo(slabPk);
 
     if (!info) {
+      return NextResponse.json({ error: "Market not found" }, { status: 404 });
+    }
+    // Relaunch: a slab owned by an abandoned wrapper is not a market of this app.
+    if (info.owner.toBase58() !== getConfig().programId) {
       return NextResponse.json({ error: "Market not found" }, { status: 404 });
     }
 
@@ -420,6 +435,12 @@ export async function GET(
     // resolved on-chain address (e.g. "8eFFEFBY3...") which IS blocked. Without this
     // second check, symbol-addressed requests bypass the blocklist entirely.
     if (isBlockedSlab(String(data.slab_address ?? ""))) {
+      return NextResponse.json({ error: "Market not found" }, { status: 404 });
+    }
+
+    // Relaunch (2026-10-01): a registry row whose slab belongs to an abandoned wrapper is not a
+    // market of this app. An unreadable slab (RPC gap) keeps the row, as the list route does.
+    if ((await slabOwnerIfReadable(String(data.slab_address ?? ""))) === "other") {
       return NextResponse.json({ error: "Market not found" }, { status: 404 });
     }
 

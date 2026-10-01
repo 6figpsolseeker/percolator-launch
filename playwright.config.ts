@@ -13,6 +13,8 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // e2e/fork-journeys/* are specs for the #2701 fork harness (they import its wallet + perc libs).
+  testIgnore: ['**/fork-journeys/**'],
 
   // Don't fail CI if the e2e/ directory doesn't exist yet
   // (e.g. during active backend development phases)

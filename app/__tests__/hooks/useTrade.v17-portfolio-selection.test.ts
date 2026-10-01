@@ -109,13 +109,15 @@ describe("useTrade v17 portfolio selection", () => {
   };
 
   function createLpPortfolioData(): Buffer {
-    const data = Buffer.alloc(240);
+    // A real v18 portfolio: full length, header kind byte [10] = 2 (F-3), and the 104-byte
+    // PortfolioMatcherConfigV16 sits before the 24-byte identity trailer.
+    const data = Buffer.alloc(9563);
+    data[10] = 2;
 
     // readPortfolioOwner() reads provenance owner at offset 80.
     lpOwner.toBuffer().copy(data, 80);
 
-    // PortfolioMatcherConfigV16 occupies the final 104 bytes.
-    const matcherConfigOffset = data.length - 104;
+    const matcherConfigOffset = data.length - 104 - 24;
 
     matcherProgram
       .toBuffer()

@@ -136,7 +136,7 @@ export const InsuranceTopUpModal: FC<InsuranceTopUpModalProps> = ({
 
       if (!lpState.mintExists) {
         setError(
-          "Insurance LP mint has not been created for this market yet. Please contact the market admin."
+          "This market's insurance fund isn't open for deposits yet."
         );
         return;
       }
@@ -236,8 +236,7 @@ export const InsuranceTopUpModal: FC<InsuranceTopUpModalProps> = ({
               {wallet.publicKey && !lpState.mintExists && !lpLoading && (
                 <div className="mb-4 rounded-none border-l-2 border-l-[var(--warning)] bg-[var(--warning)]/5 p-3">
                   <p className="text-[11px] leading-relaxed text-[var(--warning)]">
-                    Insurance LP mint has not been created for this market.
-                    Deposits are not available yet.
+                    This market&apos;s insurance fund isn&apos;t open for deposits yet.
                   </p>
                 </div>
               )}
@@ -245,8 +244,8 @@ export const InsuranceTopUpModal: FC<InsuranceTopUpModalProps> = ({
               {/* Info Banner */}
               <div className="mb-4 rounded-none border-l-2 border-l-[var(--accent)] bg-[var(--accent)]/5 p-3">
                 <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
-                  Deposit USDC into the insurance fund and receive LP tokens
-                  proportional to your share. Your contribution helps protect
+                  Deposit USDC into the insurance fund and receive fund shares
+                  proportional to your contribution. Your contribution helps protect
                   all traders and earns yield from liquidation fees.
                 </p>
               </div>
@@ -333,7 +332,7 @@ export const InsuranceTopUpModal: FC<InsuranceTopUpModalProps> = ({
                   {lpState.mintExists && amount && parseFloat(amount) > 0 && (
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] uppercase tracking-[0.15em] text-[var(--text-dim)]">
-                        Est. LP Tokens
+                        Est. fund shares
                       </span>
                       <span
                         className="text-[var(--cyan)]"
@@ -345,7 +344,7 @@ export const InsuranceTopUpModal: FC<InsuranceTopUpModalProps> = ({
                               Number(lpState.insuranceBalance || 1n)
                             ).toLocaleString(undefined, { maximumFractionDigits: 2 })
                           : Math.round(parseFloat(amount) * (10 ** decimals)).toLocaleString()}{" "}
-                        LP
+                        shares
                       </span>
                     </div>
                   )}
@@ -427,7 +426,7 @@ export const InsuranceTopUpModal: FC<InsuranceTopUpModalProps> = ({
               </h3>
               <p className="mb-4 text-sm text-[var(--text-secondary)]">
                 You deposited <strong>${amount} USDC</strong> into the
-                insurance fund and received LP tokens. Thank you for making
+                insurance fund and received fund shares. Thank you for making
                 Percolator safer!
               </p>
               {txSignature && (

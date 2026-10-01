@@ -20,11 +20,9 @@ import { subscribeSlab, getSnapshot } from "@/lib/priceStore/priceStore";
 import { startPerfSpan } from "@/lib/perf/perfTiming";
 import { selectChartSource } from "@/lib/chart-source-select";
 import { useTokenChart } from "@/hooks/useTokenChart";
-import { usePythChart } from "@/hooks/usePythChart";
 import { usePercolatorCandles } from "@/hooks/usePercolatorCandles";
 import { useUserAccount } from "@/hooks/useUserAccount";
 import { useMarketConfig } from "@/hooks/useMarketConfig";
-import { useMarketInfo } from "@/hooks/useMarketInfo";
 import { useLiqPrice } from "@/hooks/useLiqPrice";
 import { useChartTheme } from "@/hooks/useChartTheme";
 import { ShimmerSkeleton } from "@/components/ui/ShimmerSkeleton";
@@ -88,12 +86,6 @@ const TIMEFRAME_MS: Record<Timeframe, number> = {
 };
 
 const CANDLE_INTERVAL_MS = 5 * 60 * 1000;
-
-/** Oracle price history uses unix seconds; external chart candles use ms (Prompt 89). */
-function pricePointTimestampToMs(t: number): number {
-  if (!Number.isFinite(t) || t <= 0) return Date.now();
-  return t < 100_000_000_000 ? t * 1000 : t;
-}
 
 // PERC-8090: removed 7d/30d from TIMEFRAMES — too exotic for a perps UI
 const VISIBLE_TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -233,25 +225,6 @@ function LiveMarkPriceLabel() {
   );
 }
 
-/**
- * Map a market's underlying-asset symbol to the Pyth Benchmarks feed symbol.
- * Pyth feeds follow `Crypto.<ASSET>/USD` naming. Keep the list tight — the
- * server-side API route has the same allowlist and will reject anything not
- * on it. Extending the allowlist means updating BOTH here and
- * `/api/chart/pyth/route.ts`.
- */
-function pythSymbolForAsset(assetSymbol: string | null | undefined): string | null {
-  if (!assetSymbol) return null;
-  // Market symbols carry a display suffix (e.g. "JUP-PERP", "SOL/USD", "BONK-USDC");
-  // the Pyth Benchmarks feed is keyed on the bare underlying asset. Take the base
-  // token before the first "-" or "/". Without this, "JUP-PERP" never matched the
-  // allowlist below, so NO market resolved a Pyth feed and every chart was blank.
-  const s = assetSymbol.trim().toUpperCase().split(/[-/]/)[0].trim();
-  if (!s) return null;
-  const supported = new Set(["SOL", "BTC", "ETH", "JUP", "JTO", "WIF", "BONK", "PYTH", "TRUMP", "PENGU"]);
-  return supported.has(s) ? `Crypto.${s}/USD` : null;
-}
-
 // Phase 2 (chart decoupling): memoized so a parent re-render (TradePageInner
 // re-renders ~4-5x/sec today, cascading into every non-memoized child — see
 // BUILD-LOG.md Phase 0/2) does NOT by itself re-render this ~1000-line
@@ -308,12 +281,6 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
   const [oraclePrices, setOraclePrices] = useState<PricePoint[]>([]);
 
-  // Resolve the Pyth Benchmarks feed for this market. For SOL/USDC perp the
-  // underlying is SOL → `Crypto.SOL/USD`. Non-mapped assets fall through to
-  // the GeckoTerminal pool-history path and then to oracle aggregation.
-  const marketInfoForSymbol = useMarketInfo(slabAddress);
-  const pythSymbol = pythSymbolForAsset(marketInfoForSymbol.market?.symbol);
-
   // Phase 2: liq price overlay
   const realUserAccount = useUserAccount();
   const marketConfig = useMarketConfig();
@@ -355,7 +322,7 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   const activeDataSourceRef = useRef<ChartDataSource>("oracle");
   // Track whether we've done the initial viewport fit for the current
   // timeframe/chart-type/data-source. Without this, calling fitContent() on
-  // every poll (new bar arrives every ~30s for Pyth / 60s for GeckoTerminal)
+  // every poll (new bar arrives every ~60s for GeckoTerminal)
   // wipes out any user pan/zoom — the chart snaps back to "all bars visible"
   // and the user can't stay zoomed in.
   const fitKeyRef = useRef<string>("");
@@ -383,17 +350,9 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
     isCandle: boolean;
   } | null>(null);
 
-  // Prefer Pyth Benchmarks (canonical global spot price; deep history) when
-  // the market's underlying asset has a Pyth feed. Same data source Hyperliquid
-  // / Drift / Jupiter Perps use — shows real SOL/USD history back days/years,
-  // not just the last 24 h of our keeper observations.
-  const {
-    candles: pythCandles,
-    status: pythStatus,
-  } = usePythChart(pythSymbol, timeframe);
-
-  // Fallback source: GeckoTerminal via the mint's DEX pool. Used when no Pyth
-  // feed is mapped for this asset (e.g. long-tail tokens).
+  // External source: GeckoTerminal via the mint's DEX pool — the same venue
+  // the relaunch markets are priced from (pumpswap / meteora-dlmm). No Pyth:
+  // there is no external price-feed tier.
   const {
     candles: externalCandles,
     status: externalStatus,
@@ -402,7 +361,7 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
     // supports `before_timestamp` paging today — see the range-change
     // effect below for why the other sources are excluded.
     loadOlder: loadOlderExternal,
-  } = useTokenChart(mintAddress ?? null, timeframe);
+  } = useTokenChart(mintAddress ?? null, timeframe, slabAddress);
   // Read through a ref inside the chart-level range-change handler below —
   // that subscription is registered once per chart lifetime (keyed off
   // chartReady, not timeframe/mint), so it must not close over a stale
@@ -412,7 +371,7 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
 
   // Tier-0: Percolator's own internal-trade candles. Preferred when the slab
   // has active match-engine volume, because these reflect OUR fills rather
-  // than Pyth's spot tape — and update live via the trades:<slab> WS channel.
+  // than the DEX pool's tape — and update live via the trades:<slab> WS channel.
   const {
     candles: percolatorCandlesRaw,
     status: percolatorStatus,
@@ -442,12 +401,8 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   // raw arrays: a feed whose rows are mostly/all non-finite (e.g. a corrupt
   // Percolator batch) would otherwise pass the raw length checks, win source
   // selection, then collapse to nothing after filtering — defeating the
-  // Pyth/Gecko fallback and mislabeling the source badge.
+  // GeckoTerminal fallback and mislabeling the source badge.
   const percolatorFinite = useMemo(() => finiteCandles(percolatorCandles), [percolatorCandles]);
-  const pythFinite = useMemo(
-    () => finiteCandles(pythCandles as { timestamp: number; open: number; high: number; low: number; close: number; volume: number }[]),
-    [pythCandles],
-  );
   const externalFinite = useMemo(
     () => finiteCandles(externalCandles as { timestamp: number; open: number; high: number; low: number; close: number; volume: number }[]),
     [externalCandles],
@@ -455,17 +410,17 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
 
   // Prefer Percolator as the chart source only when it has enough coverage to
   // form a readable chart. With 1–2 candles against a 24 h window, the tier-0
-  // source produces a mostly-empty chart that looks broken — Pyth's deep spot
-  // history is a better background until real internal volume arrives.
+  // source produces a mostly-empty chart that looks broken — the DEX pool's
+  // deep history is a better background until real internal volume arrives.
   //
   // The user's fill is still visible: the Entry price line renders on top of
   // whichever source is showing, so a new trader sees their entry against
-  // Pyth's SOL/USD context before Percolator has enough bars to stand alone.
+  // the pool's price context before Percolator has enough bars to stand alone.
   //
   // Percolator may still win below the threshold, but ONLY once every other
   // source has settled with nothing — see lib/chart-source-select.ts. It used
-  // to win whenever Pyth merely errored, which is how a 1-bar series came to
-  // outrank a 1000-bar DEX series after Pyth retired its shim (#2579).
+  // to win whenever an external feed merely errored, which is how a 1-bar
+  // series came to outrank a 1000-bar DEX series (#2579).
   // Count only bars with a REAL price. `finiteCandles` rejects NaN/Infinity,
   // but 0 is finite, and indexer-db.ts buckets a NULL-price liquidation marker
   // into an o=h=l=c=0 candle — so a finiteness check alone promotes markets
@@ -478,15 +433,11 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   // The precedence rule lives in lib/chart-source-select.ts so it can be
   // tested against source states and bar counts. Inline here, it shipped a
   // defect nothing could catch: a 1-bar Percolator series outranking a
-  // 1000-bar DEX series once Pyth's upstream shim started 404ing. See #2579.
+  // 1000-bar DEX series once an external feed started 404ing. See #2579.
   // Priced, not merely finite — 0 is finite, and the selector's contract asks
   // for priced counts. Percolator was the only source honouring it, so an
   // all-zero external series could have outranked a real internal one: the
   // flat-line-at-0.00 failure, one upstream change away.
-  const pythPriced = useMemo(
-    () => pythFinite.filter((c) => c.close > 0 && c.open > 0 && c.high > 0 && c.low > 0),
-    [pythFinite],
-  );
   const externalPriced = useMemo(
     () => externalFinite.filter((c) => c.close > 0 && c.open > 0 && c.high > 0 && c.low > 0),
     [externalFinite],
@@ -495,14 +446,9 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   const activeDataSource = selectChartSource({
     percolator: { status: percolatorStatus, pricedBars: percPriced.length },
     // `applicable` marks a source that can never answer for this market:
-    // usePythChart with no symbol mapping and useTokenChart with no mint both
-    // park on `idle` and never fetch. Without it they read as "not settled
-    // yet" forever, stranding such markets on the oracle series.
-    pyth: {
-      status: pythStatus,
-      pricedBars: pythPriced.length,
-      applicable: pythSymbol != null,
-    },
+    // useTokenChart with no mint parks on `idle` and never fetches. Without it
+    // it reads as "not settled yet" forever, stranding such markets on the
+    // oracle series.
     dex: {
       status: externalStatus,
       pricedBars: externalPriced.length,
@@ -511,29 +457,14 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   });
 
   const hasPercolatorData = activeDataSource === "percolator";
-  const hasPythData = activeDataSource === "pyth";
   const hasExternalData = activeDataSource === "dex";
 
-  // Fetch oracle price history
-  useEffect(() => {
-    fetch(`/api/markets/${slabAddress}/prices`)
-      .then((r) => r.json())
-      .then((d) => {
-        const apiPrices = (d.prices ?? []).map((p: { price_e6: string; timestamp: number }) => ({
-          timestamp: pricePointTimestampToMs(p.timestamp),
-          price: parseInt(p.price_e6) / 1e6,
-        }));
-        // lightweight-charts requires strictly ascending timestamps; sort defensively
-        // in case the API returns prices in an unexpected order.
-        apiPrices.sort((a: PricePoint, b: PricePoint) => a.timestamp - b.timestamp);
-        setOraclePrices(apiPrices);
-      })
-      .catch(() => {});
-  }, [slabAddress]);
+  // No oracle price-history fetch: nothing records one on v18 (/api/markets/:slab/prices answers
+  // 404). The oracle fallback series grows from live price-store ticks below.
 
   // Live price updates — feeds the oracle-aggregated FALLBACK candle source
-  // (only actually used when Percolator/Pyth/DEX all have no data for this
-  // market — see hasPercolatorData/hasPythData/hasExternalData priority
+  // (only actually used when Percolator/DEX all have no data for this
+  // market — see hasPercolatorData/hasExternalData priority
   // below). Phase 2: subscribes directly to the price store rather than the
   // reactive useLivePrice() hook, so TradingChart only re-renders when this
   // 5s gate actually calls setOraclePrices — not on every raw tick
@@ -543,13 +474,13 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
     if (!config || !slabAddress) return;
     // Only feed this fallback when it's actually the active source — same
     // gate as the 10s fallback poll effect below. Previously ungated: on
-    // EVERY market (even ones with a real Percolator/Pyth/DEX source) this
+    // EVERY market (even ones with a real Percolator/DEX source) this
     // fired every ~5s anyway, minting a new oraclePrices array that fed
     // nothing downstream actually used — candleData's memo re-mints on the
     // new reference, forcing the structural series effect (a full
     // removeSeries+addSeries+setData teardown) to rebuild the whole chart
     // every 5s on every market.
-    if (hasPercolatorData || hasPythData || hasExternalData) return;
+    if (hasPercolatorData || hasExternalData) return;
     return subscribeSlab(slabAddress, () => {
       const snap = getSnapshot(slabAddress);
       if (snap.priceUsd == null) return;
@@ -561,9 +492,9 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
         return [...prev, { timestamp: now, price: usd }].slice(-1000);
       });
     });
-  }, [config, slabAddress, hasPercolatorData, hasPythData, hasExternalData]);
+  }, [config, slabAddress, hasPercolatorData, hasExternalData]);
 
-  // Fallback poll: when no Percolator/Pyth/DEX candle source has data, the two
+  // Fallback poll: when no Percolator/DEX candle source has data, the two
   // effects above are the ONLY way `oraclePrices` ever grows — a one-shot
   // history fetch (above, silently no-ops if the indexer backend is
   // unreachable) and live WS ticks (also above, silently no-ops if the WS
@@ -581,14 +512,14 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   // moment a real candle source has data.
   useEffect(() => {
     if (!slabAddress) return;
-    if (hasPercolatorData || hasPythData || hasExternalData) return;
+    if (hasPercolatorData || hasExternalData) return;
     // Wait for the real sources to SETTLE (not just "not successful yet")
     // before engaging — otherwise this adds the first oraclePrices point
-    // while Pyth/Percolator/GeckoTerminal are still resolving (typically
+    // while Percolator/GeckoTerminal are still resolving (typically
     // well under a second), which would prematurely swap the loading
     // skeleton for the sparse "building…" overlay on a market that ends up
     // with a real candle source moments later (e.g. every seeded market).
-    if (pythStatus === "loading" || percolatorStatus === "loading" || externalStatus === "loading") return;
+    if (percolatorStatus === "loading" || externalStatus === "loading") return;
 
     let cancelled = false;
     const poll = () => {
@@ -616,7 +547,7 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
       cancelled = true;
       disposePoll();
     };
-  }, [slabAddress, hasPercolatorData, hasPythData, hasExternalData, pythStatus, percolatorStatus, externalStatus]);
+  }, [slabAddress, hasPercolatorData, hasExternalData, percolatorStatus, externalStatus]);
 
   // Derive data. Memoed because oraclePrices only changes on the 5s-gated
   // live-price effect (line ~287), so the filtered slice is reference-stable
@@ -638,8 +569,8 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   );
 
   // Data source priority: Percolator internal trades (tier-0, when >=10 bars) →
-  // Pyth Benchmarks (canonical spot) → GeckoTerminal (DEX-pool history for
-  // long-tail tokens) → oracle-aggregated fallback (keeper observations).
+  // GeckoTerminal (DEX-pool history) → oracle-aggregated fallback (keeper
+  // observations).
   //
   // Memoed so the reference is stable between renders that don't change the
   // underlying source arrays. Without this, every parent render (e.g. on
@@ -659,17 +590,15 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   // instead of crashing the chart. oracleFiltered is already sanitised above.
   const candleData = useMemo(() => {
     if (hasPercolatorData) return percolatorFinite;
-    if (hasPythData) return pythFinite;
     if (hasExternalData) return externalFinite;
     return finiteCandles(aggregateCandles(oracleFiltered, CANDLE_INTERVAL_MS));
-  }, [hasPercolatorData, hasPythData, hasExternalData, percolatorFinite, pythFinite, externalFinite, oracleFiltered]);
+  }, [hasPercolatorData, hasExternalData, percolatorFinite, externalFinite, oracleFiltered]);
 
   const lineData = useMemo(() => {
     if (hasPercolatorData) return finitePricePoints(percolatorCandles.map((c) => ({ timestamp: c.timestamp, price: c.close })));
-    if (hasPythData) return finitePricePoints(pythCandles.map((c) => ({ timestamp: c.timestamp, price: c.close })));
     if (hasExternalData) return finitePricePoints(externalCandles.map((c) => ({ timestamp: c.timestamp, price: c.close })));
     return oracleFiltered;
-  }, [hasPercolatorData, hasPythData, hasExternalData, percolatorCandles, pythCandles, externalCandles, oracleFiltered]);
+  }, [hasPercolatorData, hasExternalData, percolatorCandles, externalCandles, oracleFiltered]);
 
   const totalDataPoints = candleData.length + lineData.length;
 
@@ -847,8 +776,8 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
     ) => {
       if (!range) return;
       // Only the DEX/GeckoTerminal source (useTokenChart) supports
-      // before_timestamp paging today. Pyth Benchmarks has no equivalent
-      // param, the oracle-aggregated fallback isn't paginated at all, and
+      // before_timestamp paging today. The oracle-aggregated fallback isn't
+      // paginated at all, and
       // Percolator's own UDF route would need its own wiring (see #2581's
       // "not to be confused with" note) — gate on the active source so
       // panning any of those never fires a GeckoTerminal request.
@@ -1043,8 +972,8 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
         chartDataKindRef.current = "ohlc";
 
         // Volume histogram — only render when the active data source has real
-        // trade volume. Pyth Benchmarks returns v=0 for every bar (it's a price
-        // feed, not a trade tape); painting a sentinel 0.001 for every bar made
+        // trade volume. A price-only series returns v=0 for every bar (it's a
+        // price feed, not a trade tape); painting a sentinel 0.001 for every bar made
         // the pane render as a meaningless flat red/green band auto-scaled to
         // fill the full pane. Hide the series entirely in that case and let the
         // candles reclaim the bottom 10% of vertical space instead.
@@ -1207,7 +1136,7 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
     //
     // Commit the source ref only after this structural effect has finished
     // rebuilding the visible series. Updating the ref during render creates a
-    // brief mismatch window where a tick can treat the previous DEX/Pyth/PERC
+    // brief mismatch window where a tick can treat the previous DEX/PERC
     // series as the new oracle series and mutate it before the effect runs.
     activeDataSourceRef.current = activeDataSource;
     const fitKey = `${chartDataKind(chartStyle)}:${timeframe}:${activeDataSource}`;
@@ -1285,8 +1214,8 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
       const series = seriesRef.current;
       if (series) {
         // Mark ticks may mutate the visible series only when that series is
-        // the oracle fallback built from the same mark-price stream. Pyth and
-        // DEX history have independent upstreams, while Percolator candles are
+        // the oracle fallback built from the same mark-price stream. DEX
+        // history has an independent upstream, while Percolator candles are
         // updated by actual trades:<slab> events.
         if (chartDataKindRef.current === "ohlc" && lastBarRef.current) {
           const current = lastBarRef.current;
@@ -1333,10 +1262,10 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
   // showEmptyOverlay is hoisted above (useChartZoomControls needs it too) —
   // see the GH#1652 comment there.
   // Distinguishes "still fetching, first paint hasn't happened yet" from
-  // "all three sources settled and there's genuinely no data" — previously
+  // "all sources settled and there's genuinely no data" — previously
   // both looked identical (instant "No chart data yet"), which reads as
   // broken on a fresh page load even though a request is in flight.
-  const anySourceLoading = pythStatus === "loading" || externalStatus === "loading" || percolatorStatus === "loading";
+  const anySourceLoading = externalStatus === "loading" || percolatorStatus === "loading";
   const showLoadingOverlay = totalDataPoints === 0 && anySourceLoading;
 
   return (
@@ -1358,14 +1287,6 @@ const TradingChartInner: FC<{ slabAddress: string; mintAddress?: string }> = ({
                 title="Source: Percolator match engine (internal trades)"
               >
                 PERC
-              </span>
-            ) : hasPythData ? (
-              <span
-                className="text-[9px] font-medium uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-sm"
-                style={{ background: "color-mix(in srgb, var(--accent) 10%, transparent)", color: "var(--accent)", border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)" }}
-                title={`Source: Pyth Benchmarks · ${pythSymbol}`}
-              >
-                PYTH
               </span>
             ) : hasExternalData ? (
               <span

@@ -9,8 +9,16 @@ import { useEffect, useRef, useState } from "react";
  * Extracted from `MarketInfoBar`'s `MarkPrice` component (the original,
  * proven implementation) so PositionsDock/MarketBookCard can reuse the exact
  * same flash behavior instead of re-deriving it.
+ *
+ * Hold time: every caller pairs this with `transition-colors duration-300`,
+ * so the tint takes ~300ms just to arrive. The old 300ms hold cleared the
+ * flash the moment the colour reached full strength — on the live site it
+ * read as a faint ~100ms blip and looked like no flash at all. Holding for
+ * FLASH_HOLD_MS gives ~300ms in, ~400ms at full colour, ~300ms out.
  */
-export function usePriceFlash(value: bigint | null | undefined, durationMs = 300): "up" | "down" | null {
+export const FLASH_HOLD_MS = 700;
+
+export function usePriceFlash(value: bigint | null | undefined, durationMs = FLASH_HOLD_MS): "up" | "down" | null {
   const prev = useRef<bigint | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [flash, setFlash] = useState<"up" | "down" | null>(null);

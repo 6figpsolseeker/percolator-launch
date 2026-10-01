@@ -116,12 +116,12 @@ describe("shouldFitViewport", () => {
     ).toBe(false);
   });
 
-  it("fits on the fresh-data render after a data-source switch (dex -> pyth)", () => {
-    // Transitional (stale dex data) does not fit; the pyth data render does.
+  it("fits on the fresh-data render after a data-source switch (dex -> percolator)", () => {
+    // Transitional (stale dex data) does not fit; the percolator data render does.
     expect(
       shouldFitViewport({
         prevFitKey: "single:1d:dex",
-        nextFitKey: "single:1d:pyth",
+        nextFitKey: "single:1d:percolator",
         built: true,
         prevFitData: DATA_1D,
         nextFitData: DATA_1D, // transitional: still the dex array
@@ -130,10 +130,10 @@ describe("shouldFitViewport", () => {
     expect(
       shouldFitViewport({
         prevFitKey: "single:1d:dex",
-        nextFitKey: "single:1d:pyth",
+        nextFitKey: "single:1d:percolator",
         built: true,
         prevFitData: DATA_1D,
-        nextFitData: DATA_4H, // pyth data landed (new reference)
+        nextFitData: DATA_4H, // percolator data landed (new reference)
       }),
     ).toBe(true);
   });

@@ -9,6 +9,7 @@ import { Q_SCALE } from "@/lib/q-usd";
 import { unitScaleToDecimals, deriveMarketLiquidityAtoms, lpCollateralMateriallyDiverges } from "./types";
 import { useAdminActions } from "@/hooks/useAdminActions";
 import { useCloseMarket } from "@/hooks/useCloseMarket";
+import { CLOSE_MARKET_COPY, closeMarketChecklist, firstUnmet, type CloseCheck } from "@/lib/close-market-checklist";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
 import { SlabProvider } from "@/components/providers/SlabProvider";
 import { CreatorClaimPanel } from "@/components/market/CreatorClaimPanel";
@@ -25,6 +26,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { subscribeSlab, getSnapshot } from "@/lib/priceStore/priceStore";
 import { formatUsdFromNumber, formatStatValue, formatSlotAge } from "@/lib/format";
 import { detectOracleMode, sanitizePriceE6, applyInvert, priceE6ToUsd } from "@/lib/oraclePrice";
+import { CreatorTranchePanel } from "@/components/limits/CreatorLimits";
 
 /** Same accrue-cliff threshold as useCreatedMarkets/CrankHealthCard — the
  *  asset's accrue slot (advances only via crank/trade) vs the current
@@ -42,6 +44,28 @@ const LiveRowPrice: FC<{ slab: string; fallback: number | null }> = ({ slab, fal
   const getSnap = useCallback(() => getSnapshot(slab).priceUsd, [slab]);
   const live = useSyncExternalStore(subscribe, getSnap, () => null);
   return <>{formatUsdFromNumber(live ?? fallback)}</>;
+};
+
+/** UX WP-9 (§3.11): "Fees claimed ✓ · No open accounts ✓ · Insurance empty ✓" + the first unmet line. */
+export const CloseMarketChecklistView: FC<{ checks: readonly CloseCheck[] }> = ({ checks }) => {
+  const blocker = firstUnmet(checks);
+  return (
+    <div data-testid="close-market-checklist" className="mt-1 text-[10px] text-[var(--text-secondary)]">
+      <p>
+        {checks.map((c, i) => (
+          <span key={c.key} data-testid={`close-check-${c.key}`} data-state={c.state}>
+            {i > 0 ? " · " : ""}
+            {c.label} {CLOSE_MARKET_COPY.mark(c.state)}
+          </span>
+        ))}
+      </p>
+      {blocker && (
+        <p data-testid="close-market-blocker" className="mt-0.5 text-[var(--text)]">
+          {blocker.unmetLine}
+        </p>
+      )}
+    </div>
+  );
 };
 
 /* ── small local dialogs (only consumer is this row's drawer) ── */
@@ -172,6 +196,22 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
     !!wallet.publicKey && !!detail?.creator_fee_authority &&
     detail.creator_fee_authority === wallet.publicKey.toBase58();
   const hasClaimableFees = isClaimAuthority && claimState.kind === "claimable";
+
+  // Authority gating for the destructive actions. The two "admin" keys diverge
+  // once a market completes creation:
+  //  • "Burn admin key" renounces asset 0's `asset_admin` — the creator's key
+  //    (== creator_fee_authority). The creator holds it, so this CAN be done.
+  //  • "Close market" (CloseSlab) needs `marketauth`, which StakeInitPool rotates
+  //    to the keyless stake-pool PDA at creation — no wallet holds it, so a
+  //    completed market can never be closed (it's autonomous by design).
+  // Gate each button on the authority it actually needs, instead of letting the
+  // user click into a doomed transaction.
+  const walletB58AdminGate = wallet.publicKey?.toBase58() ?? null;
+  const isAssetAdmin =
+    !!walletB58AdminGate && !!detail?.creator_fee_authority &&
+    detail.creator_fee_authority === walletB58AdminGate;
+  const marketAuthB58 = market.configV17?.marketauth?.toBase58() ?? null;
+  const isMarketAuth = !!walletB58AdminGate && !!marketAuthB58 && marketAuthB58 === walletB58AdminGate;
   const rowClaim = useClaimCreatorFees();
   const claimThisMarket = useCallback(
     (e: { preventDefault: () => void; stopPropagation: () => void }) => {
@@ -267,6 +307,13 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
   // `market.label` a second later. Per field, identity only ever sharpens.
   const resolved = resolveIdentity(detail, identity);
   const symbol = resolved.symbol ?? market.label;
+  const closeChecks = closeMarketChecklist({
+    claimableFeeAtoms: claimState.kind === "claimable" ? claimState.atoms : claimState.kind === "none" ? 0n : null,
+    // The wallet's own accounts are closed inside the close itself; others are not decodable here.
+    otherOpenAccounts: null,
+    insuranceAtoms: insuranceAtoms ?? null,
+  });
+  const closeBlocker = firstUnmet(closeChecks);
   const name = resolved.name ?? undefined;
 
   const [showBurnConfirm, setShowBurnConfirm] = useState(false);
@@ -363,7 +410,7 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
             {oiUsd != null ? formatStatValue(oiUsd, "currency") : "—"}
           </p>
         </div>
-        <Tooltip text="Liquidity backing this market — the LP counterparty's capital, not a personal balance.">
+        <Tooltip text="Liquidity backing this market: the market's own capital, not a personal balance.">
           <div className="min-w-[90px]">
             <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-dim)]">liquidity</p>
             <p className="text-[12px] text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>
@@ -384,7 +431,7 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
         </div>
         <div className="flex items-center gap-1.5">
           <HealthBadge level={health.level} />
-          <Tooltip text={crankFresh == null ? "Crank freshness unknown" : crankFresh ? "Crank fresh — accrue is up to date" : "Crank stale — no accrue in a while (accrue cliff)"}>
+          <Tooltip text={crankFresh == null ? "Update status unknown" : crankFresh ? "Up to date" : "Catching up: no update in a while"}>
             <span
               className={`inline-block h-1.5 w-1.5 rounded-full ${
                 crankFresh == null ? "bg-[var(--text-dim)]" : crankFresh ? "bg-[var(--long)]" : "bg-[var(--warning)] animate-pulse"
@@ -406,7 +453,7 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
         <div className="border-t border-[var(--border)]/30 px-4 py-4">
           <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div>
-              <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-dim)]">last crank</p>
+              <p className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-dim)]">last update</p>
               <p className="text-[11px] text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>
                 {isV17
                   ? (v17Stats?.assetSlotLast != null && chainCurrentSlot != null ? formatSlotAge(chainCurrentSlot, v17Stats.assetSlotLast) + " ago" : "—")
@@ -437,6 +484,8 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
               home so creators never need the hidden /analytics/[slab] URL. */}
           <div className="mb-4 border-t border-[var(--border)]/30 pt-4">
             <SlabProvider slabAddress={slab}>
+              {/* Limits (P1 caps / P3 tranche; flag-gated, null when off) */}
+              <CreatorTranchePanel slab={slab} decimals={decimals} collateralSymbol="USDC" />
               <CreatorClaimPanel slabAddress={slab} />
             </SlabProvider>
           </div>
@@ -456,19 +505,30 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
                 preserved from the flow this replaces (see PR description). */}
             <button
               onClick={() => setShowBurnConfirm(true)}
-              disabled={actions.loading === "renounceAdmin"}
+              disabled={actions.loading === "renounceAdmin" || !isAssetAdmin}
+              title={isAssetAdmin ? undefined : "Only the market admin (asset_admin) can burn the admin key — connect the creator wallet."}
               className="text-[10px] uppercase tracking-[0.1em] text-[var(--short)]/70 hover:text-[var(--short)] transition-colors disabled:opacity-40"
             >
               burn admin key
             </button>
             <button
+              data-testid="close-market-button"
               onClick={() => setShowCloseConfirm(true)}
-              disabled={closeMarket.loading}
+              disabled={closeMarket.loading || closeBlocker !== null || !isMarketAuth}
+              title={isMarketAuth ? undefined : "This market is autonomous — admin was renounced to the stake-pool program at creation, so it can't be closed."}
               className="text-[10px] uppercase tracking-[0.1em] text-[var(--short)]/70 hover:text-[var(--short)] transition-colors disabled:opacity-40"
             >
               {closeMarket.loading ? "closing…" : "close market"}
             </button>
           </div>
+          {/* UX WP-9 (§3.11): the preconditions BEFORE the button, never "closeSlab will tell you". */}
+          <CloseMarketChecklistView checks={closeChecks} />
+          {!isMarketAuth && (
+            <p className="mt-2 text-[10px] text-[var(--text-secondary)]">
+              This market is autonomous — admin control was permanently renounced to the stake-pool
+              program at creation, so it can’t be closed. You can still burn your remaining admin key.
+            </p>
+          )}
           {closeMarket.error && (
             <p className="mt-2 text-[10px] text-[var(--short)]">{closeMarket.error}</p>
           )}
@@ -504,6 +564,17 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
             <p className="mt-2 text-[11px] text-[var(--text-secondary)]">
               This is permanent and irreversible. You will never be able to update config, set oracle, or perform any admin actions on this market again.
             </p>
+            {/* Tag 90 (WithdrawCreatorFee) is gated on asset 0's asset_admin only: once burned, no
+                creator fee on this market can ever be claimed again, and any unclaimed pot is
+                re-booked to the protocol at close (wrapper bd4fe5f8). */}
+            <p data-testid="burn-forfeits-fees" className="mt-2 text-[11px] text-[var(--text-secondary)]">
+              You also give up this market&apos;s creator fees for good: fees can only be claimed with this key.
+            </p>
+            {hasClaimableFees && (
+              <p data-testid="burn-claim-first" className="mt-2 text-[11px] font-semibold text-[var(--warning)]">
+                You have unclaimed fees on this market. Claim them before burning, or they are lost.
+              </p>
+            )}
             <p className="mt-4 text-[11px] font-semibold text-[var(--short)]">
               Type &quot;BURN&quot; to confirm:
             </p>
@@ -540,9 +611,9 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
       {/* Close market (CloseSlab) — irreversible + rent-reclaiming. */}
       <ConfirmDialog
         open={showCloseConfirm}
-        title="close market"
-        description="This permanently closes the market and reclaims its rent. Requires an empty vault, empty insurance fund, and no open user accounts — closeSlab will tell you exactly which precondition failed if it can't proceed."
-        confirmLabel="close & reclaim rent"
+        title={CLOSE_MARKET_COPY.title(symbol)}
+        description={CLOSE_MARKET_COPY.body(symbol, null)}
+        confirmLabel={CLOSE_MARKET_COPY.confirm}
         danger
         onConfirm={handleClose}
         onCancel={() => setShowCloseConfirm(false)}

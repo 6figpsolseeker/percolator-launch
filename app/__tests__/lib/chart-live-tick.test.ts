@@ -8,15 +8,14 @@ import {
 
 describe('resolveChartDataSource', () => {
   it('preserves the production source-priority order', () => {
-    expect(resolveChartDataSource(true, true, true)).toBe('percolator');
-    expect(resolveChartDataSource(false, true, true)).toBe('pyth');
-    expect(resolveChartDataSource(false, false, true)).toBe('dex');
-    expect(resolveChartDataSource(false, false, false)).toBe('oracle');
+    expect(resolveChartDataSource(true, true)).toBe('percolator');
+    expect(resolveChartDataSource(false, true)).toBe('dex');
+    expect(resolveChartDataSource(false, false)).toBe('oracle');
   });
 });
 
 describe('live mark tick source integrity', () => {
-  const externalSources: ChartDataSource[] = ['percolator', 'pyth', 'dex'];
+  const externalSources: ChartDataSource[] = ['percolator', 'dex'];
 
   it.each(externalSources)('does not overwrite an OHLC bar backed by %s', (source) => {
     const historicalBar = {

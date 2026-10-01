@@ -5,6 +5,18 @@ import { SlabProvider, useSlabState } from '@/components/providers/SlabProvider'
 import { useInsuranceLP } from '@/hooks/useInsuranceLP';
 import { useTokenMeta } from '@/hooks/useTokenMeta';
 import { DepositWithdrawPanel } from '@/components/earn/DepositWithdrawPanel';
+import { EarnTrancheCardView } from '@/components/limits/EarnTrancheCard';
+import { useVaultLpValuation } from '@/hooks/useVaultLpValuation';
+import { ResolvedExitPanel } from '@/components/limits/ResolvedExitPanel';
+import { earnExitProps } from '@/lib/limits/resolved-finish';
+import { useWalletCompat } from '@/hooks/useWalletCompat';
+import { LoadingValue } from '@/components/ui/LoadingValue';
+import { useMarketLimits } from '@/hooks/useMarketLimits';
+import { earnDepositPause, earnGateShares, earnViewFromLimits, earnPanelPricing, withSplitPotPricing } from '@/lib/limits/earn';
+import { earnDepositBlock } from '@/lib/limits/vault-tranche';
+import { COPY } from '@/lib/limits/copy';
+import { chargedTradeFeeLabel } from '@/lib/limits/format';
+import { decodeMarketEngineView } from '@/lib/limits/decode';
 import { MarketLogo } from '@/components/market/MarketLogo';
 import { formatCompact } from '@/lib/formatters';
 import type { MarketVaultInfo } from '@/hooks/useEarnStats';
@@ -58,8 +70,9 @@ export function VaultDepositRail({ slab, vault, onTxSuccess, onPositionResolved 
 }
 
 function VaultDepositRailInner({ slab, vault, onTxSuccess, onPositionResolved }: VaultDepositRailProps & { slab: string }) {
-  const { state, loading, deposit, withdraw, refreshState } = useInsuranceLP();
-  const { config } = useSlabState();
+  const { state, loading, deposit, withdraw, resizeRedemption, refreshState, lastDrawSummary } = useInsuranceLP();
+  const { config, raw: slabRaw } = useSlabState();
+  const wallet = useWalletCompat();
   const vaultAvailable = state.registryExists && state.mintExists;
 
   // Latch "we've completed at least one load" so the "not initialized" warning
@@ -78,15 +91,35 @@ function VaultDepositRailInner({ slab, vault, onTxSuccess, onPositionResolved }:
 
   const vaultUsd = Number(state.vaultTotalAtoms) / collDivisor;
   const positionUsd = Number(state.userVaultValueAtoms) / collDivisor;
-  const hasPosition = state.userLpBalance > 0n;
+  // A pending withdrawal keeps its shares in escrow until paid: still the user's deposit.
+  const hasPosition = state.userLpBalance > 0n || state.pendingRedemptionShares > 0n;
 
   const symbol = vault?.symbol ?? `${slab.slice(0, 4)}…`;
 
+  // P3 (flag-gated; "off" = no RPC): one limits read model feeds the tranche card AND the
+  // deposit gate, which mirrors the program's own tag-75 refusals (lib/limits/vault-tranche.ts).
+  const marketLimits = useMarketLimits(slab);
+  // UX WP-5 (§3.7): a stale LP certificate is valued by a simulated crank, never "Needs refresh".
+  const lpValuation = useVaultLpValuation(slab, marketLimits);
+  const trancheView = earnViewFromLimits(marketLimits, state.vaultTotalAtoms, state.userLpBalance, undefined, lpValuation.value);
+  const earnPricing = withSplitPotPricing(earnPanelPricing(marketLimits, state.vaultTotalAtoms, lpValuation.sim ?? lpValuation.value), state.splitPot);
+  const gateShares = earnGateShares(marketLimits);
+  // Genesis with fees pending (P3-L1) is NOT a block any more: the deposit tx bundles tag 78
+  // first (lib/limits/earn-ixs.ts earnTxPlan), so only a real refusal disables the button.
+  const rawDepositBlock = gateShares === null ? null : earnDepositBlock(trancheView, gateShares);
+  // UX WP-5 (§3.6): "valuation-stale" is not a block either — the deposit tx self-repairs 85
+  // (vault-LP crank bundled by sendTx). Only "covering a loss" pauses deposits.
+  const depositBlock = earnDepositPause(rawDepositBlock);
+  const depositBlockedReason = depositBlock === 'senior-impaired' ? COPY.depositsPausedImpaired : null;
+
   // Report the resolved deposit up so the table's "Your Deposit" column fills in
   // for this row as the user browses vaults.
+  // Only once this vault's first read has landed: reporting the pre-load 0 would overwrite the
+  // table's chain-read position (incl. a creator's seed) with "$—".
   useEffect(() => {
+    if (!everLoaded) return;
     onPositionResolved?.(slab, positionUsd);
-  }, [slab, positionUsd, onPositionResolved]);
+  }, [slab, positionUsd, onPositionResolved, everLoaded]);
 
   const handleDeposit = useCallback(
     async (amount: bigint) => {
@@ -109,6 +142,21 @@ function VaultDepositRailInner({ slab, vault, onTxSuccess, onPositionResolved }:
 
   return (
     <div className="space-y-3">
+      {/* P3 / F-4: after Resolve, Earn pays out only once the market is terminal-flat; anyone
+          can run the permissionless sweep. Renders nothing on a live market. */}
+      <ResolvedExitPanel slab={slab} walletConnected={!!wallet.publicKey} onDone={refreshState} {...earnExitProps(state, collateralDecimals, collateralSymbol)} />
+      {/* P3 (flag-gated): senior/junior tranches, NAV share price, APY from real fees.
+          Withdrawal preview = the wallet's whole position. Null unless the vault owns the LP. */}
+      <EarnTrancheCardView
+        limits={marketLimits}
+        view={trancheView}
+        slab={slab}
+        withdrawShares={state.userLpBalance}
+        decimals={collateralDecimals}
+        collateralSymbol={collateralSymbol}
+        valuation={lpValuation}
+        maxNowAtoms={earnPricing?.maxNowAtoms ?? null}
+      />
       {/* Selected-vault header + key figures + position */}
       <div className="border border-[var(--border)] bg-[var(--panel-bg)] hud-corners">
         <div className="h-px bg-gradient-to-r from-transparent via-[var(--accent)]/40 to-transparent" />
@@ -118,19 +166,21 @@ function VaultDepositRailInner({ slab, vault, onTxSuccess, onPositionResolved }:
             <div className="min-w-0">
               <div className="truncate text-[13px] font-semibold text-[var(--text)]">
                 {symbol}
-                <span className="font-normal text-[var(--text-secondary)]">-PERP</span>
               </div>
-              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-secondary)]">LP Vault</div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-secondary)]">Earn vault</div>
             </div>
           </div>
 
           {/* Key figures */}
           <div className="grid grid-cols-2 gap-3 border-t border-[var(--border)]/60 pt-3">
-            <Figure label="TVL" value={`$${formatCompact(vaultUsd)}`} />
-            <Figure label="Fee" value={`${((vault?.tradingFeeBps ?? 10) / 100).toFixed(2)}%`} />
-            <Figure label="Cooldown" value={slotsToLabel(state.redemptionCooldownSlots)} />
+            {/* UX WP-10 (UI-2): "—" with data-state="loading" until the first read lands. */}
+            <Figure label="TVL" loading={!everLoaded} value={`$${formatCompact(vaultUsd)}`} />
+            {/* E2E B5: the CHARGED fee (trade_fee_base_bps), not the matcher's tradingFeeBps. */}
+            <Figure label="Fee" loading={!everLoaded} value={chargedTradeFeeLabel(slabRaw ? decodeMarketEngineView(slabRaw)?.tradeFeeBaseBps : null) ?? '—'} />
+            <Figure label="Cooldown" loading={!everLoaded} value={slotsToLabel(state.redemptionCooldownSlots)} />
             <Figure
               label="Your Deposit"
+              loading={!everLoaded}
               value={hasPosition ? `$${formatCompact(positionUsd)}` : '$—'}
               accent={hasPosition}
             />
@@ -147,7 +197,7 @@ function VaultDepositRailInner({ slab, vault, onTxSuccess, onPositionResolved }:
 
           {everLoaded && !vaultAvailable && (
             <p className="mt-3 border-t border-[var(--border)]/60 pt-3 text-[11px] text-[var(--text-secondary)]">
-              This market does not have a usable on-chain Earn LP vault. Deposits and withdrawals are unavailable here.
+              This market doesn't have an Earn vault yet, so deposits and withdrawals aren't available here.
             </p>
           )}
         </div>
@@ -169,21 +219,32 @@ function VaultDepositRailInner({ slab, vault, onTxSuccess, onPositionResolved }:
         pendingRedemptionShares={state.pendingRedemptionShares}
         cooldownRemainingSlots={state.cooldownRemainingSlots}
         onDeposit={handleDeposit}
+        depositBlockedReason={depositBlockedReason}
+        depositBlockKind={depositBlock}
         onWithdraw={handleWithdraw}
+        p3Bound={marketLimits.vaultLp?.bound === true}
+        drawSummary={lastDrawSummary}
+        pricing={earnPricing}
+        onRefresh={refreshState}
+        onResizeRedemption={async (shares) => {
+          await resizeRedemption(shares);
+          await refreshState();
+        }}
       />
     </div>
   );
 }
 
-function Figure({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+function Figure({ label, value, accent = false, loading = false }: { label: string; value: string; accent?: boolean; loading?: boolean }) {
   return (
     <div className="min-w-0">
       <div className="mb-0.5 text-[9px] uppercase tracking-[0.15em] text-[var(--text-secondary)]">{label}</div>
       <div
+        data-testid={`earn-rail-figure-${label.toLowerCase().replace(/\s+/g, '-')}`}
         className={`truncate text-[13px] tabular-nums ${accent ? 'text-[var(--accent-text)]' : 'text-[var(--text)]'}`}
         style={{ fontFamily: 'var(--font-mono)' }}
       >
-        {value}
+        <LoadingValue loading={loading}>{value}</LoadingValue>
       </div>
     </div>
   );

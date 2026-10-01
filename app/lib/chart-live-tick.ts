@@ -5,9 +5,9 @@
  * - oracle: built from the same mark-price stream, so the open bar may be
  *   updated directly between the slower React/state aggregation passes;
  * - percolator: updated by actual `trades:<slab>` events;
- * - pyth/dex: refreshed by their own upstream candle feeds.
+ * - dex: refreshed by its own upstream (GeckoTerminal) candle feed.
  */
-export type ChartDataSource = 'percolator' | 'pyth' | 'dex' | 'oracle';
+export type ChartDataSource = 'percolator' | 'dex' | 'oracle';
 
 export interface LiveOhlcBar<TTime> {
   time: TTime;
@@ -24,11 +24,9 @@ export interface LivePricePoint<TTime> {
 
 export function resolveChartDataSource(
   hasPercolatorData: boolean,
-  hasPythData: boolean,
   hasExternalData: boolean,
 ): ChartDataSource {
   if (hasPercolatorData) return 'percolator';
-  if (hasPythData) return 'pyth';
   if (hasExternalData) return 'dex';
   return 'oracle';
 }
@@ -39,7 +37,7 @@ export function resolveChartDataSource(
  *
  * Returning the original object for external sources is intentional. The
  * caller can use identity to skip `series.update()` completely, preventing a
- * mark tick from overwriting a Pyth, DEX, or trade-derived close.
+ * mark tick from overwriting a DEX or trade-derived close.
  */
 export function mergeMarkPriceIntoBar<TTime>(
   source: ChartDataSource,

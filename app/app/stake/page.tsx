@@ -1,6 +1,9 @@
 "use client";
 
+import { STAKE_COPY, cooldownDuration } from "@/lib/stake-copy";
+import { useStakeCooldown } from "@/hooks/useStakeCooldown";
 import { useEffect, useState, useCallback, useSyncExternalStore, type CSSProperties } from "react";
+import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { PublicKey, Connection } from "@solana/web3.js";
@@ -11,6 +14,7 @@ import {
 import { STAKE_POOL_SIZE_V1, decodeStakePoolV1 } from "@/hooks/useStakePool";
 import { getConfig } from "@/lib/config";
 import { unpackAccount, getMint } from "@solana/spl-token";
+import { readPoolTotalLpSupply, valueStakePosition } from "@/lib/stake-position";
 import { useStakeDepositByPool } from "@/hooks/useStakeDepositByPool";
 import { useStakeWithdrawByPool } from "@/hooks/useStakeWithdrawByPool";
 import { parseHumanAmount, formatHumanAmount } from "@/lib/parseAmount";
@@ -118,11 +122,6 @@ function formatUsd(n: number): string {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function slotsToTime(slots: number): string {
-  const seconds = Math.round(slots * 0.4);
-  if (seconds < 60) return `~${seconds}s`;
-  return `~${Math.round(seconds / 60)} min`;
-}
 
 /**
  * Browser-safe u64 LE reader. Buffer.readBigUInt64LE relies on Node's Buffer
@@ -196,7 +195,8 @@ async function fetchPoolPosition(
     // 392-byte layouts (see STAKE_POOL_SIZE_V1 comment in useStakePool.ts).
     const poolInfo = await connection.getAccountInfo(poolPda);
     if (!poolInfo || poolInfo.data.length < STAKE_POOL_SIZE_V1) return null;
-    const { lpMint } = decodeStakePoolV1(poolInfo.data);
+    const poolV1 = decodeStakePoolV1(poolInfo.data);
+    const { lpMint } = poolV1;
 
     // Get user LP ATA balance
     const userLpAta = getAssociatedTokenAddressSync(lpMint, publicKey);
@@ -217,13 +217,24 @@ async function fetchPoolPosition(
     }
     const lpBalance = Number(lpAccount.amount) / Math.pow(10, lpDecimals);
 
-    // Calculate estimated value: (user_lp / total_lp_supply) * vault_balance
-    // pool.totalLpSupply is raw (on-chain units); divide by 10^lpDecimals
-    // to match lpBalance which is already human-readable.
-    const lpSupplyHuman = pool.totalLpSupply / Math.pow(10, lpDecimals);
-    const estimatedValue = lpSupplyHuman > 0
-      ? (lpBalance / lpSupplyHuman) * pool.tvl
-      : 0;
+    // Estimated value = (user_lp / total_lp_supply) * vault_balance, from FRESH on-chain pool +
+    // vault reads (lib/stake-position.ts). The cached /api/stake/pools snapshot (pool.tvl /
+    // pool.totalLpSupply) predates a first deposit into a fresh pool and valued the stake at $0.
+    let chainVaultAtoms: bigint | null = null;
+    try {
+      const vaultInfo = await connection.getAccountInfo(poolV1.vault);
+      if (vaultInfo) chainVaultAtoms = unpackAccount(poolV1.vault, vaultInfo, vaultInfo.owner).amount;
+    } catch {
+      // fall back to the API snapshot below
+    }
+    const estimatedValue = valueStakePosition({
+      lpRaw: lpAccount.amount,
+      chainTotalLpSupplyRaw: readPoolTotalLpSupply(poolInfo.data),
+      chainVaultAtoms,
+      apiTotalLpSupply: pool.totalLpSupply,
+      apiTvlUsd: pool.tvl,
+      lpDecimals,
+    });
 
     // Fetch deposit PDA for cooldown info
     let cooldownRemaining = 0;
@@ -315,7 +326,7 @@ function StakeHeader({
 
       <div className="relative mx-auto max-w-6xl px-4 pt-10 pb-6">
         <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.25em] text-[var(--accent)]/60">
-          // insurance lp
+          // insurance stake
         </div>
 
         <h1
@@ -328,23 +339,15 @@ function StakeHeader({
           Stake collateral into a market&apos;s insurance pool to provide first-loss backing —
           fully on-chain and transparent.
         </p>
-        {/* Honest 0% caption — kept small and muted, not a prominent banner.
-            CHECKED 2026-07-28, and it is accurate — do NOT "correct" it the way
-            the Earn caption was corrected. Those two are different products:
-              - Earn / LP vault DOES earn trading fees (48% share, cranked by the
-                keeper). Its old "not active on the deployed program" copy was
-                false and has been fixed.
-              - Stake is INSURANCE backing. The wizard creates its pool with
-                StakeInitPool, which sets pool_mode = 0; percolator-stake's
-                process_accrue_fees rejects anything but pool_mode == 1
-                (InitTradingPool) with InvalidPoolMode. Verified on a freshly
-                created market: pool_mode reads 0 at offset 280.
-            So stake genuinely earns nothing here — not because a crank is
-            missing, but because an insurance pool is not a fee-earning pool. */}
+        {/* E2E B4 (2026-09-30): stakers ARE paid. The insurance fee leg accrues to the wrapper's
+            insurance reserve and the keeper (b004a0c) pushes it into the bound stake pool:
+            wrapper tag 87 WithdrawInsuranceReserveToStake -> stake tag 12 AccrueFees, which takes
+            insurance pools (pool_mode 0; see lib/pre-resolve.ts decideStakeLeg). Measured: stakers
+            C3 +5.86 USDC, U3 +7.01 USDC. The old zero-yield caption was false. */}
         <p className="mt-1.5 max-w-lg text-[11px] text-[var(--text-muted)]">
-          Staking backs the insurance fund — it doesn&apos;t earn trading fees, so APR is
-          0% by design and flushes to insurance reduce staked value. For fee yield, use
-          an LP vault on Earn.
+          Staking backs the insurance fund, and stakers are paid its share of every trading
+          fee, moved into the stake pool automatically. Your stake is first-loss capital for
+          this market's insurance, so its value can fall.
         </p>
         {/* The 0% above reads as an oversight without the other shares beside
             it — "16% to insurance" is the number it gets mistaken for. #2565. */}
@@ -402,6 +405,8 @@ function PositionCard({
   });
 
   const [txStatus, setTxStatus] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  // Live countdown; at 0 re-read the position so "Withdraw All" enables without a refresh.
+  const cooldown = useStakeCooldown(position, onWithdrawSuccess);
 
   const handleWithdraw = useCallback(async () => {
     if (!position.cooldownElapsed) return;
@@ -429,7 +434,7 @@ function PositionCard({
       <div className="space-y-3 p-3">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <div className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-secondary)]">LP Balance</div>
+            <div className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-secondary)]">Your stake</div>
             <div className="text-sm font-mono tabular-nums text-[var(--text)]">
               {position.lpBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })}
             </div>
@@ -448,8 +453,8 @@ function PositionCard({
             <span className="text-[9px] uppercase tracking-[0.15em] text-[var(--text-secondary)]">Cooldown</span>
             <span className="text-[10px] text-[var(--text-muted)] tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>
               {position.cooldownElapsed
-                ? "Complete ✓"
-                : `${position.cooldownRemaining.toLocaleString()} slots (${slotsToTime(position.cooldownRemaining)})`
+                ? STAKE_COPY.ready
+                : cooldown.label
               }
             </span>
           </div>
@@ -458,12 +463,12 @@ function PositionCard({
 
         {/* Tx feedback */}
         {txStatus && (
-          <p className={`text-[11px] ${txStatus.type === "success" ? "text-[var(--long)]" : "text-[var(--short)]"}`}>
+          <p data-testid={txStatus.type === "success" ? "stake-success" : "stake-error"} className={`text-[11px] ${txStatus.type === "success" ? "text-[var(--long)]" : "text-[var(--short)]"}`}>
             {txStatus.msg}
           </p>
         )}
         {withdrawError && !txStatus && (
-          <p className="text-[11px] text-[var(--short)]">{withdrawError}</p>
+          <p data-testid="stake-error" data-kind="withdraw" className="text-[11px] text-[var(--short)]">{withdrawError}</p>
         )}
 
         {/* Action buttons */}
@@ -482,7 +487,7 @@ function PositionCard({
               ? "Withdrawing…"
               : position.cooldownElapsed
               ? "Withdraw All →"
-              : `Withdraw in ${position.cooldownRemaining.toLocaleString()} slots`}
+              : cooldown.label}
           </button>
 
           {/* Manage / Withdraw Partial — jumps to DepositWidget's Withdraw
@@ -585,6 +590,8 @@ function DepositWidget({
   const [withdrawPosition, setWithdrawPosition] = useState<UserPosition | null>(null);
   const [withdrawPositionLoading, setWithdrawPositionLoading] = useState(false);
   const [withdrawRefreshKey, setWithdrawRefreshKey] = useState(0);
+  // Live countdown for the Withdraw tab; at 0 re-read the position (the chain decides).
+  const withdrawCooldown = useStakeCooldown(withdrawPosition, () => setWithdrawRefreshKey((k) => k + 1));
   const [withdrawTxStatus, setWithdrawTxStatus] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
   const pool = pools.find((p) => p.id === selectedPool) ?? pools[0];
@@ -669,7 +676,7 @@ function DepositWidget({
         // (getConfig().vaultProgramId), NOT the SDK's default stake program id.
         const stakeProgramId = new PublicKey(
           (getConfig() as { vaultProgramId?: string }).vaultProgramId
-          ?? "GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3"
+          ?? DEVNET_PROGRAM_IDS.stake
         );
         const found = await fetchPoolPosition(pool, publicKey, connection, stakeProgramId);
         if (!cancelled) setWithdrawPosition(found);
@@ -763,6 +770,7 @@ function DepositWidget({
           <button
             type="button"
             onClick={() => { setMode("deposit"); setTxStatus(null); setWithdrawTxStatus(null); }}
+            data-testid="stake-tab-deposit"
             className={`flex-1 rounded-sm py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${
               mode === "deposit"
                 ? "bg-[var(--accent)]/[0.12] text-[var(--accent-text)]"
@@ -774,6 +782,7 @@ function DepositWidget({
           <button
             type="button"
             onClick={() => { setMode("withdraw"); setTxStatus(null); setWithdrawTxStatus(null); }}
+            data-testid="stake-tab-withdraw"
             className={`flex-1 rounded-sm py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${
               mode === "withdraw"
                 ? "bg-[var(--cyan)]/[0.12] text-[var(--cyan)]"
@@ -820,6 +829,7 @@ function DepositWidget({
               <div className="flex gap-2">
                 <input
                   type="number"
+                  data-testid="stake-deposit-input"
                   value={amount}
                   onChange={(e) => { setAmount(e.target.value); setTxStatus(null); }}
                   placeholder="0.00"
@@ -871,7 +881,7 @@ function DepositWidget({
               <div className="text-[12px] text-[var(--text-secondary)]">
                 You will receive ≈{" "}
                 <span className="font-medium text-[var(--text)] tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>
-                  {lpEstimate.toLocaleString(undefined, { maximumFractionDigits: 4 })} LP
+                  {lpEstimate.toLocaleString(undefined, { maximumFractionDigits: 4 })} shares
                 </span>
               </div>
             )}
@@ -894,18 +904,18 @@ function DepositWidget({
             {/* Cooldown info */}
             {pool && (
               <p className="text-[10px] text-[var(--text-muted)]">
-                Cooldown period: ~{pool.cooldownSlots.toLocaleString()} slots ({slotsToTime(pool.cooldownSlots)} before withdrawal)
+                {STAKE_COPY.period(pool.cooldownSlots)}
               </p>
             )}
 
             {/* Tx feedback */}
             {txStatus && (
-              <p className={`text-[11px] ${txStatus.type === "success" ? "text-[var(--long)]" : "text-[var(--short)]"}`}>
+              <p data-testid={txStatus.type === "success" ? "stake-success" : "stake-error"} className={`text-[11px] ${txStatus.type === "success" ? "text-[var(--long)]" : "text-[var(--short)]"}`}>
                 {txStatus.msg}
               </p>
             )}
             {depositError && !txStatus && (
-              <p className="text-[11px] text-[var(--short)]">{depositError}</p>
+              <p data-testid="stake-error" data-kind="deposit" className="text-[11px] text-[var(--short)]">{depositError}</p>
             )}
 
             {/* CTA */}
@@ -915,6 +925,7 @@ function DepositWidget({
               </button>
             ) : (
               <button
+                data-testid="stake-deposit-submit"
                 disabled={amountNum <= 0 || depositLoading || depositStatus === "exceeds"}
                 onClick={handleDeposit}
                 className={`w-full rounded-sm py-3 text-[12px] font-semibold uppercase tracking-[0.1em] transition-all duration-200 ${
@@ -941,13 +952,14 @@ function DepositWidget({
                     style={{ fontFamily: "var(--font-mono)" }}
                     title="Click to use full staked balance"
                   >
-                    Staked: {withdrawPosition.lpBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })} LP
+                    Staked: {withdrawPosition.lpBalance.toLocaleString(undefined, { maximumFractionDigits: 4 })} shares
                   </button>
                 )}
               </div>
               <div className="flex gap-2">
                 <input
                   type="number"
+                  data-testid="stake-withdraw-input"
                   value={withdrawAmount}
                   onChange={(e) => { setWithdrawAmount(e.target.value); setWithdrawTxStatus(null); }}
                   placeholder="0.00"
@@ -1001,18 +1013,18 @@ function DepositWidget({
               <p className={`text-[10px] ${withdrawPosition.cooldownElapsed ? "text-[var(--text-muted)]" : "text-[var(--short)]"}`}>
                 {withdrawPosition.cooldownElapsed
                   ? "Cooldown complete — ready to withdraw."
-                  : `Cooldown: ~${withdrawPosition.cooldownRemaining.toLocaleString()} slots (${slotsToTime(withdrawPosition.cooldownRemaining)}) remaining.`}
+                  : `${withdrawCooldown.label}.`}
               </p>
             )}
 
             {/* Tx feedback */}
             {withdrawTxStatus && (
-              <p className={`text-[11px] ${withdrawTxStatus.type === "success" ? "text-[var(--long)]" : "text-[var(--short)]"}`}>
+              <p data-testid={withdrawTxStatus.type === "success" ? "stake-success" : "stake-error"} data-kind="withdraw" className={`text-[11px] ${withdrawTxStatus.type === "success" ? "text-[var(--long)]" : "text-[var(--short)]"}`}>
                 {withdrawTxStatus.msg}
               </p>
             )}
             {withdrawError && !withdrawTxStatus && (
-              <p className="text-[11px] text-[var(--short)]">{withdrawError}</p>
+              <p data-testid="stake-error" data-kind="withdraw" className="text-[11px] text-[var(--short)]">{withdrawError}</p>
             )}
 
             {/* CTA */}
@@ -1022,6 +1034,7 @@ function DepositWidget({
               </button>
             ) : (
               <button
+                data-testid="stake-withdraw-submit"
                 disabled={!withdrawPosition || !withdrawPosition.cooldownElapsed || withdrawAmountNum <= 0 || withdrawLoading}
                 onClick={handleWithdraw}
                 className={`w-full rounded-sm py-3 text-[12px] font-semibold uppercase tracking-[0.1em] transition-all duration-200 ${
@@ -1035,7 +1048,7 @@ function DepositWidget({
                   : !withdrawPosition
                   ? "Nothing to Withdraw"
                   : !withdrawPosition.cooldownElapsed
-                  ? `Withdraw in ${withdrawPosition.cooldownRemaining.toLocaleString()} slots`
+                  ? withdrawCooldown.label
                   : "Withdraw →"}
               </button>
             )}
@@ -1111,7 +1124,7 @@ function PoolRow({
 
       {/* Cooldown */}
       <span className="text-right text-[12px] tabular-nums text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
-        {slotsToTime(pool.cooldownSlots)}
+        {cooldownDuration(pool.cooldownSlots)}
       </span>
 
       {/* Your stake */}
@@ -1309,7 +1322,7 @@ function StakeSidebar() {
         </div>
         <div className="space-y-2">
           <CoverageItem icon="⚡" label="Liquidation Shortfall" description="First-loss capital when liquidations don't fully cover a position" />
-          <CoverageItem icon="🔄" label="Socialized Loss Buffer" description="Absorbs bad debt before it cascades to LPs and depositors" />
+          <CoverageItem icon="🔄" label="Socialized Loss Buffer" description="Absorbs bad debt before it reaches the market's liquidity and Earn deposits" />
           <CoverageItem icon="🏗️" label="Protocol Solvency" description="Pre-funds the market's insurance fund via an admin flush" />
         </div>
       </div>
@@ -1322,7 +1335,7 @@ function StakeSidebar() {
         <div className="space-y-2">
           <SidebarStep num={1} title="Deposit" desc="Stake sim-USDC into a market's insurance pool" />
           <SidebarStep num={2} title="Back the fund" desc="Your deposit becomes first-loss backing" />
-          <SidebarStep num={3} title="Withdraw" desc="Redeem LP tokens for your share after cooldown" />
+          <SidebarStep num={3} title="Withdraw" desc={STAKE_COPY.sidebar} />
         </div>
       </div>
 
@@ -1331,7 +1344,7 @@ function StakeSidebar() {
         <div className="mb-2 text-[10px] uppercase tracking-[0.15em] text-[var(--warning)]">⚠ Risk Notice</div>
         <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
           Staked funds are first-loss insurance capital. Admin flushes permanently reduce your
-          redeemable value, and there is no yield distribution — APR is genuinely 0%. Only stake
+          redeemable value, and the fee income shown as APR depends on trading volume. Only stake
           what you can afford to lose.
         </p>
       </div>
@@ -1396,7 +1409,7 @@ export default function StakePage() {
         // (getConfig().vaultProgramId), NOT the SDK's default stake program id.
         const stakeProgramId = new PublicKey(
           (getConfig() as { vaultProgramId?: string }).vaultProgramId
-          ?? "GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3"
+          ?? DEVNET_PROGRAM_IDS.stake
         );
         // Check every pool for user's LP position — same detection logic the
         // Withdraw tab uses for a single selected pool (fetchPoolPosition).

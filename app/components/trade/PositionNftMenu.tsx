@@ -1,0 +1,194 @@
+"use client";
+
+/**
+ * UX WP-9 (audit §3.13, NF-1..3): the position NFT actions live in the position row's "⋯" menu
+ * (desktop and mobile), not in the ticket rail: "Wrap as NFT" (with a confirm sheet), "Send NFT"
+ * (the checkbox modal, plain copy) and "Unwrap" (one prompt: EmergencyBurn directly when the
+ * position already closed, useBurnPositionNft). Replaces PositionNftPanel (removed from the rail).
+ * The eligibility logic is PositionNftPanel's, unchanged (#13: mint only on the wallet's own
+ * unwrapped leg; send / unwrap act on the NFT actually held, self-minted or received).
+ */
+import { type FC, useEffect, useRef, useState } from "react";
+import { usePositionNft } from "@/hooks/usePositionNft";
+import { useMintPositionNft } from "@/hooks/useMintPositionNft";
+import { useBurnPositionNft } from "@/hooks/useBurnPositionNft";
+import { useTransferPositionNft } from "@/hooks/useTransferPositionNft";
+import { useUserAccount } from "@/hooks/useUserAccount";
+import { useNftWrappedPosition } from "@/hooks/useNftWrappedPosition";
+import { useSlabState } from "@/components/providers/SlabProvider";
+import { useTokenMeta } from "@/hooks/useTokenMeta";
+import { useMarketInfo } from "@/hooks/useMarketInfo";
+import { formatTokenAmount } from "@/lib/format";
+import { sanitizeSymbol } from "@/lib/symbol-utils";
+import { SendPositionNftModal } from "@/components/trade/SendPositionNftModal";
+
+export const NFT_MENU_COPY = {
+  menuLabel: "More position actions",
+  wrap: "Wrap as NFT",
+  send: "Send NFT",
+  unwrap: "Unwrap",
+  wrapTitle: "Wrap position as an NFT",
+  wrapBody: (collateral: string) =>
+    `Your whole trading account on this market (the position and all ${collateral} of its collateral) moves into the NFT. Whoever holds the NFT controls it. Unwrap any time to get it back.`,
+  wrapConfirm: "Wrap · 1 approval",
+  cancel: "Cancel",
+  badge: "NFT",
+  closeWrapped: "Unwrap to close this position",
+  heldElsewhere: "Held as an NFT by another wallet",
+} as const;
+
+export interface PositionNftMenuViewProps {
+  canWrap: boolean;
+  isWrapped: boolean;
+  collateralLabel: string;
+  busy: "wrap" | "send" | "unwrap" | null;
+  error: string | null;
+  onWrap: () => void;
+  onSend: () => void;
+  onUnwrap: () => void;
+}
+
+export const PositionNftMenuView: FC<PositionNftMenuViewProps> = ({ canWrap, isWrapped, collateralLabel, busy, error, onWrap, onSend, onUnwrap }) => {
+  const [open, setOpen] = useState(false);
+  const [confirmWrap, setConfirmWrap] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  if (!canWrap && !isWrapped) return null;
+  const item = "block w-full px-3 py-2 text-left text-[11px] text-[var(--text)] hover:bg-[var(--accent)]/[0.08] disabled:opacity-40 min-h-[44px] md:min-h-0";
+  return (
+    <div ref={ref} className="relative inline-block" data-testid="position-nft-menu">
+      <button
+        type="button"
+        data-testid="position-nft-menu-button"
+        aria-label={NFT_MENU_COPY.menuLabel}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="min-h-[44px] min-w-[44px] px-2 text-[14px] leading-none text-[var(--text-secondary)] hover:text-[var(--text)] md:min-h-0 md:min-w-0"
+      >
+        ⋯
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-30 mt-1 min-w-[160px] border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-lg">
+          {canWrap && (
+            <button role="menuitem" type="button" data-testid="position-nft-wrap" className={item} disabled={busy !== null} onClick={() => { setOpen(false); setConfirmWrap(true); }}>
+              {NFT_MENU_COPY.wrap}
+            </button>
+          )}
+          {isWrapped && (
+            <>
+              <button role="menuitem" type="button" data-testid="position-nft-send" className={item} disabled={busy !== null} onClick={() => { setOpen(false); onSend(); }}>
+                {NFT_MENU_COPY.send}
+              </button>
+              <button role="menuitem" type="button" data-testid="position-nft-unwrap" className={item} disabled={busy !== null} onClick={() => { setOpen(false); onUnwrap(); }}>
+                {busy === "unwrap" ? "Unwrapping…" : NFT_MENU_COPY.unwrap}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {confirmWrap && (
+        <div role="dialog" aria-modal="true" aria-labelledby="wrap-nft-title" data-testid="position-nft-wrap-sheet" className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 md:items-center">
+          <div className="w-full max-w-md border border-[var(--border)] bg-[var(--bg)] p-5 text-left">
+            <h3 id="wrap-nft-title" className="text-[13px] font-semibold text-[var(--text)]">{NFT_MENU_COPY.wrapTitle}</h3>
+            <p className="mt-2 text-[12px] leading-relaxed text-[var(--text-secondary)]">{NFT_MENU_COPY.wrapBody(collateralLabel)}</p>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setConfirmWrap(false)} className="min-h-[44px] flex-1 border border-[var(--border)] text-[11px] text-[var(--text-secondary)]">
+                {NFT_MENU_COPY.cancel}
+              </button>
+              <button
+                type="button"
+                data-testid="position-nft-wrap-confirm"
+                disabled={busy !== null}
+                onClick={() => { setConfirmWrap(false); onWrap(); }}
+                className="min-h-[44px] flex-1 border border-[var(--accent)]/50 bg-[var(--accent)]/[0.08] text-[11px] font-semibold text-[var(--accent)] disabled:opacity-40"
+              >
+                {NFT_MENU_COPY.wrapConfirm}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p data-testid="position-nft-error" className="mt-1 max-w-[220px] text-right text-[10px] text-[var(--short)]">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+};
+
+/** The container: PositionNftPanel's hooks and eligibility, behind the row menu. */
+export const PositionNftMenu: FC<{ slabAddress: string }> = ({ slabAddress }) => {
+  const userAccount = useUserAccount();
+  const { hasMintedNft, nftMint, nftPdaAddress } = usePositionNft(slabAddress);
+  const { mint: mintNft, loading: mintLoading, error: mintError } = useMintPositionNft(slabAddress);
+  const wrapped = useNftWrappedPosition(slabAddress, true);
+  const isNftPresent = hasMintedNft || wrapped !== null;
+  const effectiveNftMint = wrapped?.nftMint ?? nftMint;
+  const effectiveNftPdaAddress = wrapped?.nftPda.toBase58() ?? nftPdaAddress;
+  const nftOverride = effectiveNftMint && effectiveNftPdaAddress ? { nftMint: effectiveNftMint, nftPdaAddress: effectiveNftPdaAddress } : undefined;
+  const { burn, loading: burnLoading, error: burnError } = useBurnPositionNft(slabAddress, nftOverride);
+  const { transfer, loading: transferLoading, error: transferError } = useTransferPositionNft(slabAddress, nftOverride && { nftMint: nftOverride.nftMint });
+  const { config } = useSlabState();
+  const meta = useTokenMeta(config?.collateralMint ?? null);
+  const decimals = meta?.decimals ?? 6;
+  const collateralSymbol = meta?.symbol ?? "USDC";
+  const marketInfo = useMarketInfo(slabAddress);
+  const assetSymbol = sanitizeSymbol(marketInfo.market?.symbol) ?? "SIZE";
+  const [showSend, setShowSend] = useState(false);
+  const [pendingMint, setPendingMint] = useState(false);
+  useEffect(() => {
+    if (isNftPresent) setPendingMint(false);
+  }, [isNftPresent]);
+
+  const own = userAccount !== null && userAccount.account.positionSize !== 0n ? userAccount : null;
+  const effective = wrapped ?? own;
+  const mintAddress = effectiveNftMint?.toBase58() ?? null;
+  const summary =
+    effective && effective.account.positionSize !== 0n
+      ? `${effective.account.positionSize > 0n ? "LONG" : "SHORT"} ${formatTokenAmount(effective.account.positionSize < 0n ? -effective.account.positionSize : effective.account.positionSize, decimals)} ${assetSymbol}`
+      : "No open position";
+  const collateralLabel = own ? `${formatTokenAmount(own.account.capital, decimals)} ${collateralSymbol}` : `the ${collateralSymbol}`;
+  const busy = mintLoading || pendingMint ? "wrap" : transferLoading ? "send" : burnLoading ? "unwrap" : null;
+
+  return (
+    <>
+      <PositionNftMenuView
+        canWrap={own !== null && !pendingMint}
+        isWrapped={isNftPresent}
+        collateralLabel={collateralLabel}
+        busy={busy}
+        error={mintError || burnError || transferError}
+        onWrap={() => {
+          setPendingMint(true);
+          void mintNft().then((sig) => {
+            if (!sig) setPendingMint(false);
+          });
+        }}
+        onSend={() => setShowSend(true)}
+        onUnwrap={() => void burn()}
+      />
+      {showSend && isNftPresent && mintAddress && (
+        <SendPositionNftModal
+          positionSummary={summary}
+          nftMintShort={`${mintAddress.slice(0, 8)}…${mintAddress.slice(-6)}`}
+          loading={transferLoading}
+          error={transferError}
+          onCancel={() => setShowSend(false)}
+          onConfirm={async (dest) => {
+            const sig = await transfer(dest);
+            if (sig) setShowSend(false);
+          }}
+        />
+      )}
+    </>
+  );
+};

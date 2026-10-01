@@ -7,8 +7,9 @@ import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { assertKnownProgram } from "@/lib/programAllowlist";
 import { usePositionNft } from "@/hooks/usePositionNft";
-import { sendTx } from "@/lib/tx";
+import { sendTx, simulateForGate } from "@/lib/tx";
 import { humanizeError } from "@/lib/errorMessages";
+import { plainMessage } from "@/lib/limits/user-message";
 import { useToast } from "@/hooks/useToast";
 import { PERCOLATOR_NFT_PROGRAM_ID } from "@/lib/nft-program";
 import { sendEmergencyBurn } from "@/hooks/useEmergencyBurn";
@@ -40,6 +41,26 @@ function isLegNotActiveError(rawMsg: string): boolean {
   if (paren) return parseInt(paren[1], 10) === 22;
   return false;
 }
+
+/**
+ * UX WP-9 (audit §3.13, NF-2): decide BEFORE any prompt. A simulated Burn that fails with the NFT
+ * program's LegNotActive (22) means the position already closed while wrapped: send EmergencyBurn
+ * as the ONLY transaction (1 prompt, never Burn-then-EmergencyBurn). The wrapper's own 22
+ * (EngineNonProgress) can bubble up through the CPI with the same number, so a failure logged by
+ * the wrapper is NOT LegNotActive.
+ */
+export function isLegNotActiveSim(err: unknown, logs: readonly string[], wrapperProgramId: string): boolean {
+  const ie = (err as { InstructionError?: unknown } | null)?.InstructionError;
+  const custom = Array.isArray(ie) ? (ie[1] as { Custom?: unknown } | null)?.Custom : undefined;
+  if (custom !== 22) return false;
+  if (logs.some((l) => l.includes(`Program ${wrapperProgramId} failed`))) return false;
+  return logs.some((l) => l.includes(`Program ${PERCOLATOR_NFT_PROGRAM_ID.toBase58()} failed`));
+}
+
+export const UNWRAP_COPY = {
+  done: "Position unwrapped.",
+  alreadyClosed: "Your position had already closed; unwrapping returns the account to you.",
+} as const;
 
 /** Lets a caller (e.g. PositionNftPanel) supply the NFT identity directly
  *  instead of relying solely on this hook's own usePositionNft() scan — used
@@ -144,6 +165,15 @@ export function useBurnPositionNft(slabAddress: string, override?: PositionNftOv
         data: Buffer.from(encodeNftBurn()),
       });
 
+      // NF-2: one simulation decides which ONE transaction the wallet signs.
+      const g = await simulateForGate(connection, walletPubkey, [ix]);
+      if (g.err && isLegNotActiveSim(g.err, g.logs, programId.toBase58())) {
+        const sig = await sendEmergencyBurn({ connection, wallet, walletPubkey, wrapperProgramId: programId, slabAddress, nftMint, nftPdaAddress });
+        refresh();
+        toast(UNWRAP_COPY.alreadyClosed, "success");
+        return sig;
+      }
+
       const sig = await sendTx({
         connection,
         wallet,
@@ -155,7 +185,7 @@ export function useBurnPositionNft(slabAddress: string, override?: PositionNftOv
       // and the UI reflects the unwrapped position right after a confirmed burn.
       refresh();
 
-      toast("Position NFT burned!", "success");
+      toast(UNWRAP_COPY.done, "success");
       return sig;
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
@@ -180,11 +210,11 @@ export function useBurnPositionNft(slabAddress: string, override?: PositionNftOv
           });
 
           refresh();
-          toast("Position was already closed elsewhere — recovered via emergency burn.", "success");
+          toast(UNWRAP_COPY.alreadyClosed, "success");
           return sig;
         } catch (emergencyErr) {
           const emergencyMsg = emergencyErr instanceof Error ? emergencyErr.message : String(emergencyErr);
-          const msg = humanizeError(emergencyMsg);
+          const msg = plainMessage(emergencyMsg, { surface: "nft" }, humanizeError);
           console.error("[useBurnPositionNft] EmergencyBurn fallback failed", emergencyMsg);
           setError(msg);
           toast(msg, "error");
@@ -192,7 +222,7 @@ export function useBurnPositionNft(slabAddress: string, override?: PositionNftOv
         }
       }
 
-      const msg = humanizeError(errMsg);
+      const msg = plainMessage(errMsg, { surface: "nft" }, humanizeError);
       console.error("[useBurnPositionNft]", errMsg);
       setError(msg);
       toast(msg, "error");

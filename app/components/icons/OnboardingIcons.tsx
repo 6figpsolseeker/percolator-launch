@@ -31,7 +31,7 @@ export const OnboardingIcon: FC<OnboardingIconProps> = ({ type, size = 64, class
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         className={className}
-        aria-label="Permissionless Perps icon"
+        aria-label="Open perps icon"
         role="img"
       >
         {/* Circular arc (perpetual loop) */}

@@ -94,7 +94,7 @@ export const MarketPreview: FC<MarketPreviewProps> = ({
       <div className="px-5 py-4 space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <p className="text-[8px] font-medium uppercase tracking-[0.2em] text-[var(--text)]">LP Collateral</p>
+            <p className="text-[8px] font-medium uppercase tracking-[0.2em] text-[var(--text)]">Starting liquidity</p>
             <p className="mt-0.5 text-[12px] font-semibold text-[var(--text)]">
               {parseFloat(lpCollateral) > 0 ? `${parseFloat(lpCollateral).toLocaleString()} Sim-USDC` : "—"}
             </p>
@@ -113,7 +113,7 @@ export const MarketPreview: FC<MarketPreviewProps> = ({
             {oracleMode === "auto" ? "Auto Oracle" : oracleMode === "dex" ? "DEX Oracle" : oracleMode === "pyth" ? "Pyth Oracle" : "Admin Oracle"}
           </span>
           <span className="border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 text-[9px] font-medium text-[var(--text-secondary)]">
-            {tierSlots} Slots
+            {tierSlots} positions max
           </span>
           <span className="border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 text-[9px] font-medium text-[var(--text-secondary)]">
             {tokenDecimals} Decimals
@@ -125,7 +125,7 @@ export const MarketPreview: FC<MarketPreviewProps> = ({
           )}
           {vammEnabled && (
             <span className="border border-[var(--accent)]/30 bg-[var(--accent)]/[0.06] px-2 py-0.5 text-[9px] font-medium text-[var(--accent)]">
-              vAMM
+              Auto pricing
             </span>
           )}
         </div>

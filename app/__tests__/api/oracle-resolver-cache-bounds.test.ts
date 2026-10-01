@@ -67,13 +67,11 @@ function makeContext(ca = VALID_MINT) {
 
 function jupiterResponse() {
   return new Response(
+    // Jupiter Price API v3 shape (lib/jupiter-price.ts; the v2 host now answers 404).
     JSON.stringify({
-      data: {
-        [VALID_MINT]: {
-          id: VALID_MINT,
-          type: "derivedPrice",
-          price: "150.25",
-        },
+      [VALID_MINT]: {
+        usdPrice: 150.25,
+        decimals: 6,
       },
     }),
     {

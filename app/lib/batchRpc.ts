@@ -17,6 +17,8 @@
  * - Transparent to callers — each gets their own Response object
  */
 
+import { reportRpcOutcome, rpcErrorCode } from "@/lib/rpc-health";
+
 /**
  * Methods that must NOT be batched or deduplicated.
  *
@@ -357,7 +359,18 @@ export function createBatchRpc(config: BatchRpcConfig) {
     // Our internal batch uses numeric ids, but @solana/web3.js v1 validates
     // that response.id is a string via superstruct — so we must restore it.
     const originalId = parsed.id;
-    const resultJson = await enqueue(parsed.method, parsed.params ?? []);
+    let resultJson: string;
+    try {
+      resultJson = await enqueue(parsed.method, parsed.params ?? []);
+    } catch (e) {
+      // UX WP-10 (RP-1): a transport failure counts toward the connection bar.
+      reportRpcOutcome(false);
+      throw e;
+    }
+    const code = rpcErrorCode(resultJson);
+    // Only transport-level trouble (rate limit / internal) marks the connection; an ordinary
+    // RPC answer, including a program error, is a reachable Solana.
+    reportRpcOutcome(code === null || (code !== -32005 && code !== -32603 && code !== 429), code);
 
     // Replace the internal batch id with the caller's original id
     let finalJson = resultJson;

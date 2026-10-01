@@ -1,5 +1,6 @@
 "use client";
 
+import { baseSymbol } from "@/lib/symbol-utils";
 import { FC, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -158,8 +159,8 @@ const MarketSwitcherInner: FC<MarketSwitcherProps> = ({ slabAddress, symbol, log
       >
         <MarketLogo logoUrl={logoUrl} mintAddress={mintAddress} mainnetCa={mainnetCa} symbol={symbol} size="sm" />
         <span className="text-sm font-bold text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>
-          {symbol}/USD
-          <span className="ml-1.5 text-[9px] font-normal uppercase tracking-[0.12em] text-[var(--text-secondary)]">PERP</span>
+          {baseSymbol(symbol)}
+          <span className="hidden md:inline">/USD</span>
         </span>
         <span
           aria-hidden="true"
@@ -226,7 +227,7 @@ const MarketSwitcherInner: FC<MarketSwitcherProps> = ({ slabAddress, symbol, log
                 >
                   <span className="min-w-0">
                     <span className={`block truncate text-[12px] font-bold ${isCurrent ? "text-[var(--accent)]" : "text-[var(--text)]"}`} style={{ fontFamily: "var(--font-mono)" }}>
-                      {r.symbol}/USD
+                      {baseSymbol(r.symbol)}/USD
                       {isCurrent && <span className="ml-1.5 text-[8px] font-normal uppercase tracking-[0.12em] text-[var(--accent)]">current</span>}
                     </span>
                     {r.name && (

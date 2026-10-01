@@ -17,12 +17,19 @@
  * pool address — and every row's `deployer` held the sim-USDC MINT rather than a
  * wallet. The race was not occasional; it was the only outcome.
  *
- * This module is the fix. It is called from the registration route, AFTER that
- * route has verified the caller against the slab's live on-chain marketauth, so
- * every branch below is already authenticated. That is what lets an 'auto' row
- * be overwritten safely: the blanket 409 existed to stop tampering-by-replay,
- * and the marketauth proof stops that far more precisely than refusing all
- * updates.
+ * This module is the fix. It is called from the registration route AFTER the
+ * route has authenticated the request, in one of two modes:
+ *
+ *   - "admin": the maintainer path (x-admin-secret). May update any row.
+ *   - "proof": the creator path. The proof is the market-creation transaction
+ *     (lib/keeper-register-memo.ts), which is PUBLIC and can be replayed by
+ *     anyone, but only with the exact registration the creator signed. So this
+ *     mode may create a row, and may replace an indexer 'auto' guess (the
+ *     creator beats the indexer), but it NEVER overwrites a row that is already
+ *     creator-registered ('manual'), never re-activates a retired one, and
+ *     never changes the price source (pool / CA) a row already has: the first
+ *     proof-registered binding wins, and any change goes through the admin path
+ *     (security review 2026-09-30, M-1 / M-2).
  *
  * See docs/MARKET-REGISTRATION-SPEC-2026-07-30.md.
  */
@@ -53,8 +60,24 @@ export interface RegistrationRow {
 }
 
 export type UpsertResult =
-  | { ok: true; action: "inserted" | "updated" }
+  /** `keeperActive`: the row is enrolled for pricing after this call. */
+  | { ok: true; action: "inserted" | "updated" | "unchanged"; keeperActive: boolean }
   | { ok: false; status: number; error: string; detail?: string };
+
+export type RegistrationMode = "proof" | "admin";
+
+/** Refused on the proof path: the row already has another price source. */
+export const PRICE_SOURCE_LOCKED = "This market is already registered with a different price source.";
+/** Final, not retryable (the client's backoff retries 409): the binding only changes via the admin path. */
+export const PRICE_SOURCE_LOCKED_STATUS = 422;
+
+interface ExistingRow {
+  id: string;
+  metadata_source: string | null;
+  dex_pool_address?: string | null;
+  mainnet_ca?: string | null;
+  keeper_status?: string | null;
+}
 
 /**
  * Postgres/PostgREST error rendered for a log line and for the caller.
@@ -74,18 +97,18 @@ function describe(err: { code?: string; message?: string; details?: string; hint
 /**
  * Insert or update the market row.
  *
- *   no row                     -> insert, metadata_source='manual', keeper_status='active'
+ *   no row                            -> insert, metadata_source='manual', keeper_status='active'
  *   existing metadata_source='auto'   -> update; the creator beats the indexer's guess
- *   existing metadata_source='manual' -> idempotent update (re-registration/retry)
+ *   existing metadata_source='manual' -> "admin": update (maintainer fix)
+ *                                        "proof": NO write ('unchanged'); the row stays as the
+ *                                        creator first registered it (and as a maintainer may
+ *                                        have retired it)
+ *   "proof" and the row already names a different pool / CA -> 422 (final), no write
+ *   "proof" replaces an 'auto' row only with `metadata_source='auto'` in the UPDATE itself
  *
- * The 'manual' branch is an update rather than a 409 because reaching it already
- * required signing against the slab's on-chain marketauth — the same wallet is
- * re-registering, which is exactly what the retry path does. A caller who cannot
- * sign never gets here.
- *
- * `keeper_status='active'` is set here and only here. The indexer's inserts take
- * the column default ('retired'), so auto-discovery can never enroll a market
- * for pricing.
+ * `keeper_status='active'` is set only by an insert or an update here. The
+ * indexer's inserts take the column default ('retired'), so auto-discovery can
+ * never enroll a market for pricing.
  */
 /**
  * Map the wizard's oracle vocabulary onto the column's.
@@ -102,6 +125,9 @@ function describe(err: { code?: string; message?: string; details?: string; hint
  * before that, what made POST /api/markets fail 100% of the time rather than
  * merely lose the race with the indexer. It sent this same unmapped value.
  */
+/** `markets` columns typed integer (information_schema, 2026-10-01). */
+export const INTEGER_COLUMNS = ["decimals", "max_leverage", "trading_fee_bps"] as const;
+
 function toDbOracleMode(mode: string): string {
   return mode === "keeper" ? "admin" : mode;
 }
@@ -109,10 +135,20 @@ function toDbOracleMode(mode: string): string {
 export async function upsertRegisteredMarketRow(
   supabase: SupabaseClient,
   row: RegistrationRow,
+  mode: RegistrationMode,
 ): Promise<UpsertResult> {
-  const { data: existing, error: readErr } = await supabase
+  return upsertOnce(supabase, row, mode, false);
+}
+
+async function upsertOnce(
+  supabase: SupabaseClient,
+  row: RegistrationRow,
+  mode: RegistrationMode,
+  raced: boolean,
+): Promise<UpsertResult> {
+  const { data: existingRaw, error: readErr } = await supabase
     .from("markets")
-    .select("id, metadata_source")
+    .select("id, metadata_source, dex_pool_address, mainnet_ca, keeper_status")
     .eq("slab_address", row.slab_address)
     .eq("network", row.network)
     .maybeSingle();
@@ -127,6 +163,19 @@ export async function upsertRegisteredMarketRow(
     };
   }
 
+  const existing = (existingRaw ?? null) as ExistingRow | null;
+
+  if (existing && mode === "proof") {
+    const pool = existing.dex_pool_address ?? null;
+    const ca = existing.mainnet_ca ?? null;
+    if ((pool !== null && pool !== row.dex_pool_address) || (ca !== null && ca !== (row.mainnet_ca ?? null))) {
+      return { ok: false, status: PRICE_SOURCE_LOCKED_STATUS, error: PRICE_SOURCE_LOCKED };
+    }
+    if (existing.metadata_source === "manual") {
+      return { ok: true, action: "unchanged", keeperActive: existing.keeper_status === "active" };
+    }
+  }
+
   // Drop null/undefined optional fields before writing. The retry path
   // re-registers an already-listed market and has no CreateMarketParams to
   // derive max_leverage / trading_fee_bps / oracle_authority from, so it sends
@@ -137,13 +186,32 @@ export async function upsertRegisteredMarketRow(
     if (v !== null && v !== undefined) payload[k] = v;
   }
   payload.oracle_mode = toDbOracleMode(row.oracle_mode);
+  // The `markets` integer columns reject a fraction (Postgres 22P02). The wizard advertises the
+  // FLOORED-margin leverage, which is fractional (e.g. 5.4x for 1850 bps): every such registration
+  // failed the insert with a 500, so the market was never enrolled for the keeper (2026-10-01,
+  // slab 9EPm...). Stored rounded DOWN (never above what the engine allows); the live list reads
+  // the exact cap from the slab anyway (lib/live-market-state.ts).
+  for (const k of INTEGER_COLUMNS) {
+    const v = payload[k];
+    if (typeof v === "number") {
+      if (!Number.isFinite(v)) delete payload[k];
+      else payload[k] = k === "max_leverage" ? Math.max(1, Math.floor(v)) : Math.floor(v);
+    }
+  }
 
   if (!existing) {
     const { error } = await supabase.from("markets").insert(payload as never);
     if (error) {
       // 23505: a concurrent writer (almost always the indexer's discovery pass)
-      // inserted between our read and this write. Fall through to an update so
-      // the creator's metadata still lands, rather than failing the launch.
+      // inserted between our read and this write. On the proof path, re-run the
+      // existing-row rules against what is there now (never a blind update).
+      if (error.code === "23505" && mode === "proof" && !raced) {
+        return upsertOnce(supabase, row, mode, true);
+      }
+      if (error.code === "23505" && mode === "proof") {
+        return { ok: false, status: 503, error: "The market row changed while registering. Try again." };
+      }
+      // Admin path: fall through to an update so the metadata still lands.
       if (error.code === "23505") {
         const { error: updErr } = await supabase
           .from("markets")
@@ -154,12 +222,34 @@ export async function upsertRegisteredMarketRow(
           console.error("[market-registration] post-23505 update failed:", describe(updErr));
           return { ok: false, status: 500, error: "Failed to register market", detail: describe(updErr) };
         }
-        return { ok: true, action: "updated" };
+        return { ok: true, action: "updated", keeperActive: true };
       }
       console.error("[market-registration] insert failed:", describe(error));
       return { ok: false, status: 500, error: "Failed to register market", detail: describe(error) };
     }
-    return { ok: true, action: "inserted" };
+    return { ok: true, action: "inserted", keeperActive: true };
+  }
+
+  if (mode === "proof") {
+    // Re-review I-R1: only an 'auto' row may be replaced on the proof path, checked IN the write,
+    // so a maintainer edit landing between the read and this update is never overwritten. Zero
+    // rows updated = the row changed underneath: re-apply the rules once against what is there.
+    const { data: updated, error: pErr } = await supabase
+      .from("markets")
+      .update(payload as never)
+      .eq("slab_address", row.slab_address)
+      .eq("network", row.network)
+      .eq("metadata_source", "auto")
+      .select("id");
+    if (pErr) {
+      console.error("[market-registration] update failed:", describe(pErr));
+      return { ok: false, status: 500, error: "Failed to update market registration", detail: describe(pErr) };
+    }
+    if (!Array.isArray(updated) || updated.length === 0) {
+      if (!raced) return upsertOnce(supabase, row, mode, true);
+      return { ok: false, status: 503, error: "The market row changed while registering. Try again." };
+    }
+    return { ok: true, action: "updated", keeperActive: true };
   }
 
   const { error: updErr } = await supabase
@@ -176,5 +266,5 @@ export async function upsertRegisteredMarketRow(
       detail: describe(updErr),
     };
   }
-  return { ok: true, action: "updated" };
+  return { ok: true, action: "updated", keeperActive: true };
 }

@@ -72,6 +72,7 @@ import {
 } from "@/lib/create-market-rate-limit";
 import * as Sentry from "@sentry/nextjs";
 import { deriveMarketParams, leverageFromMarginBps } from "@/lib/market-params";
+import { buildInitMatcherCtxArgs } from "@/lib/matcher-params";
 import {
   buildMobileFundingIxs,
   mobileRequiredCollateral,
@@ -490,18 +491,7 @@ export async function POST(req: NextRequest) {
       }),
       // Bounded fill/inventory, sized to LP capital — NOT u128::MAX (see derivedParams
       // above; this replaced the unlimited-LP config that drained devnet-1 markets).
-      data: encodeInitMatcherCtx({
-        kind: 0,
-        tradingFeeBps: 30,
-        baseSpreadBps: 50,
-        maxTotalBps: 200,
-        impactKBps: 0,
-        liquidityNotionalE6: 0n,
-        maxFillAbs: derivedParams.maxFillAbs,
-        maxInventoryAbs: derivedParams.maxInventoryAbs,
-        feeToInsuranceBps: 0,
-        skewSpreadMultBps: derivedParams.skewSpreadMultBps,
-      }),
+      data: encodeInitMatcherCtx(buildInitMatcherCtxArgs(30, derivedParams.matcher)),
     });
 
     const tx2 = new Transaction({ recentBlockhash: blockhash, feePayer: deployerPk });

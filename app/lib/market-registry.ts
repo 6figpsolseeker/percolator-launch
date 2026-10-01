@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/nextjs";
 import { getServiceClient, getServerNetwork } from "@/lib/supabase";
 import { readLiveMarketStates } from "@/lib/live-market-state";
 import { BLOCKED_SLAB_ADDRESSES } from "@/lib/blocklist";
+import { getConfig } from "@/lib/config";
 
 /**
  * The one place market rows are loaded.
@@ -142,7 +143,16 @@ export async function loadMergedMarketRows(): Promise<MarketRegistryRow[] | null
     registryRows.map((m) => String(m.slab_address ?? "")).filter(Boolean),
   );
 
-  return registryRows.map((m) => {
+  // Relaunch (2026-10-01): a registry row whose slab is owned by another program is a market of an
+  // abandoned wrapper — never list it. A row whose slab could not be read keeps the existing
+  // "degrade, don't hide" policy (an RPC gap must not empty the list).
+  const wrapper = getConfig().programId;
+  const current = registryRows.filter((m) => {
+    const owner = liveStates.get(String(m.slab_address ?? ""))?.owner;
+    return owner === undefined || owner === wrapper;
+  });
+
+  return current.map((m) => {
     const live = liveStates.get(String(m.slab_address ?? ""));
     if (!live) return m;
     return {

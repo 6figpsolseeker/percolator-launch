@@ -301,8 +301,8 @@ export const OpenInterestCard: FC<{ slabAddress: string }> = ({
         {!dataIsV17 && (
         <div className="rounded-none border border-[var(--border)]/30 bg-[var(--bg)] px-1.5 py-1">
           <div className="flex items-center gap-0.5">
-            <span className="text-[8px] uppercase tracking-[0.1em] text-[var(--text-secondary)]">LP Net</span>
-            <InfoIcon tooltip="The aggregate position LPs must hold to balance trader positions. Drives funding rates." />
+            <span className="text-[8px] uppercase tracking-[0.1em] text-[var(--text-secondary)]">Market net</span>
+            <InfoIcon tooltip="The net position the market holds to balance traders. Drives funding rates." />
           </div>
           <div className={`text-[11px] font-bold ${lpDirection === "long" ? "text-[var(--long)]" : "text-[var(--short)]"}`} style={{ fontFamily: "var(--font-mono)" }}>
             {lpNetUsd}

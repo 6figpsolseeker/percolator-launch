@@ -3,6 +3,14 @@ export interface ConfirmedTradeParams {
   userIdx: number;
   size: bigint;
   limitPriceE6?: bigint;
+  /** P2 fee channel: taker-signed fee cap (lib/limits/fee-channel.ts). */
+  feeBps?: bigint;
+  /** UX WP-2: the app is waiting for the market before any prompt (useTrade -> sendTxWaiting). */
+  onWaiting?: (waiting: boolean) => void;
+  /** UX WP-3: "Stop" on a long wait; keep waiting past the schedule; told after ~30 s. */
+  abortSignal?: AbortSignal;
+  keepWaiting?: boolean;
+  onWaitingLong?: () => void;
 }
 
 /**

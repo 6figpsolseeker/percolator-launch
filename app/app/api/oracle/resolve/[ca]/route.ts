@@ -1,81 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
+import { registeredPoolForMint } from "@/lib/registered-pool";
 import { SUPPORTED_DEX_IDS } from "@/lib/dex-constants";
+import { classifyPoolsByOwner, isOfferable, MAX_CLASSIFY_POOLS } from "@/lib/dex-pool-owner";
+import type { KeeperDexType } from "@/lib/dex-type";
 import { BoundedTtlCache } from "@/lib/bounded-ttl-cache";
+import { fetchJupiterUsdPrice } from "@/lib/jupiter-price";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET /api/oracle/resolve/[ca]
  *
- * Given a Solana token mint (base58), resolves oracle config using a
- * Pyth Hermes → Jupiter → DexScreener fallback chain.
+ * Given a Solana token mint (base58), resolves oracle config from DexScreener (price, symbol and
+ * the keeper-priceable pool) with Jupiter as the price fallback. No Pyth (2026-10-01): the
+ * playground prices every market from its mainnet DEX pool through the keeper.
  *
  * Returns: { feedId, symbol, price, source }
- *   feedId — Pyth feed ID (hex64) if found, else null
+ *   feedId — always null (kept for response-shape compatibility)
  *   symbol — token ticker
  *   price  — USD price (number)
- *   source — "pyth" | "jupiter" | "dexscreener"
+ *   source — "dexscreener" | "jupiter"
  *
  * Bug: PERC-oracle-resolve — route was missing, causing 404 on Create Market flow.
  */
-
-// ---------------------------------------------------------------------------
-// Static Pyth feed map: mint → { feedId, symbol }
-// ---------------------------------------------------------------------------
-
-const MINT_TO_PYTH: Record<string, { feedId: string; symbol: string }> = {
-  // SOL
-  So11111111111111111111111111111111111111112: {
-    feedId: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
-    symbol: "SOL",
-  },
-  // BTC (Wormhole wBTC — replaces stale Sollet 9n4nbM75, GH#1800/PERC-8177)
-  "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh": {
-    feedId: "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
-    symbol: "BTC",
-  },
-  // ETH
-  "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs": {
-    feedId: "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
-    symbol: "ETH",
-  },
-  // USDC
-  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: {
-    feedId: "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a",
-    symbol: "USDC",
-  },
-  // USDT
-  Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: {
-    feedId: "2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b",
-    symbol: "USDT",
-  },
-  // BONK
-  DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263: {
-    feedId: "72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419",
-    symbol: "BONK",
-  },
-  // JTO
-  jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL: {
-    feedId: "b43660a5f790c69354b0729a5ef9d50d68f1df92107540210b9cccba1f947cc2",
-    symbol: "JTO",
-  },
-  // JUP
-  JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN: {
-    feedId: "0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996",
-    symbol: "JUP",
-  },
-  // WIF
-  EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm: {
-    feedId: "4ca4beeca86f0d164160323817a4e42b10010a724c2217c6ee41b54e6c5c4b03",
-    symbol: "WIF",
-  },
-  // RAY
-  "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": {
-    feedId: "91568bae053f70f0c3fbf32eb55df25ec609fb8a21cfb1a0e3b34fc3caa1eab0",
-    symbol: "RAY",
-  },
-};
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -99,13 +47,13 @@ interface OracleResolveResult {
   feedId: string | null;
   symbol: string;
   price: number;
-  source: "pyth" | "jupiter" | "dexscreener" | "unknown";
-  /** PERC-470: DEX pool address for hyperp oracle mode (when no Pyth feed) */
+  source: "jupiter" | "dexscreener" | "unknown";
+  /** PERC-470: DEX pool address the keeper prices the market from */
   dexPoolAddress?: string | null;
-  /** PERC-470: DEX type (pumpswap, raydium, meteora) */
+  /** Keeper dexType of `dexPoolAddress`, classified by mainnet owner ("meteora-dlmm" | "pumpswap"). */
   dexType?: string | null;
   /** PERC-470: Recommended oracle mode */
-  oracleMode?: "pyth" | "hyperp" | "admin";
+  oracleMode?: "hyperp" | "admin";
 }
 
 // ---------------------------------------------------------------------------
@@ -132,26 +80,14 @@ function isUrl(s: string): boolean {
 async function fetchJupiterPrice(
   ca: string,
 ): Promise<{ price: number; symbol: string | null } | null> {
-  try {
-    const resp = await fetch(`https://api.jup.ag/price/v2?ids=${ca}`, {
-      signal: AbortSignal.timeout(6000),
-      headers: { "User-Agent": "percolator/1.0" },
-    });
-    if (!resp.ok) return null;
-    const json = await resp.json();
-    const data = json.data?.[ca];
-    if (!data?.price) return null;
-    const price = parseFloat(data.price);
-    if (!isFinite(price) || price <= 0) return null;
-    return { price, symbol: data.mintSymbol ?? null };
-  } catch {
-    return null;
-  }
+  // Jupiter Price API v3 (lib/jupiter-price.ts). v3 carries no symbol; DexScreener supplies it.
+  const price = await fetchJupiterUsdPrice(ca);
+  return price === null ? null : { price, symbol: null };
 }
 
 async function fetchDexScreenerInfo(
   ca: string,
-): Promise<{ price: number; symbol: string | null; poolAddress: string | null; dexId: string | null } | null> {
+): Promise<{ price: number; symbol: string | null; candidates: string[]; priceByPair: Record<string, number> } | null> {
   try {
     const resp = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${ca}`, {
       signal: AbortSignal.timeout(6000),
@@ -179,21 +115,24 @@ async function fetchDexScreenerInfo(
     const price = parseFloat(best.priceUsd ?? "0");
     if (!isFinite(price) || price <= 0) return null;
 
-    // PERC-470/#811: For hyperp pool address, find the highest-liquidity pair on a
-    // *supported* DEX — not just the most liquid pair overall. The best overall pair
-    // may be on Orca/other unsupported venues, causing poolAddress to be incorrectly
-    // null even when a valid PumpSwap/Raydium/Meteora pool exists lower in the list.
-    const bestSupported = solPairs.find(
-      (p) => SUPPORTED_DEX_IDS.has(p.dexId?.toLowerCase() ?? "") && p.pairAddress
-    ) ?? null;
-    const dexId = bestSupported?.dexId?.toLowerCase() ?? null;
-    let poolAddress: string | null = bestSupported?.pairAddress ?? null;
-    // Security: validate pool address is a valid Solana pubkey before returning
-    if (poolAddress) {
-      try { new PublicKey(poolAddress); } catch { poolAddress = null; }
+    // PERC-470/#811 + E2E B21: every supported-dexId pair, most liquid first, is a
+    // CANDIDATE. DexScreener's dexId cannot tell Meteora DLMM from DAMM v1, so the
+    // GET handler classifies the candidates by their mainnet owner program and
+    // picks the first one the keeper can price.
+    const candidates: string[] = [];
+    for (const p of solPairs) {
+      if (!SUPPORTED_DEX_IDS.has(p.dexId?.toLowerCase() ?? "") || !p.pairAddress) continue;
+      // Security: validate pool address is a valid Solana pubkey before returning
+      try { new PublicKey(p.pairAddress); } catch { continue; }
+      if (!candidates.includes(p.pairAddress)) candidates.push(p.pairAddress);
+      if (candidates.length >= MAX_CLASSIFY_POOLS) break;
     }
-
-    return { price, symbol: best.baseToken?.symbol ?? null, poolAddress, dexId };
+    const priceByPair: Record<string, number> = {};
+    for (const p of solPairs) {
+      const v = parseFloat(p.priceUsd ?? "");
+      if (p.pairAddress && isFinite(v) && v > 0) priceByPair[p.pairAddress] = v;
+    }
+    return { price, symbol: best.baseToken?.symbol ?? null, candidates, priceByPair };
   } catch {
     return null;
   }
@@ -242,9 +181,6 @@ export async function GET(
     });
   }
 
-  // --- 1. Check static Pyth feed map ---
-  const pythEntry = MINT_TO_PYTH[ca];
-
   /*
    * Reuse one upstream operation for concurrent requests targeting
    * the same mint. New unique operations are rejected once the hard
@@ -271,37 +207,56 @@ export async function GET(
   }
 
   const [jupResult, dexResult] = await sourceLookup;
+  // A token that already has a live market resolves to THAT market's registered pool (the venue
+  // the keeper prices it from), never a re-ranked "best" pair (lib/registered-pool.ts).
+  // A failed lookup is not "unregistered": answer from the pairs for THIS request, uncached.
+  let registered: Awaited<ReturnType<typeof registeredPoolForMint>> = null;
+  let cacheable = true;
+  try {
+    registered = await registeredPoolForMint(ca);
+  } catch {
+    cacheable = false;
+  }
 
   // Best price: prefer DexScreener for memecoins, Jupiter as fallback
   const priceSource = dexResult ?? jupResult;
-  const price = priceSource?.price ?? 0;
+  const registeredPrice = registered ? dexResult?.priceByPair[registered.pool] : undefined;
+  const price = registeredPrice ?? priceSource?.price ?? 0;
   const symbolFromPrice = priceSource?.symbol ?? null;
 
   let result: OracleResolveResult;
 
   // PERC-470: Determine best DEX pool for hyperp mode
-  const bestPool = dexResult?.poolAddress ?? null;
-  const bestDexType = dexResult?.dexId ?? null;
+  // E2E B21: the pool must be one the keeper can price, by mainnet OWNER.
+  let bestPool: string | null = null;
+  let bestDexType: string | null = null;
+  const candidates = dexResult?.candidates ?? [];
+  if (registered) {
+    bestPool = registered.pool;
+    bestDexType = registered.dexType;
+    if (!bestDexType) {
+      const classes = await classifyPoolsByOwner([registered.pool]);
+      bestDexType = classes && isOfferable(classes[registered.pool]) ? (classes[registered.pool] as KeeperDexType) : null;
+      if (!classes) cacheable = false; // transient RPC failure: don't pin a null dexType
+    }
+  } else if (candidates.length > 0) {
+    const classes = await classifyPoolsByOwner(candidates);
+    if (!classes) {
+      // Not cached: a transient RPC failure must not pin "no pool" for the TTL.
+      return NextResponse.json(
+        { error: "Couldn't verify this token's DEX pools right now. Try again in a moment." },
+        { status: 503, headers: { "Retry-After": "5" } },
+      );
+    }
+    const pick = candidates.find((c) => isOfferable(classes[c]));
+    if (pick) {
+      bestPool = pick;
+      bestDexType = classes[pick] as KeeperDexType;
+    }
+  }
 
-  if (pythEntry) {
-    result = {
-      feedId: pythEntry.feedId,
-      symbol: pythEntry.symbol,
-      price,
-      source: "pyth",
-      oracleMode: "pyth",
-      // Carry the DEX pool even on the Pyth branch. The devnet playground is
-      // ALWAYS keeper-delegated (AUTH_MARK): the keeper reads a mainnet pool and
-      // pushes the mark on-chain. Omitting the pool here made a Pyth-listed
-      // token unreachable by that path — it resolved to oracleMode 'pyth', so
-      // keeper-register never ran, no markets row was written and the market
-      // became an unpriced placeholder. The caller decides which to use; this
-      // route just reports what exists.
-      dexPoolAddress: bestPool,
-      dexType: bestDexType,
-    };
-  } else if (jupResult || dexResult) {
-    // PERC-470: No Pyth feed — use hyperp mode if we have a supported DEX pool
+  if (jupResult || dexResult) {
+    // PERC-470: hyperp (keeper-priced on devnet) when the keeper can price a DEX pool
     const hasPool = !!bestPool;
     // Align price + source with priceSource above (DexScreener preferred over Jupiter).
     result = {
@@ -321,7 +276,7 @@ export async function GET(
     );
   }
 
-  // Cache and return
-  cache.set(ca, result);
+  // Cache and return (never a result built on a failed lookup)
+  if (cacheable) cache.set(ca, result);
   return NextResponse.json({ ...result, cached: false });
 }

@@ -1,10 +1,12 @@
 "use client";
 
+import { bpsPct } from "@/lib/format";
 import { FC, useMemo } from "react";
 import { RotaryDial } from "./RotaryDial";
 import { HoldToLaunch } from "./HoldToLaunch";
 import { MAX_LEVERAGE_X, MIN_LEVERAGE_X } from "@/lib/market-params";
 import { FeeBreakdown } from "@/components/FeeBreakdown";
+import { WizardTranchePanel } from "@/components/limits/CreatorLimits";
 
 /**
  * GH#2621: this dial used to floor initial margin at the OLD
@@ -73,6 +75,9 @@ export interface StepControlRoomProps {
   onMarginBpsChange: (bps: number) => void;
   onLpCollateralChange: (v: string) => void;
   onInsuranceChange: (v: string) => void;
+  /** P3 wizard: junior floor bps + setter (the panel renders only when the P3 wizard is on). */
+  juniorFloorBps?: number;
+  onJuniorFloorChange?: (bps: number) => void;
 
   onLaunch: () => void;
   launchDisabled?: boolean;
@@ -116,6 +121,8 @@ export const StepControlRoom: FC<StepControlRoomProps> = ({
   onMarginBpsChange,
   onLpCollateralChange,
   onInsuranceChange,
+  juniorFloorBps,
+  onJuniorFloorChange,
   onLaunch,
   launchDisabled,
   launchDisabledReason,
@@ -189,6 +196,15 @@ export const StepControlRoom: FC<StepControlRoomProps> = ({
           {MAX_LEVERAGE}×, set by how much price-move headroom the protocol can guarantee at
           that margin.
         </p>
+        {/* P3 (flag-gated): the liquidity above is the creator's junior, first-loss tranche. */}
+        <WizardTranchePanel
+          juniorUnits={lp}
+          initialMarginBps={initialMarginBps}
+          decimals={6}
+          collateralSymbol={collateralSymbol}
+          floorBps={juniorFloorBps}
+          onFloorChange={onJuniorFloorChange}
+        />
       </div>
 
       {/* ── pre-flight (auto-resolved, nothing to decide) ───────────────── */}
@@ -197,10 +213,10 @@ export const StepControlRoom: FC<StepControlRoomProps> = ({
           <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[var(--text-secondary)]">
             Pre-flight
           </div>
-          <Readout k="Market" v={`${symbol}-PERP`} />
+          <Readout k="Market" v={symbol} />
           <Readout k="Price feed" v={oracleLabel} tone="good" />
           <Readout k="Start price" v={startPrice} />
-          <Readout k="Slab" v={`${slabBytes.toLocaleString()} B · max capacity`} />
+          <Readout k="Market size" v={`${slabBytes.toLocaleString()} B · max capacity`} />
           <Readout k="Rent" v={rentSol === null ? "—" : `${rentSol.toFixed(3)} SOL`} />
           {/* GH#2622: set expectations UP FRONT, before launch — not only after
               a creator gets stuck (RecoverSolBanner's gated RECLAIM handles that
@@ -222,7 +238,7 @@ export const StepControlRoom: FC<StepControlRoomProps> = ({
               creator cannot change it either — FeeSlider is never rendered and
               setTradingFeeBps has no consumers — so "set by liquidity" is the
               honest description of both facts. See #2563. */}
-          <Readout k="Trading fee" v={`${tradingFeeBps} bps · set by token liquidity`} />
+          <Readout k="Trading fee" v={`${bpsPct(tradingFeeBps)} · set by token liquidity`} />
           {/* A creator is never told they earn a share of this anywhere. #2565. */}
           <div className="col-span-full pt-1">
             <FeeBreakdown highlight="creator" feeBps={tradingFeeBps} />
@@ -244,6 +260,7 @@ export const StepControlRoom: FC<StepControlRoomProps> = ({
       <button
         type="button"
         onClick={onBack}
+        data-testid="wizard-back"
         className="text-[11px] uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:text-[var(--text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
       >
         ← Back to token

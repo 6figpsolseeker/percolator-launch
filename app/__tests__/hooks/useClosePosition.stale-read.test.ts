@@ -18,6 +18,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { PublicKey } from "@solana/web3.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// M-3: the close sizes from the ADL-effective quantity, which needs a FRESH read of the
+// market (a_side / epoch / mode). A real captured v18 market (a = ADL_ONE, epochs 0).
+const MARKET_BYTES = Buffer.from(
+  JSON.parse(readFileSync(join(__dirname, "..", "fixtures", "5bVTTMRc.ansem.market.json"), "utf8")).dataBase64,
+  "base64",
+);
 
 const PROGRAM = new PublicKey("69VUZ7a2BeXBTpRRManLamF5UWTaNR9B1hy5Se3cdXy9");
 const SLAB = "7RXTVmGcJMDqqTCFu5ADQRyLDvVZBi3r5U5WXzoULHJV";
@@ -48,6 +57,7 @@ vi.mock("@/lib/userAccountScan", () => ({
   isLpPortfolio: () => false,
   makePortfolioScanKey: (p: PublicKey, s: string, o: PublicKey) => `${p}|${s}|${o}`,
 }));
+vi.mock("@/lib/lpPortfolio", () => ({ isLpPortfolio: () => false }));
 vi.mock("@/lib/priceStore/priceStore", () => ({
   getLivePriceSnapshot: () => ({ priceE6: 81_170_000n }),
 }));
@@ -64,7 +74,7 @@ vi.mock("@percolatorct/sdk", () => ({
   isV17Account: () => true,
   parsePortfolioV17: (buf: Buffer) => ({
     owner: WALLET,
-    legs: [{ active: true, basisPosQ: buf.readBigInt64LE(200) }],
+    legs: [{ active: true, side: 0, aBasis: 1_000_000_000_000_000n, epochSnap: 0n, basisPosQ: buf.readBigInt64LE(200) }],
   }),
 }));
 
@@ -73,7 +83,7 @@ vi.mock("@/hooks/useWalletCompat", () => ({
   useConnectionCompat: () => ({
     connection: {
       getProgramAccounts: (...a: unknown[]) => getProgramAccounts(...a),
-      getAccountInfo: vi.fn().mockResolvedValue(null),
+      getAccountInfo: vi.fn(async (pk: PublicKey) => (pk.toBase58() === SLAB ? { data: MARKET_BYTES } : null)),
     },
   }),
   useWalletCompat: () => ({ publicKey: WALLET }),

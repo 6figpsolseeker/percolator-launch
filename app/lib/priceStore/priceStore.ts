@@ -37,7 +37,6 @@
 
 import { applyInvert, sanitizePriceE6 } from "@/lib/oraclePrice";
 import { toE6 } from "@/lib/format";
-import { getBackendUrl } from "@/lib/config";
 import { startPerfSpan } from "@/lib/perf/perfTiming";
 import { getWsManager } from "./wsManager";
 
@@ -82,14 +81,10 @@ export const EMPTY_PRICE_STATE: PriceState = Object.freeze({
  * Still to decide before mainnet: whether this client should carry an HMAC
  * token so it keeps the WS path in production instead of degrading to REST. */
 function getWsUrl(): string {
-  const explicit = process.env.NEXT_PUBLIC_WS_URL;
-  if (explicit !== undefined) return explicit;
-  try {
-    const apiUrl = getBackendUrl();
-    return apiUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
-  } catch {
-    return "";
-  }
+  // Only the explicit price-WS URL. Production sets NEXT_PUBLIC_WS_URL to the Railway price-ws
+  // service; the old fallback derived ws(s):// from the retired percolator-api URL, which could
+  // only ever point at a dead host. Unset/empty means "WS disabled" (see wsManager).
+  return process.env.NEXT_PUBLIC_WS_URL ?? "";
 }
 const WS_URL = getWsUrl();
 let warnedNoUrl = false;

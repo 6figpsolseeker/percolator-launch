@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { resolveDevnetProgramIds } from "@/lib/program-ids";
 import { PublicKey } from "@solana/web3.js";
 import { fetchSlab, parseAccount, parseEngine, parseParams } from "@percolatorct/sdk";
 import { getConfig, getAllProgramIds } from "@/lib/config";
@@ -8,9 +9,7 @@ import { sanitizeAccountCount } from "@/lib/health";
 // v17/v18 wrapper program IDs — parseEngine does not support this account format.
 // Fresh v18 wrapper (2026-09-22). Older wrappers (v17 DhSkE7u..., 2026-06-26 69VUZ7a2...)
 // are intentionally not listed — the app no longer targets them after the cutover.
-const V17_PROGRAM_IDS = new Set([
-  "GnwdeQrAh4qzChJeVLrM21CXXWC1akjLH3DiijwzEEYZ",
-]);
+const V17_PROGRAM_IDS = new Set([resolveDevnetProgramIds().wrapper]);
 
 function isV17Account(cfg: ReturnType<typeof getConfig>): boolean {
   // If the configured wrapper program is a v17 ID, all slabs are v17 format.

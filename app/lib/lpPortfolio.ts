@@ -49,6 +49,7 @@ import {
   V17_PORTFOLIO_IDENTITY_TRAILER_LEN,
   decodePortfolioMatcherControl,
 } from "@percolatorct/sdk";
+import { isPortfolioAccount } from "@/lib/portfolio-account";
 
 export const PORTFOLIO_MATCHER_CONFIG_LEN = 104; // sizeof(PortfolioMatcherConfigV16)
 
@@ -62,6 +63,7 @@ export const PORTFOLIO_MATCHER_CONFIG_LEN = 104; // sizeof(PortfolioMatcherConfi
  * is a packed control word (bit 0 = enabled), decoded via the SDK.
  */
 export function isLpPortfolio(data: Buffer | Uint8Array): boolean {
+  if (!isPortfolioAccount(data)) return false; // F-3
   const trailerLen = V17_PORTFOLIO_IDENTITY_TRAILER_LEN;
   if (data.length < PORTFOLIO_MATCHER_CONFIG_LEN + trailerLen) return false;
   const off = data.length - PORTFOLIO_MATCHER_CONFIG_LEN - trailerLen;

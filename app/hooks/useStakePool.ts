@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
 import { PublicKey } from '@solana/web3.js';
 import { useWalletCompat, useConnectionCompat } from '@/hooks/useWalletCompat';
 import {
@@ -129,7 +130,7 @@ function parseDepositPdaAccount(data: Buffer) {
  * Minimum byte-length this frontend reader requires from a StakePool account.
  *
  * CUTOVER (2026-07): the FRESH devnet stake program
- * (GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3) deploys 392-byte pool accounts
+ * (DEVNET_PROGRAM_IDS.stake) deploys 392-byte pool accounts
  * (the v2 layout: pendingAdmin / HWM / tranche fields after `pool_mode` @ 280).
  * The SDK's `STAKE_POOL_SIZE` (392) and `decodeStakePool` decode that layout
  * correctly and are safe to use against the deployed accounts. This file keeps
@@ -234,7 +235,7 @@ export function useStakePool() {
       // (getConfig().vaultProgramId), NOT the SDK's default stake program id.
       const stakeProgramId = new PublicKey(
         (getConfig() as { vaultProgramId?: string }).vaultProgramId
-        ?? 'GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3'
+        ?? DEVNET_PROGRAM_IDS.stake
       );
       const slabPk = new PublicKey(slabAddress);
       const [poolPda] = deriveStakePool(slabPk, stakeProgramId);

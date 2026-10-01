@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { PERCOLATOR_ERRORS } from "@percolatorct/sdk";
 import { mapCreatorClaimError } from "@/lib/creatorClaimError";
+import { resolveDevnetProgramIds } from "@/lib/program-ids";
 
 /**
  * Error mapping for WithdrawCreatorFee (tag 90).
@@ -69,13 +70,13 @@ describe("mapCreatorClaimError", () => {
     // Tag 57 was rate-limited by insurance_withdraw_cooldown_slots. Tag 90 is
     // not, so 47 must fall through to the shared table with its plain meaning
     // rather than being re-phrased as "your creator fees are on cooldown".
-    const msg = mapCreatorClaimError('{"Custom":47}');
+    const msg = mapCreatorClaimError(`{"Custom":47}\nProgram ${resolveDevnetProgramIds().wrapper} failed: custom program error: 0x2f`);
     expect(msg).toMatch(/insurance withdrawal cooldown/i);
     expect(msg).not.toMatch(/creator fees can only be claimed/i);
   });
 
   it("does NOT invent a ceiling for Custom(48)", () => {
-    const msg = mapCreatorClaimError('{"Custom":48}');
+    const msg = mapCreatorClaimError(`{"Custom":48}\nProgram ${resolveDevnetProgramIds().wrapper} failed: custom program error: 0x30`);
     expect(msg).toMatch(/ceiling|deposits-only/i);
     expect(msg).not.toMatch(/configured for this market\.$/i);
   });

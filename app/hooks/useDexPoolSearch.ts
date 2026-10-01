@@ -3,10 +3,18 @@
 import { useEffect, useState, useRef } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { SUPPORTED_DEX_IDS, BLOCKED_DEX_IDS } from "@/lib/dex-constants";
+import { dexTypeLabel, isOfferable, MAX_CLASSIFY_POOLS, type PoolClass } from "@/lib/dex-pool-owner";
+import type { KeeperDexType } from "@/lib/dex-type";
 
 export interface DexPoolResult {
   poolAddress: string;
-  dexId: string;       // "pumpswap" | "raydium" | "meteora"
+  /** DexScreener's raw dexId ("pumpswap" | "meteora"). NOT a pool type: "meteora" covers DLMM and DAMM. */
+  dexId: string;
+  /** The keeper dexType, from the pool's mainnet OWNER program (E2E B21). Absent on results
+   *  persisted by an older build, which the wizard discards. */
+  dexType?: KeeperDexType;
+  /** Human label for `dexType`, e.g. "Meteora DLMM". */
+  dexLabel?: string;
   pairLabel: string;   // e.g. "SOL / USDC"
   /** Base token symbol from DexScreener (e.g. "SOL"). Used to build market symbol/name. */
   baseSymbol: string;
@@ -14,6 +22,26 @@ export interface DexPoolResult {
   quoteSymbol: string;
   liquidityUsd: number;
   priceUsd: number;
+}
+
+/**
+ * E2E B21: keep only pools whose mainnet owner the keeper can price, labelled by that
+ * type. `classes` comes from POST /api/dex/classify-pools. A Meteora DAMM v1 pool
+ * (DexScreener "meteora") is "unsupported" by owner and is dropped here.
+ */
+export function applyPoolClasses(results: DexPoolResult[], classes: Record<string, PoolClass>): DexPoolResult[] {
+  const out: DexPoolResult[] = [];
+  for (const r of results) {
+    const c = classes[r.poolAddress];
+    if (!isOfferable(c)) continue;
+    out.push({ ...r, dexType: c, dexLabel: dexTypeLabel(c) });
+  }
+  return out;
+}
+
+/** Is a (possibly persisted) pool one the wizard may launch against? */
+export function isVerifiedPool(p: DexPoolResult | null | undefined): p is DexPoolResult & { dexType: KeeperDexType } {
+  return !!p && isOfferable(p.dexType);
 }
 
 function isValidSolanaMint(mint: string): boolean {
@@ -24,6 +52,11 @@ function isValidSolanaMint(mint: string): boolean {
     return false;
   }
 }
+
+export const POOL_VERIFY_FAILED = "Couldn't verify which DEX these pools are on right now. Try again in a moment.";
+export const UNSUPPORTED_POOL_TYPES =
+  "This token's pools are on DEX types our price feed can't read yet (for example Meteora DAMM). " +
+  "Markets can launch against Meteora DLMM or PumpSwap pools.";
 
 /**
  * Search DexScreener for DEX pools containing a given token mint.
@@ -137,11 +170,32 @@ export function useDexPoolSearch(mint: string | null): {
 
         // Sort by liquidity descending
         results.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+        const candidates = results.slice(0, MAX_CLASSIFY_POOLS);
+
+        // E2E B21: classify by mainnet OWNER before offering anything. DexScreener's
+        // "meteora" covers DAMM v1 pools the keeper cannot price.
+        let verified: DexPoolResult[] = [];
+        if (candidates.length > 0) {
+          const cr = await fetch("/api/dex/classify-pools", {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ addresses: candidates.map((c) => c.poolAddress) }),
+          });
+          if (!cr.ok) throw new Error(POOL_VERIFY_FAILED);
+          const { classes } = (await cr.json()) as { classes?: Record<string, PoolClass> };
+          if (!classes) throw new Error(POOL_VERIFY_FAILED);
+          verified = applyPoolClasses(candidates, classes);
+        }
 
         if (cancelled) return;
-        setPools(results.slice(0, 10));
+        setPools(verified.slice(0, 10));
         // Only surface the block when it actually cost this token every option.
-        setBlockedReason(results.length === 0 ? blockedHit : null);
+        setBlockedReason(
+          verified.length === 0
+            ? blockedHit ?? (candidates.length > 0 ? UNSUPPORTED_POOL_TYPES : null)
+            : null,
+        );
       } catch (err) {
         if (cancelled) return;
         if (err instanceof Error && err.name === "AbortError") return; // genuine cancellation, not a real error

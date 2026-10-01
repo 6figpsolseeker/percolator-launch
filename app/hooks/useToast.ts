@@ -37,10 +37,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       const updated = [...prev, { id, message, type }];
       return updated.length > MAX_TOASTS ? updated.slice(-MAX_TOASTS) : updated;
     });
-    // Auto-dismiss after 5 seconds
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 5000);
+    // UX WP-10 (UI-1): timing is per type in the toast itself (components/ui/Toast.tsx
+    // TOAST_DURATION_MS): an error stays until it is dismissed.
   }, []);
 
   return createElement(

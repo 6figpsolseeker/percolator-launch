@@ -182,8 +182,9 @@ describe("Market Creation — Failure Scenarios", () => {
       const msg = parseMarketCreationError(
         new Error("custom program error: 0xDEAD")
       );
-      expect(msg).toContain("code");
-      expect(msg).toContain("57005"); // 0xDEAD = 57005
+      // UX WP-1: no raw codes in user copy (they live in the StatusLine's Details).
+      expect(msg).toBe("Something went wrong and nothing was sent.");
+      expect(msg).not.toMatch(/57005|0xDEAD|code/i);
     });
 
     it("handles InstructionError format with Custom: 8 (v17 Unauthorized)", () => {
@@ -241,7 +242,7 @@ describe("Market Creation — Failure Scenarios", () => {
 
     it("handles empty string error", () => {
       const msg = parseMarketCreationError("");
-      expect(msg).toContain("Transaction failed");
+      expect(msg).toBe("Something went wrong and nothing was sent.");
     });
 
     it("handles error with no message", () => {

@@ -43,7 +43,7 @@ export const CrankHealthCard: FC = () => {
   if (!engine && !isV17) {
     return (
       <div className="rounded-none border border-[var(--border)]/50 bg-[var(--bg)]/80 p-2">
-        <span className="text-[10px] text-[var(--text-secondary)]">No crank data for this market</span>
+        <span className="text-[10px] text-[var(--text-secondary)]">No update data for this market</span>
       </div>
     );
   }
@@ -59,7 +59,7 @@ export const CrankHealthCard: FC = () => {
     if (slotLast == null) {
       return (
         <div className="rounded-none border border-[var(--border)]/50 bg-[var(--bg)]/80 p-2">
-          <span className="text-[10px] text-[var(--text-secondary)]">No crank data for this market</span>
+          <span className="text-[10px] text-[var(--text-secondary)]">No update data for this market</span>
         </div>
       );
     }
@@ -105,9 +105,9 @@ export const CrankHealthCard: FC = () => {
       <div className="mb-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1">
           <span className="text-[8px] uppercase tracking-[0.15em] text-[var(--text-secondary)]">
-            Crank Health
+            Market updates
           </span>
-          <InfoIcon tooltip="The crank processes funding accrual, liquidation checks, and position updates every slot" />
+          <InfoIcon tooltip="The market updates funding, liquidation checks and positions continuously, automatically." />
         </div>
         <div className="flex items-center gap-1.5">
           <span className={`inline-block h-2 w-2 rounded-full ${dotColor}`} />
@@ -118,8 +118,8 @@ export const CrankHealthCard: FC = () => {
       {/* Staleness progress bar */}
       <div className="mb-1.5">
         <div className="mb-1 flex items-center justify-between text-[9px] text-[var(--text-secondary)]">
-          <span>Last update: {secondsBehind}s ago ({slotsBehind.toLocaleString()} slots)</span>
-          <span>Max: {maxStaleness.toLocaleString()} slots</span>
+          <span>Last update: {secondsBehind}s ago</span>
+          <span>Max: about {Math.max(1, Math.round((maxStaleness * 0.4) / 60))} min</span>
         </div>
         <div className="h-1 w-full rounded-none bg-[var(--border)]">
           <div

@@ -110,7 +110,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
             </h3>
             <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
               The <strong>Insurance Fund</strong> is a safety net that protects
-              liquidity providers (LPs) from bankruptcy during extreme market
+              the market&apos;s liquidity from bankruptcy during extreme market
               events.
             </p>
             <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
@@ -140,7 +140,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
                 <span className="text-[var(--long)]">✓</span>
                 <div>
                   <div className="text-sm font-medium text-[var(--text)]">
-                    Covers LP losses in liquidations
+                    Covers losses a liquidation leaves behind
                   </div>
                   <div className="text-xs text-[var(--text-dim)]">
                     When a trader is liquidated, insurance covers any shortfall
@@ -151,7 +151,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
                 <span className="text-[var(--long)]">✓</span>
                 <div>
                   <div className="text-sm font-medium text-[var(--text)]">
-                    Anyone can contribute (permissionless)
+                    Anyone can contribute, no approval needed
                   </div>
                   <div className="text-xs text-[var(--text-dim)]">
                     Community members can top up the insurance fund anytime
@@ -175,7 +175,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
                   </span>
                 </div>
                 <p className="text-sm text-[var(--text-secondary)]">
-                  High insurance coverage means LPs are protected even in
+                  High insurance coverage means the market&apos;s liquidity is protected even in
                   extreme volatility. Traders can trade with confidence knowing
                   the system won't collapse.
                 </p>
@@ -190,7 +190,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
                 <p className="text-sm text-[var(--text-secondary)]">
                   Low insurance coverage means the system is vulnerable to
                   cascading liquidations. If multiple large positions get
-                  liquidated, LPs could face losses.
+                  liquidated, the market&apos;s liquidity could take losses.
                 </p>
               </div>
             </div>
@@ -225,7 +225,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
               <div className="flex items-start gap-2">
                 <span className="font-mono text-[var(--text-dim)]">4.</span>
                 <span>
-                  LP takes on the position at a loss: should receive $10,000
+                  The market takes on the position at a loss: should receive $10,000
                   but only gets $8,500
                 </span>
               </div>
@@ -233,7 +233,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
                 <span className="font-mono text-[var(--text-dim)]">5.</span>
                 <span className="text-[var(--long)]">
                   <strong>Insurance fund covers the $1,500 shortfall</strong> →
-                  LP is made whole
+                  the market is made whole
                 </span>
               </div>
             </div>
@@ -262,7 +262,7 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
             </h3>
             <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
               Anyone can top up the insurance fund by depositing collateral.
-              This is <strong>permissionless</strong> — no approvals needed.
+              <strong>Anyone</strong> can do it — no approvals needed.
             </p>
             <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
               Why would you contribute?
@@ -271,8 +271,8 @@ export const InsuranceExplainerModal: FC<InsuranceExplainerModalProps> = ({
               <li className="flex items-start gap-2">
                 <span className="text-[var(--accent)]">•</span>
                 <span>
-                  <strong>Protect your LP position:</strong> If you're an LP,
-                  stronger insurance = safer investment
+                  <strong>Protect your Earn deposit:</strong> if you have one,
+                  stronger insurance = safer deposit
                 </span>
               </li>
               <li className="flex items-start gap-2">

@@ -2,8 +2,8 @@
  * indexer-db.ts
  *
  * Direct Postgres read path for the playground terminal.
- * Used by the /api/markets/[slab]/trades, /api/funding/[slab]/history,
- * and /api/candles/[slab] routes when INDEXER_DATABASE_URL is set.
+ * Used by the /api/markets/[slab]/trades, /api/candles/[slab], stats and trader
+ * routes when INDEXER_DATABASE_URL is set.
  *
  * The v17 indexer (percolator-indexer @ v17-sdk-migration) writes to the
  * same Postgres database this module reads from.  No Supabase SDK is used —
@@ -14,9 +14,9 @@
  *   trades            — id, slab_address, trader, tx_signature, side, size,
  *                       price, fee, created_at (timestamptz), network,
  *                       asset_index (nullable, added by 20260627_asset_index.sql)
- *   funding_history   — id, market_slab, slot, rate_bps_per_slot, net_lp_pos,
- *                       price_e6, funding_index_qpb_e6, timestamp (timestamptz),
- *                       network
+ *
+ * (`funding_history` was dropped in the 2026-07 history-only reduction; funding is read
+ * from chain — see /api/funding/:slab and /api/funding/global.)
  */
 
 // Loaded only in Node.js (Next.js server-side route handlers, never the browser).
@@ -30,7 +30,7 @@ let _sql: ReturnType<typeof postgres> | null = null;
 
 /**
  * Returns true when INDEXER_DATABASE_URL is set.
- * Routes use this to decide: direct DB vs proxy-to-api.
+ * Routes use this to decide whether this deployment has an indexer read path at all.
  */
 export function hasIndexerDb(): boolean {
   return !!process.env.INDEXER_DATABASE_URL;
@@ -67,20 +67,6 @@ export interface IndexerTrade {
   asset_index: number | null;
 }
 
-export interface IndexerFundingPoint {
-  slot: number;
-  rateBpsPerSlot: number;
-  netLpPos: string;
-  priceE6: string;
-  fundingIndexQpbE6: string;
-  /** ISO string from the DB */
-  timestampIso: string;
-  /** Unix milliseconds — what the FundingRateChart component expects */
-  timestamp: number;
-  /** Pre-computed hourly rate percent — what the FundingRateChart component expects */
-  hourlyRatePercent: number;
-}
-
 interface RawTradeRow {
   id: string;
   slab_address: string;
@@ -94,15 +80,6 @@ interface RawTradeRow {
   asset_index: number | null;
 }
 
-interface RawFundingRow {
-  slot: string;
-  rate_bps_per_slot: string;
-  net_lp_pos: string;
-  price_e6: string;
-  funding_index_qpb_e6: string;
-  timestamp: Date;
-}
-
 interface RawCandleRow {
   /** NULL for is_liquidation markers — see the guard in `bucketCandles`. */
   price: string | null;
@@ -111,13 +88,6 @@ interface RawCandleRow {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-const SLOTS_PER_HOUR = 9000;
-
-function toHourlyPercent(rateBpsPerSlot: number): number {
-  // rateBps * slots/hr → hourly bps → divide by 100 → percent
-  return (rateBpsPerSlot * SLOTS_PER_HOUR) / 100;
-}
 
 /** Validate that a slab address looks like a base-58 pubkey (prevents injection). */
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -161,25 +131,6 @@ export async function queryTrades(
       : String(r.created_at),
     asset_index: r.asset_index ?? null,
   }));
-}
-
-/**
- * Funding rate history for a market, oldest first (chart time-series).
- * When `sinceIso` is provided, only returns rows at or after that timestamp.
- *
- * REDUCED SCHEMA (2026-07): the indexer was cut down to history-only and the
- * `funding_history` table was dropped from the new Supabase project — querying
- * it would 500. This function is kept (signature unchanged) as a stable no-op
- * so callers keep working; funding history is simply no longer indexed. The
- * current funding rate is available live from chain instead (see the wrapper
- * config parse used by the trade page), not from this historical series.
- */
-export async function queryFundingHistory(
-  _slabAddress: string,
-  _limit: number,
-  _sinceIso?: string,
-): Promise<IndexerFundingPoint[]> {
-  return [];
 }
 
 /**
@@ -700,26 +651,15 @@ export async function queryTraderTradesPage(
   return { trades, total };
 }
 
-// ── funding/global local fallback ────────────────────────────────────────────
-
-export interface FundingGlobalLocalEntry {
-  slabAddress: string;
-  rateBpsPerSlot: number;
-  hourlyRatePercent: number;
-  dailyRatePercent: number;
-  netLpPos: number;
-}
-
-/**
- * Aggregate latest funding rate per market from the local indexer.
- * Used as fallback when Railway /funding/global is unavailable.
- *
- * REDUCED SCHEMA (2026-07): `funding_history` no longer exists in the reduced
- * indexer DB — funding history isn't indexed anymore. Kept as a stable no-op
- * (signature unchanged) so /api/funding/global's fallback path degrades to an
- * empty markets list instead of a 500. The current rate per market is read
- * live from chain elsewhere, not from this aggregate.
- */
-export async function queryFundingGlobal(): Promise<FundingGlobalLocalEntry[]> {
-  return [];
+/** Liveness probe for /api/health: one trivial query, bounded. */
+export async function pingIndexerDb(timeoutMs = 3000): Promise<boolean> {
+  try {
+    await Promise.race([
+      getSql()`select 1`,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), timeoutMs)),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
 }

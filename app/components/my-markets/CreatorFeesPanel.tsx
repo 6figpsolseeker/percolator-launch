@@ -28,7 +28,7 @@ import type { CreatedMarket } from "@/hooks/useCreatedMarkets";
 import type { CreatorMarketDetail } from "./types";
 import { unitScaleToDecimals } from "./types";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
-import { useClaimCreatorFees } from "@/hooks/useClaimCreatorFees";
+import { claimAllResultCopy, useClaimCreatorFees } from "@/hooks/useClaimCreatorFees";
 import {
   classifyClaimable,
   summarizeCreatorFees,
@@ -55,7 +55,7 @@ export const CreatorFeesPanel: FC<CreatorFeesPanelProps> = ({
   onClaimed,
 }) => {
   const wallet = useWalletCompat();
-  const { claim, busy, progress, outcomes } = useClaimCreatorFees();
+  const { claim, busy, outcomes, progress } = useClaimCreatorFees();
   const connected = wallet.publicKey?.toBase58() ?? null;
 
   const entries = useMemo<(CreatorFeeEntry & { label: string })[]>(
@@ -89,9 +89,15 @@ export const CreatorFeesPanel: FC<CreatorFeesPanelProps> = ({
 
   if (markets.length === 0) return null;
 
+  // Re-read balances as EACH claim confirms (the figure and "N markets have fees" drop while the
+  // rest are still going), and once more at the end on every path: a partial success or a
+  // failure after one claim landed must never leave the panel showing the old figure.
   const runClaim = async (slabs: readonly string[]) => {
-    const results = await claim(slabs);
-    if (results.some((r) => r.signature)) onClaimed?.();
+    try {
+      await claim(slabs, { onLanded: () => onClaimed?.() });
+    } finally {
+      onClaimed?.();
+    }
   };
 
   return (
@@ -168,7 +174,9 @@ export const CreatorFeesPanel: FC<CreatorFeesPanelProps> = ({
             className="shrink-0 border border-[var(--accent)]/50 bg-[var(--accent)]/[0.08] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/[0.15] disabled:opacity-50"
           >
             {busy
-              ? `claiming ${progress.done}/${progress.total}…`
+              ? progress.total > 1
+                ? `claiming… (${Math.min(progress.done + 1, progress.total)}/${progress.total})`
+                : "claiming…"
               : `claim all (${targets.length})`}
           </button>
         </div>
@@ -176,19 +184,17 @@ export const CreatorFeesPanel: FC<CreatorFeesPanelProps> = ({
 
       {outcomes.length > 0 && (
         <div className="border-t border-[var(--border)]/40 px-4 py-2.5">
-          {outcomes.filter((o) => o.signature).length > 0 && (
-            <p className="text-[10px] text-[var(--long)]">
-              claimed on {outcomes.filter((o) => o.signature).length} market
-              {outcomes.filter((o) => o.signature).length === 1 ? "" : "s"}
-            </p>
-          )}
+          {/* UX WP-9 (§3.11): one line, "Claimed {total} from {n} markets." (+ the partial clause). */}
+          <p data-testid="creator-claim-result" className={`text-[10px] ${outcomes.some((o) => o.signature) ? "text-[var(--long)]" : "text-[var(--text-secondary)]"}`}>
+            {claimAllResultCopy(outcomes, (atoms) => fmt(Number(atoms) / 10 ** (entries[0]?.decimals ?? 6)))}
+          </p>
           {/* Per-market failures are listed, not counted: a claim-all sends one
               transaction PER market precisely so a partial failure is
               survivable, which is only useful if the creator can see which
               ones to retry. */}
           {outcomes.filter((o) => o.error).map((o) => (
-            <p key={o.slab} className="text-[10px] text-[var(--short)]">
-              {labelFor(o.slab)}: {o.error}
+            <p key={o.slab} data-testid="creator-claim-unclaimed" className="text-[10px] text-[var(--text-secondary)]">
+              {labelFor(o.slab)} not claimed: {o.error}
             </p>
           ))}
         </div>

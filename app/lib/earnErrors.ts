@@ -1,4 +1,4 @@
-import { extractErrorCode, humanizeError } from "@/lib/errorMessages";
+import { resolveUserMessage, type MessageContext, type UserMessage } from "@/lib/limits/user-message";
 
 /**
  * User-facing copy for a failed Earn (LP vault) action.
@@ -30,27 +30,22 @@ import { extractErrorCode, humanizeError } from "@/lib/errorMessages";
  */
 export type EarnAction = "deposit" | "claim";
 
-export function earnErrorMessage(err: unknown, action: EarnAction): string {
-  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  if (!raw) return "Transaction failed";
-  if (/NotEnoughAccountKeys|insufficient account keys/i.test(raw)) {
-    return "The app sent an outdated instruction layout for this vault. Please refresh the page and try again; if it persists, report it — your funds have not moved.";
-  }
-  const code = extractErrorCode(raw);
-  switch (code) {
-    case 21:
-      return action === "deposit"
-        ? "This market's Earn vault is temporarily locked: its backing pot can't accept new deposits right now (the market is recovering from a realized loss or its backing window has lapsed). Nothing was deposited. It clears once the market is repaired by the keeper — try again later."
-        : "Can't pay this redemption out yet: part of the vault's backing is securing traders' open unrealized PnL, and paying the full amount would leave it under-backed. It becomes claimable as those positions close. Your LP shares stay safe in escrow until then.";
-    case 19:
-      return "The market's engine is behind (it hasn't been cranked recently), so the vault can't be priced safely. Nothing moved. It clears once the market is cranked — try again in a moment.";
-    case 36:
-      return "Your redemption cooldown hasn't finished yet — claim it once the countdown reaches zero.";
-    case 37:
-      return action === "claim"
-        ? "Claiming this much now would leave too little backing covering the market's open interest. Try a smaller redemption, or wait for open interest to fall."
-        : humanizeError(raw);
-    default:
-      return humanizeError(raw);
-  }
+/** What the caller knows about the vault. `p3Bound`: the vault owns its market's LP (P3). */
+export interface EarnErrorContext {
+  p3Bound?: boolean;
+}
+
+/** The full message (title, body, action, details) for a failed Earn action (§5.3). */
+export function earnUserMessage(err: unknown, action: EarnAction, ctx: EarnErrorContext & Omit<MessageContext, "surface"> = {}): UserMessage {
+  return resolveUserMessage(err, { ...ctx, surface: action === "deposit" ? "earn-deposit" : "earn-withdraw" });
+}
+
+/**
+ * The one line for a failed Earn action. UX WP-1: delegates to the single resolver
+ * (lib/limits/user-message.ts), so every P3 code (74/84/85/87/88/89, 21 on a bound claim)
+ * and every wallet/network condition gets its plain line; nothing reaches the user as
+ * "Program error" / "Custom(n)" (those are in the StatusLine's Details).
+ */
+export function earnErrorMessage(err: unknown, action: EarnAction, ctx: EarnErrorContext = {}): string {
+  return earnUserMessage(err, action, ctx).body;
 }

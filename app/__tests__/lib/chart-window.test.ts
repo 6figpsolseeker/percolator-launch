@@ -19,7 +19,7 @@ import { RES_TO_SECONDS } from "@/lib/indexer-db";
 import {
   CHART_WINDOWS,
   MAX_BARS_PER_REQUEST,
-  MAX_PYTH_SPAN_SEC,
+  MAX_LOOKBACK_SPAN_SEC,
   MIN_WINDOW_SEC,
   maxBarsFor,
   windowCovers,
@@ -76,25 +76,21 @@ describe("widening must not produce a payload the chart cannot draw", () => {
     }
   });
 
-  it("CONTROL: every window stays inside the Pyth proxy's hard span cap", () => {
-    // Load-bearing, and it exists because widening broke exactly this.
-    // app/api/chart/pyth/route.ts rejects `to - from > 5 years` with a 400,
-    // and usePythChart derives its range from these same windows — so a window
-    // past the cap is not a degraded chart, it is a guaranteed 400 on every
-    // poll, forever, for every symbol. The bar ceiling above does not catch it:
-    // a 3650-day daily window is only 3650 bars and passes that test cleanly.
+  it("CONTROL: every window stays inside the 5-year span ceiling", () => {
+    // The bar ceiling above does not catch an over-wide window: a 3650-day
+    // daily window is only 3650 bars and passes that test cleanly.
     for (const tf of ALL) {
-      expect(CHART_WINDOWS[tf].lookbackSec, `${tf} vs Pyth span cap`)
-        .toBeLessThanOrEqual(MAX_PYTH_SPAN_SEC);
+      expect(CHART_WINDOWS[tf].lookbackSec, `${tf} vs span ceiling`)
+        .toBeLessThanOrEqual(MAX_LOOKBACK_SPAN_SEC);
     }
   });
 
-  it("CONTROL: and keeps real margin, because the route's check is `>`", () => {
+  it("CONTROL: and keeps real margin below the ceiling", () => {
     // Sitting exactly on the boundary passes today and breaks on any future
-    // `+1 day` here, or if that route ever tightens `>` to `>=`.
+    // `+1 day` here.
     for (const tf of ALL) {
       expect(CHART_WINDOWS[tf].lookbackSec, `${tf} needs margin`)
-        .toBeLessThan(MAX_PYTH_SPAN_SEC * 0.95);
+        .toBeLessThan(MAX_LOOKBACK_SPAN_SEC * 0.95);
     }
   });
 
@@ -146,11 +142,9 @@ describe("widening must not produce a payload the chart cannot draw", () => {
 
   it("CONTROL: the shared table carries NO resolution string", () => {
     // Load-bearing, and it caught a regression while this was being written.
-    // The two hooks had identical windows but different resolutions — our UDF
-    // route wants "1D", Pyth Benchmarks wants "D". Folding both tables into
-    // one here sends "1D" to Pyth and silently breaks every daily chart on
-    // that source. Only the WINDOW is shared, because only the window was the
-    // bug; each hook keeps its own resolution.
+    // Hooks talking to different upstreams spell resolutions differently (our
+    // UDF route wants "1D"). Only the WINDOW is shared, because only the
+    // window was the bug; each hook keeps its own resolution.
     for (const tf of ALL) {
       expect(CHART_WINDOWS[tf]).not.toHaveProperty("resolution");
     }

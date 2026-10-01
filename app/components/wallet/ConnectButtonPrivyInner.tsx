@@ -124,6 +124,8 @@ export const ConnectButtonPrivyInner: FC = () => {
       <div className="flex items-center gap-1">
         <button
           onClick={() => reconnectWallet()}
+          data-testid="wallet-connect"
+          data-state="reconnect"
           className="min-h-10 rounded-sm border border-[var(--warning)]/50 bg-[var(--warning)]/10 px-4 text-[13px] font-medium text-[var(--text)] transition-all duration-200 hover:bg-[var(--warning)]/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]"
           aria-label="Reconnect wallet"
           title={displayAddress ? `Reconnect ${displayAddress}` : undefined}
@@ -150,6 +152,8 @@ export const ConnectButtonPrivyInner: FC = () => {
   return (
     <div className="relative" ref={menuRef}>
       <button
+        data-testid="wallet-connect"
+        data-state={authenticated ? "connected" : "disconnected"}
         onClick={handleClick}
         className={[
           "min-h-10 max-w-[10rem] truncate rounded-sm border px-4 text-[13px] font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]",

@@ -1,107 +1,114 @@
-import { type NextRequest, NextResponse } from "next/server";
-import { proxyToApi } from "@/lib/api-proxy";
+import { NextResponse } from "next/server";
+import { PublicKey } from "@solana/web3.js";
+import { isV17Account } from "@percolatorct/sdk";
 import { isBlockedSlab } from "@/lib/blocklist";
-import { hasIndexerDb, queryFundingGlobal } from "@/lib/indexer-db";
+import { getConfig } from "@/lib/config";
+import { getServerConnection } from "@/lib/server-rpc";
+import { loadMergedMarketRows } from "@/lib/market-registry";
+import { readV17MaxAbsFunding } from "@/lib/v17-engine-config";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Re-exported for backwards-compat: components that import this type from this
- * route module continue to compile after the route became a proxy (GH#1066).
- */
+/** One market's current funding rate, read from its slab. */
 export interface FundingGlobalEntry {
   slabAddress: string;
   baseSymbol: string | null;
-  // GH#funding-display: this route is a thin proxy (GH#1066) — the primary
-  // path forwards percolator-api's GET /funding/global response verbatim,
-  // which uses `currentRateBpsPerSlot`. The local indexer-db fallback path
-  // (queryFundingGlobal in lib/indexer-db.ts) uses `rateBpsPerSlot` instead.
-  // Both are optional here so consumers must read whichever is present
-  // rather than assuming one name always exists.
-  rateBpsPerSlot?: number;
-  currentRateBpsPerSlot?: number;
+  rateBpsPerSlot: number;
   hourlyRatePercent: number;
   dailyRatePercent: number;
-  dailyRateAbs?: number;
-  netLpPos?: number;
+  /** false: `max_abs_funding_e9_per_slot` is 0, so the engine clamps the applied rate to 0. */
+  fundingEnabled: boolean;
 }
 
+export interface FundingGlobalResponse {
+  markets: FundingGlobalEntry[];
+  count: number;
+  /**
+   * Markets whose slab has funding switched ON. Their applied per-asset rate is not decoded by
+   * this app yet (same as /api/funding/:slab, which answers 404 for them), so they are counted
+   * here instead of being listed with an invented rate.
+   */
+  ratesUnavailable: number;
+  source: "on-chain";
+}
+
+/** getMultipleAccountsInfo takes at most 100 keys per call. */
+const RPC_BATCH = 100;
+
 /**
- * GET /api/funding/global
+ * GET /api/funding/global — the dashboard's Funding Rates panel.
  *
- * Primary path: proxy to percolator-api GET /funding/global.
- * Fallback (playground / Railway dead): read latest funding rate per market
- * from the local indexer Postgres (INDEXER_DATABASE_URL).
- * Returns graceful {} if both unavailable.
+ * Was a proxy to percolator-api GET /funding/global (retired: "Application not found") with an
+ * indexer fallback whose table (`funding_history`) no longer exists. Now read from the chain:
+ * the market list comes from the registry (lib/market-registry, blocked slabs already dropped),
+ * and each slab owned by the CURRENT wrapper is read in one batched RPC call.
  *
- * GH#1461: blocked slabs are stripped from the response at this layer.
- *
- * REDUCED SCHEMA (2026-07): `funding_history` was dropped from the indexer DB
- * (history-only reduction) — queryFundingGlobal() is now a stable no-op that
- * always returns []. When the Railway proxy is unavailable this route falls
- * straight through to the graceful `{ markets: [], count: 0 }` response below;
- * current rates should be read live from chain, not from this local fallback.
+ *  - funding OFF (`max_abs_funding_e9_per_slot` == 0): the applied rate is exactly 0 — listed.
+ *  - funding ON: the rate is not decoded here yet — counted in `ratesUnavailable`, not listed.
+ *  - another program's slab / not a v17 account / missing: skipped (not a current market).
+ *  - registry or RPC unavailable: 503, so the panel hides instead of claiming funding is off.
  */
-export async function GET(req: NextRequest) {
-  // ── 1. Try Railway proxy ───────────────────────────────────────────────────
-  let upstream: Response | null = null;
-  try {
-    upstream = await proxyToApi(req, "/funding/global");
-  } catch {
-    // proxyToApi itself shouldn't throw but guard anyway
+export async function GET() {
+  const rows = await loadMergedMarketRows().catch(() => null);
+  if (rows === null) {
+    return unavailable("Market list unavailable");
   }
 
-  if (upstream && upstream.ok) {
-    let data: Record<string, unknown>;
+  const symbols = new Map<string, string | null>();
+  for (const row of rows) {
+    const slab = typeof row.slab_address === "string" ? row.slab_address : "";
+    if (!slab || isBlockedSlab(slab) || symbols.has(slab)) continue;
+    let valid = true;
     try {
-      data = await upstream.clone().json();
+      new PublicKey(slab);
     } catch {
-      return upstream as unknown as NextResponse;
+      valid = false;
     }
+    if (!valid) continue;
+    symbols.set(slab, typeof row.symbol === "string" && row.symbol ? row.symbol : null);
+  }
+  const slabs = [...symbols.keys()];
 
-    // Strip blocked slabs
-    if (Array.isArray(data.markets)) {
-      const filtered = (data.markets as Array<{ slabAddress?: string }>).filter(
-        (m) => !isBlockedSlab(m.slabAddress)
-      );
-      data = { ...data, markets: filtered, count: filtered.length };
+  const wrapper = getConfig().programId;
+  const markets: FundingGlobalEntry[] = [];
+  let ratesUnavailable = 0;
+  try {
+    const connection = getServerConnection("confirmed");
+    for (let i = 0; i < slabs.length; i += RPC_BATCH) {
+      const batch = slabs.slice(i, i + RPC_BATCH);
+      const infos = await connection.getMultipleAccountsInfo(batch.map((s) => new PublicKey(s)));
+      infos.forEach((info, j) => {
+        if (!info || info.owner.toBase58() !== wrapper) return;
+        const data = new Uint8Array(info.data);
+        if (!isV17Account(data)) return;
+        if (readV17MaxAbsFunding(data) !== 0n) {
+          ratesUnavailable += 1;
+          return;
+        }
+        const slabAddress = batch[j];
+        markets.push({
+          slabAddress,
+          baseSymbol: symbols.get(slabAddress) ?? null,
+          rateBpsPerSlot: 0,
+          hourlyRatePercent: 0,
+          dailyRatePercent: 0,
+          fundingEnabled: false,
+        });
+      });
     }
-
-    const upstreamCacheControl =
-      upstream.headers.get("Cache-Control") ?? "no-store, max-age=0";
-
-    return NextResponse.json(data, {
-      status: upstream.status,
-      headers: { "Cache-Control": upstreamCacheControl },
-    });
+  } catch {
+    return unavailable("Could not read the markets right now");
   }
 
-  // ── 2. Fallback: local indexer Postgres ────────────────────────────────────
-  if (hasIndexerDb()) {
-    try {
-      const rows = await queryFundingGlobal();
-      const markets: FundingGlobalEntry[] = rows
-        .filter((r) => !isBlockedSlab(r.slabAddress))
-        .map((r) => ({
-          slabAddress: r.slabAddress,
-          baseSymbol: null,
-          rateBpsPerSlot: r.rateBpsPerSlot,
-          hourlyRatePercent: r.hourlyRatePercent,
-          dailyRatePercent: r.dailyRatePercent,
-          netLpPos: r.netLpPos,
-        }));
-      return NextResponse.json(
-        { markets, count: markets.length },
-        { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" } },
-      );
-    } catch (err) {
-      console.warn("[funding/global] indexer-db fallback failed:", err instanceof Error ? err.message : String(err));
-    }
-  }
+  const body: FundingGlobalResponse = { markets, count: markets.length, ratesUnavailable, source: "on-chain" };
+  return NextResponse.json(body, {
+    headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" },
+  });
+}
 
-  // ── 3. Graceful empty response ─────────────────────────────────────────────
+function unavailable(error: string): NextResponse {
   return NextResponse.json(
-    { markets: [], count: 0 },
-    { headers: { "Cache-Control": "no-store, max-age=0" } },
+    { error },
+    { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "10" } },
   );
 }

@@ -8,10 +8,10 @@
  * (maxInventoryAbs = 4 × maxFillAbs by construction in deriveMarketParams), so
  * "Close 100%" on a large position is GUARANTEED to fail as a single trade.
  *
- * The fix is BatchTradeCpi (tag 67): several legs in one instruction, one
- * signature — each leg individually under the cap, so each passes the
- * matcher's per-fill clamp. This module is the leg math; the caller feeds the
- * legs to encodeBatchTradeCpi.
+ * Each leg becomes its own single-leg TradeCpi (lib/trade-ix.ts buildTradeIxs:
+ * a same-asset BatchTradeCpi is refused on-chain), each under the cap. Legs
+ * that do not fit one transaction's CU budget are packed into several
+ * transactions signed with one approval (lib/trade-leg-groups.ts, M-2).
  *
  * Legs are near-equal (remainder spread one unit at a time across the first
  * legs) rather than cap-cap-cap-dust: a dust-sized final leg risks the

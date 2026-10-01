@@ -1,11 +1,11 @@
 "use client";
 
+import { tradeCuCap } from "@/lib/compute-budget";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import {
   encodeTradeCpi,
-  encodeBatchTradeCpi,
   encodePermissionlessCrank,
   ACCOUNTS_TRADE_CPI,
   ACCOUNTS_PERMISSIONLESS_CRANK_BASE,
@@ -16,8 +16,6 @@ import {
   deriveMatcherDelegate,
   isV17Account,
   parsePortfolioV17,
-  V17_PORTFOLIO_IDENTITY_TRAILER_LEN,
-  decodePortfolioMatcherControl,
 } from "@percolatorct/sdk";
 // TODO(oracle-migration): encodePushOraclePrice/ACCOUNTS_PUSH_ORACLE_PRICE removed in beta.29.
 // The DEX oracle inline push path needs to migrate to /api/oracle/advance-phase.
@@ -25,9 +23,27 @@ import {
   encodePushOraclePrice,
   ACCOUNTS_PUSH_ORACLE_PRICE,
 } from "@/lib/sdk-compat";
-import { sendTx, prewarmTxLanding } from "@/lib/tx";
+import {
+  sendTx,
+  sendTxWaiting,
+  prewarmTxLanding,
+  simulateForGate,
+  SimulationRefusal,
+  buildBatchTx,
+  signAllCompat,
+  broadcastSignedTx,
+  getPriorityFee,
+} from "@/lib/tx";
+import { planTakerCrank } from "@/lib/taker-crank";
+import { getMaintenanceConfig, MaintenanceError } from "@/lib/maintenance";
+import { PartialLegSendError, SINGLE_TX_MAX_LEGS, sendLegGroups } from "@/lib/trade-leg-groups";
 import { PLAYGROUND_SLAB_META } from "@/lib/playground-slab-meta";
-import { applyConfirmedFill, getPortfolioRawSnapshot, isLpPortfolio, makePortfolioScanKey } from "@/lib/userAccountScan";
+import { resolveMarketLp } from "@/lib/market-lp";
+import { applyConfirmedFill, getPortfolioRawSnapshot, makePortfolioScanKey } from "@/lib/userAccountScan";
+import { limitsFlags } from "@/lib/limits/flags";
+import { decodeMarketEngineView, signedPositionForAsset } from "@/lib/limits/decode";
+import { measureFill, recordFillResult } from "@/lib/limits/fill-check";
+import { tradeFeeBpsToSign } from "@/lib/limits/fee-channel";
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { detectOracleMode, resolveMarketPriceE6 } from "@/lib/oraclePrice";
 import { assertKnownProgram, assertCanonicalMatcher } from "@/lib/programAllowlist";
@@ -35,6 +51,9 @@ import { invalidateMatcherCaps } from "@/lib/matcherCaps";
 import { getLivePriceSnapshot } from "@/lib/priceStore/priceStore";
 import { computeLimitPriceE6, assertFeedAgreesWithChain } from "@/lib/slippage";
 import { fetchPortfolioIdentity, fetchAssetMarketId, defaultCrankObservations } from "@/lib/v18-wire";
+import { buildTradeIxs } from "@/lib/trade-ix";
+import { isPortfolioAccount } from "@/lib/portfolio-account";
+import { findOwnerPortfolio } from "@/lib/owner-portfolio";
 
 // ---------------------------------------------------------------------------
 // v17 portfolio account layout constants
@@ -49,109 +68,30 @@ const V17_PORTFOLIO_MAGIC = Buffer.from([0x00, 0x36, 0x31, 0x56, 0x43, 0x52, 0x4
 // market_group_id is at HEADER_LEN(16) + provenance.market_group_id(0) = 16
 // portfolio_account_id is at HEADER_LEN(16) + 32 = 48
 // provenanceOwner (IMMUTABLE — set at portfolio creation, never changes) is at
-// HEADER_LEN(16) + 64 = 80. Used below ONLY for readPortfolioOwner (LP owner for
-// matcherDelegate derivation) — that must keep reading the same offset SetMatcherConfig
-// used, regardless of any later NFT-wrap on the LP's own portfolio.
+// HEADER_LEN(16) + 64 = 80 (lib/market-lp.ts reads it for the LP's delegate derivation).
 const PORTFOLIO_PROVENANCE_MARKET_GROUP_OFF = 16; // offset 16 in raw account data
-const PORTFOLIO_PROVENANCE_OWNER_OFF = 80;        // offset 80 in raw account data
 
-// Mutable owner (SDK PF_OWNER_OFF) — HEADER_LEN(16) + provenance(100) = offset 116.
-// MintPositionNft moves this to the escrow PDA on wrap, leaving provenanceOwner@80
-// unchanged. findV17Portfolio (the TAKER's own-portfolio discovery, below) MUST
-// filter on this offset, not provenanceOwner@80, or a wrapped position still
-// matches and gets treated as the taker's tradeable portfolio (portfolio-discovery
-// bug — a wrapped position rendered as a normal row with a Close that fails on-chain).
-const PORTFOLIO_OWNER_OFF = 116;
+// The TAKER's own-portfolio discovery (mutable owner @116, not provenanceOwner@80)
+// lives in lib/owner-portfolio.ts.
 
-// PortfolioMatcherConfigV16 is appended after the portfolio body.
-// PORTFOLIO_ENGINE_ACCOUNT_LEN = HEADER_LEN(16) + PORTFOLIO_STATE_LEN
-// PORTFOLIO_MATCHER_CONFIG_OFF = PORTFOLIO_ENGINE_ACCOUNT_LEN
-// Layout: matcher_program[32] | matcher_context[32] | matcher_delegate[32] | enabled[8] = 104 bytes
-// From v16_program.rs: PORTFOLIO_MATCHER_CONFIG_OFF and PORTFOLIO_MATCHER_CONFIG_LEN=104
-//
-// NOTE: PORTFOLIO_STATE_LEN is not stable — derive the offset from the account data length
-// minus 104 bytes (the matcher config size). The program always appends this at the end.
-const PORTFOLIO_MATCHER_CONFIG_LEN = 104; // sizeof(PortfolioMatcherConfigV16)
-
-/**
- * Read PortfolioMatcherConfigV16 from a v17 portfolio account.
- * The config is at the END of the account data, PORTFOLIO_MATCHER_CONFIG_LEN bytes before the end.
- * Returns null if the account is too short or matcher is disabled (enabled != 1).
- */
-function readPortfolioMatcherConfig(data: Buffer): {
-  matcherProgram: PublicKey;
-  matcherContext: PublicKey;
-  matcherDelegate: PublicKey;
-} | null {
-  // v18: the matcher config is followed by a `V17_PORTFOLIO_IDENTITY_TRAILER_LEN`-byte
-  // identity trailer, so anchor off the end minus BOTH the trailer and the config.
-  const trailerLen = V17_PORTFOLIO_IDENTITY_TRAILER_LEN;
-  if (data.length < PORTFOLIO_MATCHER_CONFIG_LEN + trailerLen) return null;
-  const off = data.length - PORTFOLIO_MATCHER_CONFIG_LEN - trailerLen;
-  // `data` is a Uint8Array in the browser (web3.js) — it has no Buffer.readBigUInt64LE,
-  // and Next's Buffer polyfill is missing the BigInt read methods. Use DataView (works
-  // for both Buffer and Uint8Array). LE = true.
-  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  // v18: the trailing u64 is a packed control word (bit 0 = enabled).
-  if (!decodePortfolioMatcherControl(dv.getBigUint64(off + 96, true)).enabled) return null;
-  return {
-    matcherProgram: new PublicKey(data.subarray(off, off + 32)),
-    matcherContext: new PublicKey(data.subarray(off + 32, off + 64)),
-    matcherDelegate: new PublicKey(data.subarray(off + 64, off + 96)),
-  };
-}
-
-/**
- * Read the LP owner public key from a v17 portfolio account provenance header.
- * The owner wallet is at offset 80 in the raw account data.
- */
-function readPortfolioOwner(data: Buffer): PublicKey {
-  return new PublicKey(data.subarray(PORTFOLIO_PROVENANCE_OWNER_OFF, PORTFOLIO_PROVENANCE_OWNER_OFF + 32));
-}
+// The LP side (accountB) and its matcher config are read in lib/market-lp.ts.
 
 /**
  * Find the v17 standalone portfolio account for a given (market, owner) pair.
- * Uses getProgramAccounts with memcmp filters on magic, market_group_id, and owner.
- * Returns null if no portfolio exists for this user on this market.
+ * `null` ONLY when the scan completed and found none; an RPC failure is retried
+ * and then thrown as PortfolioLookupError (M-4 — a swallowed 429 used to read as
+ * "no account" and the first-trade flow created a duplicate portfolio). The
+ * selector is the shared one in lib/owner-portfolio.ts.
  *
- * Shared with useDeposit — kept co-located here to avoid a cross-hook import.
+ * Shared with useFirstTrade / useClosePosition.
  */
-async function findV17Portfolio(
+export async function findV17Portfolio(
   connection: Connection,
   programId: PublicKey,
   marketPk: PublicKey,
   ownerPk: PublicKey,
 ): Promise<PublicKey | null> {
-  try {
-    const accounts = await connection.getProgramAccounts(programId, {
-      filters: [
-        { memcmp: { offset: 0, bytes: V17_PORTFOLIO_MAGIC.toString("base64"), encoding: "base64" } },
-        { memcmp: { offset: PORTFOLIO_PROVENANCE_MARKET_GROUP_OFF, bytes: marketPk.toBase58() } },
-        { memcmp: { offset: PORTFOLIO_OWNER_OFF, bytes: ownerPk.toBase58() } },
-      ],
-    });
-    // Drop the market's LP portfolio BEFORE the sort/pick below — this is
-    // the TAKER's own-portfolio discovery (accountA); a market's CREATOR must
-    // never resolve to their own LP here (that's accountB's job, resolved
-    // separately in resolveV17TradeAccounts). See isLpPortfolio's doc comment.
-    const nonLpAccounts = accounts.filter(({ account }) => !isLpPortfolio(account.data));
-    if (nonLpAccounts.length === 0) return null;
-
-    // getProgramAccounts() does not guarantee stable result ordering.
-    // Use the same canonical pubkey ordering as deposit and withdraw
-    // so every owner+market flow targets the same portfolio account.
-    const sorted = [...nonLpAccounts].sort((a, b) =>
-      a.pubkey.toBase58().localeCompare(b.pubkey.toBase58()),
-    );
-    // Defense-in-depth: re-verify the mutable owner actually matches after fetch —
-    // memcmp filters are advisory server-side; don't trust them blindly.
-    const data = Buffer.from(sorted[0].account.data);
-    const portfolio = parsePortfolioV17(data);
-    if (!portfolio.owner.equals(ownerPk)) return null;
-    return sorted[0].pubkey;
-  } catch {
-    return null;
-  }
+  return findOwnerPortfolio(connection, programId, marketPk, ownerPk);
 }
 
 // ============================================================================
@@ -197,89 +137,62 @@ function invalidateV17TradeAccounts(programId: PublicKey, slabPk: PublicKey, tak
   v17TradeAccountsCache.delete(tradeAccountsKey(programId, slabPk, takerPk));
 }
 
-async function resolveV17TradeAccounts(
+/** The LP side of a trade (accountB + its matcher), without the taker (UX WP-6 first trade). */
+export async function resolveLpTradeAccounts(
   connection: Connection,
   programId: PublicKey,
   slabPk: PublicKey,
-  takerPk: PublicKey,
-): Promise<V17TradeAccounts> {
-  // ── accountB: the LP portfolio (the one with an enabled matcher config) ──
-  // Curated markets have the LP portfolio address pinned in
-  // PLAYGROUND_SLAB_META — one targeted getAccountInfo instead of a full
-  // program scan. Wizard/unknown markets fall back to the scan.
-  let lpPortfolioData: Buffer | null = null;
-  let lpPortfolioPk: PublicKey | null = null;
-
-  const knownLp = PLAYGROUND_SLAB_META[slabPk.toBase58()]?.lp_portfolio_address;
-  if (knownLp) {
-    try {
-      const lpPk = new PublicKey(knownLp);
-      const info = await connection.getAccountInfo(lpPk, "confirmed");
-      if (info) {
-        const data = Buffer.from(info.data);
-        if (readPortfolioMatcherConfig(data)) {
-          lpPortfolioData = data;
-          lpPortfolioPk = lpPk;
-        }
-      }
-    } catch {
-      /* fall through to the scan */
-    }
+): Promise<Omit<V17TradeAccounts, "accountA">> {
+  // accountB is the market's LP chosen by ON-CHAIN IDENTITY (lib/market-lp.ts): the bound
+  // P3 vault LP, else the portfolio owned by asset 0's asset_admin, else the launch
+  // portfolio; and its matcher ctx must be bound to it (ctx.lp_pda == the derived
+  // delegate). NEVER "the first portfolio with an enabled matcher": anyone can enable a
+  // matcher on their own portfolio and would become every user's counterparty.
+  // Curated markets may pin the address in PLAYGROUND_SLAB_META (a cheap first try that
+  // must still pass every rule).
+  const known = PLAYGROUND_SLAB_META[slabPk.toBase58()]?.lp_portfolio_address;
+  let knownPk: PublicKey | null = null;
+  try {
+    knownPk = known ? new PublicKey(known) : null;
+  } catch {
+    knownPk = null;
   }
-
-  if (!lpPortfolioPk || !lpPortfolioData) {
-    // v17 LP portfolios are standalone keypair-addressed accounts (NOT PDAs);
-    // scan all portfolios for this market and select the first with an active
-    // matcher config. Intentionally NOT owner-filtered — the LP owner is a
-    // separate wallet, not the taker.
-    let allPortfolios;
-    try {
-      allPortfolios = await connection.getProgramAccounts(programId, {
-        filters: [
-          { memcmp: { offset: 0, bytes: V17_PORTFOLIO_MAGIC.toString("base64"), encoding: "base64" } },
-          { memcmp: { offset: PORTFOLIO_PROVENANCE_MARKET_GROUP_OFF, bytes: slabPk.toBase58() } },
-        ],
-      });
-    } catch (scanErr) {
-      throw new Error(
-        `Failed to scan LP portfolio accounts on-chain: ${scanErr instanceof Error ? scanErr.message : String(scanErr)}`,
-      );
-    }
-    for (const { pubkey, account } of allPortfolios) {
-      const data = Buffer.from(account.data);
-      const cfg = readPortfolioMatcherConfig(data);
-      if (cfg) {
-        lpPortfolioData = data;
-        lpPortfolioPk = pubkey;
-        break;
-      }
-    }
+  let lp;
+  try {
+    lp = await resolveMarketLp(connection, programId, slabPk, knownPk);
+  } catch (scanErr) {
+    throw new Error(
+      `Failed to scan LP portfolio accounts on-chain: ${scanErr instanceof Error ? scanErr.message : String(scanErr)}`,
+    );
   }
-
-  if (!lpPortfolioPk || !lpPortfolioData) {
+  if (!lp) {
     throw new Error(
       "No LP portfolio with an active matcher config found for this market. " +
       "The LP must call SetMatcherConfig before trading.",
     );
   }
+  // SEC: matcherProg/matcherCtx come from the LP portfolio's on-chain matcher config —
+  // attacker-controlled for an attacker-created market. The trade ix places matcherProg as
+  // the executable CPI target [4] and matcherCtx as a writable account [5], so pin the
+  // matcher to the canonical one before we build a signable tx around it. Runs on every
+  // resolution, so cached values have passed this gate too.
+  assertCanonicalMatcher(lp.matcherProg);
+  return {
+    accountB: lp.pubkey,
+    matcherProg: lp.matcherProg,
+    matcherCtx: lp.matcherCtx,
+    // Bound to the ctx by resolveMarketLp (== deriveMatcherDelegate(..., lp.owner, ...)).
+    matcherDelegate: lp.matcherDelegate,
+  };
+}
 
-  const matcherCfg = readPortfolioMatcherConfig(lpPortfolioData)!;
-  const matcherProg = matcherCfg.matcherProgram;
-  const matcherCtx = matcherCfg.matcherContext;
-  // SEC: matcherProg/matcherCtx come from the LP portfolio's on-chain matcher
-  // config — attacker-controlled for an attacker-created market. The trade ix
-  // places matcherProg as the executable CPI target [4] and matcherCtx as a
-  // writable account [5], so pin the matcher to the canonical one before we
-  // build a signable tx around it. Runs on every resolution, so cached values
-  // have passed this gate too.
-  assertCanonicalMatcher(matcherProg);
-
-  // Read LP owner from provenance header; derive matcherDelegate to match
-  // what SetMatcherConfig stored.
-  const lpOwner = readPortfolioOwner(lpPortfolioData);
-  const [matcherDelegate] = deriveMatcherDelegate(
-    programId, slabPk, lpPortfolioPk, lpOwner, matcherProg, matcherCtx,
-  );
+export async function resolveV17TradeAccounts(
+  connection: Connection,
+  programId: PublicKey,
+  slabPk: PublicKey,
+  takerPk: PublicKey,
+): Promise<V17TradeAccounts> {
+  const lp = await resolveLpTradeAccounts(connection, programId, slabPk);
 
   // ── accountA: the taker's own portfolio ──────────────────────────────────
   // The shared scan store (useUserAccount and friends) almost always already
@@ -301,7 +214,7 @@ async function resolveV17TradeAccounts(
     );
   }
 
-  return { accountA, accountB: lpPortfolioPk, matcherProg, matcherCtx, matcherDelegate };
+  return { accountA, ...lp };
 }
 
 /** Cache-or-resolve with in-flight dedup (prewarm + submit share one scan). */
@@ -380,12 +293,26 @@ export function useTrade(slabAddress: string) {
       size: bigint;
       /**
        * Optional leg split for sizes over the matcher's per-fill cap
-       * (lib/closeChunks.ts). Legs must sum to `size`; >1 leg builds ONE
-       * BatchTradeCpi (tag 67) instead of a TradeCpi — each leg passes the
+       * (lib/closeChunks.ts). Legs must sum to `size`; >1 leg builds one
+       * single-leg TradeCpi per leg in ONE transaction (lib/trade-ix.ts buildTradeIxs; a
+       * same-asset BatchTradeCpi is refused on-chain) — each leg passes the
        * matcher's per-fill clamp individually, one signature for the lot.
        */
       sizes?: bigint[];
       limitPriceE6?: bigint;
+      /**
+       * P2 fee channel (lib/limits/fee-channel.ts): the taker-SIGNED fee cap, base +
+       * the quote's requested fee, when the protocol enabled the channel for this asset.
+       * Omitted => the market's base trade fee (the only value accepted without it).
+       */
+      feeBps?: bigint;
+      /** UX WP-2: called while the app waits for the market (no prompt yet): true / false. */
+      onWaiting?: (waiting: boolean) => void;
+      /** UX WP-3: the ticket's "Stop" ends the wait loop (no prompt was opened). */
+      abortSignal?: AbortSignal;
+      /** UX WP-3: keep waiting past the schedule (with Stop) and say so after ~30 s. */
+      keepWaiting?: boolean;
+      onWaitingLong?: () => void;
     }) => {
       if (inflightRef.current) throw new Error("Trade already in progress");
       inflightRef.current = true;
@@ -568,88 +495,59 @@ export function useTrade(slabAddress: string) {
           fetchAssetMarketId(connection, slabPk, 0),
         ]);
 
-        const tradeIx = buildIx({
+        // v18: TradeCpi/BatchTradeCpi bind both portfolios' identity + accountB's matcher
+        // sequence + the asset marketId (lib/trade-ix.ts; shared with the first-trade flow).
+        const tradeIxParams = {
           programId,
-          keys: buildAccountMetas(ACCOUNTS_TRADE_CPI, [
-            wallet.publicKey,   // [0] signerA
-            slabPk,             // [1] market
-            accountA,           // [2] accountA (taker portfolio)
-            accountB,           // [3] accountB (LP portfolio)
-            matcherProg,        // [4] matcherProg
-            matcherCtx,         // [5] matcherCtx
-            matcherDelegate,    // [6] matcherDelegate
-          ]),
-          // v18: TradeCpi/BatchTradeCpi bind the two portfolios' identity
-          // (portfolioId + positionEpoch) + accountB's matcher-sequence + the
-          // asset marketId. feeBps MUST be the market's configured trade fee. An
-          // earlier note claimed feeBps=0n makes the program apply the market
-          // default — that is FALSE on the deployed v18 wrapper: fee_bps=0 with a
-          // non-zero insurance share fails validation and the trade reverts
-          // InvalidInstruction (Custom 9, which the ticket then MISLABELS as a
-          // slippage rejection — see errorMessages.ts). The proven newmarkets.ts
-          // seed passes the explicit market fee, so read it from
-          // wrapperConfigV17.tradeFeeBps. >1 leg: BatchTradeCpi — same 7 accounts,
-          // several matcher fills in one instruction, so an over-cap close lands
-          // with ONE signature. (maxSlippage/maxFeeAtoms=0 = no aggregate cap; the
-          // per-leg limitPrice is the real bound — matches the gate's encodeBatchTradeCpi.)
-          data:
-            legs.length > 1
-              ? encodeBatchTradeCpi({
-                  legs: legs.map((legSize) => ({
-                    assetIndex: 0,
-                    marketId: tradeMarketId,
-                    sizeQ: legSize.toString(),
-                    feeBps: wrapperConfigV17?.tradeFeeBps ?? 30n,
-                    limitPrice: effectiveLimitPriceE6.toString(),
-                  })),
-                  maxSlippageAtoms: 0n,
-                  maxFeeAtoms: 0n,
-                  accountAPortfolioId: takerId.portfolioId,
-                  accountAPositionEpoch: takerId.positionEpoch,
-                  accountBPortfolioId: lpId.portfolioId,
-                  accountBPositionEpoch: lpId.positionEpoch,
-                  accountBMatcherSequence: lpId.matcherSequence,
-                })
-              : encodeTradeCpi({
-                  accountAPortfolioId: takerId.portfolioId,
-                  accountAPositionEpoch: takerId.positionEpoch,
-                  accountBPortfolioId: lpId.portfolioId,
-                  accountBPositionEpoch: lpId.positionEpoch,
-                  accountBMatcherSequence: lpId.matcherSequence,
-                  assetIndex: 0,
-                  marketId: tradeMarketId,
-                  sizeQ: params.size.toString(),
-                  feeBps: wrapperConfigV17?.tradeFeeBps ?? 30n,
-                  limitPrice: effectiveLimitPriceE6.toString(),
-                  backingFeeCapBps: 0,
-                }),
-        });
-        // v17 PermissionlessCrank (tag 5): [owner(s,w), market(w), portfolio(w)] + oracle tail.
-        // Build after accountA is resolved — portfolio = accountA (taker's portfolio).
-        // Only prepend PermissionlessCrank(FeeSweep) when the taker already has active legs.
-        // Cranking an empty portfolio returns EngineNonProgress (0x16) and aborts the tx.
-        // Bug fix: do NOT unconditionally prepend the crank instruction.
+          signer: wallet.publicKey,
+          market: slabPk,
+          accountA,
+          accountB,
+          matcherProg,
+          matcherCtx,
+          matcherDelegate,
+          takerId,
+          lpId,
+          marketId: tradeMarketId,
+          legs,
+          size: params.size,
+          limitPriceE6: effectiveLimitPriceE6,
+          feeBps: params.feeBps,
+          marketTradeFeeBps: wrapperConfigV17?.tradeFeeBps,
+        };
+        const tradeIxs = buildTradeIxs(tradeIxParams);
+        // v17 PermissionlessCrank (tag 5) on the TAKER's portfolio: [owner(s,w), market(w),
+        // portfolio(w)] + oracle tail. NEVER in the trade's own transaction: crank + trade in
+        // one tx fails the trade with Custom(21) EngineLockActive most of the time while the
+        // trade alone is clean (lib/taker-crank.ts has the measurements). Only when the trade
+        // alone is refused and the crank alone is clean is it sent, as a separate prior tx.
+        // Cranking an empty portfolio returns EngineNonProgress (0x16), so it is only
+        // considered when the taker already has active legs.
         let hasActiveLegs = false;
+        // P1 (flag-gated): a confirmed TradeCpi can be a partial or ZERO fill.
+        const limitsMarketId =
+          isV17Market && limitsFlags().p1 && raw ? decodeMarketEngineView(raw)?.marketId ?? null : null;
+        let beforePosQ: bigint | null = null;
         if (isV17Market) {
           try {
             const portInfo = await connection.getAccountInfo(accountA, "confirmed");
             if (portInfo) {
               const pf = parsePortfolioV17(new Uint8Array(portInfo.data));
               hasActiveLegs = pf.legs.some((l) => l.active);
+              // P1 zero-fill check: the taker's position BEFORE the trade (same read).
+              if (limitsMarketId !== null) {
+                beforePosQ = signedPositionForAsset(new Uint8Array(portInfo.data), 0, limitsMarketId);
+              }
             }
           } catch {
-            // If portfolio read fails, skip the crank rather than aborting the trade
+            // If the portfolio read fails, skip the crank rather than aborting the trade.
             hasActiveLegs = false;
           }
-        } else {
-          // v12: always include the crank (v12 crank is on the slab, not the portfolio)
-          hasActiveLegs = true;
         }
 
         if (hasActiveLegs) {
-          const crankPortfolio = isV17Market ? accountA : slabPk;
           const crankKeys = buildAccountMetas(ACCOUNTS_PERMISSIONLESS_CRANK_BASE, [
-            wallet.publicKey, slabPk, crankPortfolio,
+            wallet.publicKey, slabPk, accountA,
           ]);
           // For Pyth mode, append oracle feed account as tail
           if (!useAdminOracle) {
@@ -658,21 +556,97 @@ export function useTrade(slabAddress: string) {
           const crankIx = buildIx({
             programId,
             keys: crankKeys,
-            // v18: PermissionlessCrank payload is now { nowSlot, observations }.
-            // A plain maintenance/fee-sweep crank passes one asset-0 hint with no
-            // oracle-account push (gate market.ts default).
+            // v18: PermissionlessCrank payload is { nowSlot, observations }. A plain
+            // maintenance crank passes one asset-0 hint with no oracle-account push.
             data: encodePermissionlessCrank({ nowSlot: 0n, observations: defaultCrankObservations(0) }),
           });
-          instructions.unshift(crankIx);
+          const takerWallet = wallet.publicKey;
+          const plan = await planTakerCrank(
+            (ixs) => simulateForGate(connection, takerWallet, ixs),
+            // M-2: a split over one tx's budget is judged on what fits ONE tx (the first legs).
+            legs.length > SINGLE_TX_MAX_LEGS ? tradeIxs.slice(0, SINGLE_TX_MAX_LEGS) : tradeIxs,
+            crankIx,
+            2, // simulateForGate's heap-frame + CU-limit prefix
+          );
+          if (plan === "separate-tx") {
+            console.info("[useTrade] taker portfolio needs a maintenance crank first; sending it as its own tx");
+            await sendTx({ connection, wallet, instructions: [crankIx], computeUnitsFromSim: { cap: 200_000 } });
+          }
+        } else if (!isV17Market) {
+          // v12: the crank is on the slab, not the portfolio (legacy path, unchanged).
+          const crankKeys = buildAccountMetas(ACCOUNTS_PERMISSIONLESS_CRANK_BASE, [
+            wallet.publicKey, slabPk, slabPk,
+          ]);
+          if (!useAdminOracle) {
+            crankKeys.push({ pubkey: oracleAccount, isSigner: false, isWritable: false });
+          }
+          instructions.unshift(buildIx({
+            programId,
+            keys: crankKeys,
+            data: encodePermissionlessCrank({ nowSlot: 0n, observations: defaultCrankObservations(0) }),
+          }));
         }
-        instructions.push(tradeIx);
+        let sig: string;
+        if (isV17Market && legs.length > SINGLE_TX_MAX_LEGS) {
+          // M-2: more legs than one transaction's 1.4M CU can carry. Pack them into as many
+          // transactions as the budget needs, simulate every one before signing (re-planning
+          // with fewer legs per tx on compute exhaustion), sign ALL with one approval, then
+          // broadcast in order (lib/trade-leg-groups.ts). `instructions` holds nothing on v17
+          // (the taker crank never shares the trade's tx, lib/taker-crank.ts); kept generic.
+          if (getMaintenanceConfig().blockWrites) throw new MaintenanceError();
+          const owner = wallet.publicKey;
+          const prepend = [...instructions];
+          const [{ blockhash }, priorityFee] = await Promise.all([
+            connection.getLatestBlockhash("confirmed"),
+            getPriorityFee(connection),
+          ]);
+          const sent = await sendLegGroups(
+            {
+              legs,
+              buildGroupIxs: (group, i) => [
+                ...(i === 0 ? prepend : []),
+                ...buildTradeIxs({ ...tradeIxParams, legs: group, size: group.reduce((a, b) => a + b, 0n) }),
+              ],
+            },
+            {
+              simulate: (ixs) => simulateForGate(connection, owner, ixs),
+              refusal: (sim) => new SimulationRefusal(sim.err, sim.logs, sim.simulated),
+              buildTx: (ixs, computeUnits) =>
+                buildBatchTx({ instructions: ixs, computeUnits, priorityFeeMicroLamports: priorityFee, blockhash, feePayer: owner }),
+              signAll: (txs) => signAllCompat(wallet, txs),
+              broadcast: (tx) => broadcastSignedTx(connection, tx, { abortSignal: params.abortSignal }),
+            },
+          );
+          sig = sent.signatures[sent.signatures.length - 1];
+        } else {
+          instructions.push(...tradeIxs);
 
-        // Each extra batch leg is another matcher CPI + fill settle — scale
-        // the budget rather than letting a 3-leg close die on compute. Legs
-        // are bounded structurally (position ≤ 4× fill cap ⇒ ≤ 5 legs), so
-        // this stays inside the 1.4M tx ceiling.
-        const computeUnits = Math.min(600_000 + 250_000 * (legs.length - 1), 1_400_000);
-        const sig = await sendTx({ connection, wallet, instructions, computeUnits });
+          // Explicit limit sized from a simulation of THIS tx (P1: CPI trades cost ~13k more CU;
+          // a single-leg batch on asset 1 is 216k > the 200k default), capped at 400k per leg
+          // (lib/compute-budget.ts). Also used by closes (useClosePosition calls trade()).
+          sig = await sendTxWaiting({
+            connection, wallet, instructions,
+            onWaiting: params.onWaiting,
+            abortSignal: params.abortSignal,
+            keepWaiting: params.keepWaiting,
+            onWaitingLong: params.onWaitingLong,
+            computeUnitsFromSim: { cap: tradeCuCap(legs.length) },
+            // P0b: prepend ExpireBackingBucket / FinalizeResetSide only if this
+            // trade/close would otherwise revert 19/21 on them (lib/self-heal.ts).
+            // UX WP-2 (SH-2): a lagging engine clock is caught up by cranking the market's LP
+            // (accountB; the vault LP on P3) inside THIS tx — never "ask a maintainer".
+            selfHeal: isV17Market
+              ? {
+                  programId,
+                  market: slabPk,
+                  catchUp: {
+                    portfolio: accountB,
+                    oracleTail: useAdminOracle ? [] : [{ pubkey: oracleAccount, isSigner: false, isWritable: false }],
+                  },
+                }
+              : undefined,
+          });
+        }
 
         // Immediate local application of the confirmed fill: sendTx's
         // pollConfirmation has ALREADY verified this tx landed on-chain by
@@ -685,7 +659,15 @@ export function useTrade(slabAddress: string) {
         // the burst. Capital/pnl/fees are intentionally left untouched (not
         // deterministic client-side) — those fields still wait on the
         // refresh burst exactly as before. See applyConfirmedFill's doc.
-        if (isV17Market) {
+        if (isV17Market && limitsMarketId !== null) {
+          // P1: patch only by the MEASURED delta. A zero fill changes nothing; an
+          // unknown result waits for the refresh burst (never assumes params.size).
+          const fill = await measureFill(connection, accountA, sig, beforePosQ, params.size, limitsMarketId);
+          recordFillResult(sig, fill);
+          if ((fill.kind === "full" || fill.kind === "partial") && fill.filledQ !== null) {
+            applyConfirmedFill(makePortfolioScanKey(programId, slabAddress, wallet.publicKey), fill.filledQ);
+          }
+        } else if (isV17Market) {
           applyConfirmedFill(makePortfolioScanKey(programId, slabAddress, wallet.publicKey), params.size);
         }
 
@@ -713,6 +695,11 @@ export function useTrade(slabAddress: string) {
             // retry with the same wrong leg split.
             invalidateMatcherCaps(slabProgramId, new PublicKey(slabAddress));
           } catch { /* malformed address — nothing cached */ }
+        }
+        // M-2: part of a multi-transaction order landed — re-read so the position is current.
+        if (e instanceof PartialLegSendError) {
+          refreshSlab?.();
+          [1200, 2200, 3500].forEach((ms) => setTimeout(() => refreshSlab?.(), ms));
         }
         const msg = e instanceof Error ? e.message : String(e);
         if (mountedRef.current) setError(msg);

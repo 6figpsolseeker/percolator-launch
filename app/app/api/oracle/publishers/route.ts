@@ -3,28 +3,16 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { BoundedTtlCache } from "@/lib/bounded-ttl-cache";
 
-const PYTHNET_RPC =
-  process.env.PYTHNET_RPC_URL || "https://pythnet.rpcpool.com";
 const ORACLE_BRIDGE_URL =
   process.env.ORACLE_BRIDGE_URL || "http://127.0.0.1:18802";
 
-/**
- * Well-known Pyth publisher public keys → display names.
- * Source: https://pyth.network/publishers (updated periodically).
+/*
+ * NO PYTH: this route used to have a `pyth-pinned` mode that read the feed's
+ * price account off Pythnet RPC and listed Pyth's publishers. It is gone. The
+ * relaunch markets are DEX-priced (hyperp), so the only sources left are the
+ * DEX sources behind the oracle bridge (hyperp) and a single oracle authority
+ * (admin). Any other mode — `pyth-pinned` included — is a 400.
  */
-const KNOWN_PYTH_PUBLISHERS: Record<string, string> = {
-  "BXzwCWKsMpAW2MxWTWPaJu4fByYWkBFGBmLz4QxGUkwi": "Jump Trading",
-  "GVXRSBjFk6e6J3NbVPXohDJetcTjaeeuykUpbQF8UoMU": "Wintermute",
-  "4X98LsiCByoQPsCi3i9T4C5U2sT3C7JJcBRixYNxH3ep": "LMAX",
-  "89ijemGCPC9GUGjVA1K7GqBDjEwajmimgu4n55YHCmMX": "Cboe",
-  "5HYfnjBJPJKxqsT8J1rVJLjY8ud7Wn4K1k3JNwSJnFeJ": "Jane Street",
-  "FVYnLcNpPkDfHMJB2kWfT5jSGqNgPDN2vPaFheFmwKJe": "CMS",
-  "GKNcUmNacSJo4S2Kq3DuYRYRGw3sNUfJ4tyqd198t6vQ": "Two Sigma",
-  "HNRSheUqK53dBGE5JnqgjXPGLhJFeBPz2dYR28LS5JiR": "DRW Cumberland",
-  "6jprZFdLP5MYw3owfV8c6yg3CSL8kcVqBvPSR5JCERXM": "Virtu Financial",
-  "89k6VPy4yCBY2qdT9rgvPEgPthmqG2p6NnmYqYRjFXDi": "GBV Capital",
-  "4RVFNKH15CxFSYdoNBJJGggjszuTKmpFs4PGwuXSNaK7": "Raydium",
-};
 
 /** Max age for cached publisher data (5 minutes). */
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -60,14 +48,12 @@ interface PublishersResponse {
  * Dynamically fetch oracle publisher data for a given mode.
  *
  * Query params:
- *   mode=pyth-pinned&feedId=<hex>   — reads Pythnet on-chain account
- *   mode=hyperp                     — queries oracle bridge
+ *   mode=hyperp                     — queries oracle bridge (DEX sources)
  *   mode=admin&authority=<base58>   — returns single authority
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const mode = searchParams.get("mode");
-  const feedId = searchParams.get("feedId");
   const authority = searchParams.get("authority");
 
   if (!mode) {
@@ -97,11 +83,13 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Check the bounded cache for externally resolved publisher modes.
-  // Normalize the feedId so case/0x-prefix variants of the SAME feed share
-  // one cache entry instead of each burning a slot in the bounded cache
-  // (hex is case-insensitive and the 0x prefix is optional throughout).
-  const cacheKey = `${mode}:${(feedId || "").toLowerCase().replace(/^0x/, "")}`;
+  if (mode !== "hyperp") {
+    return NextResponse.json({ error: `Unknown mode: ${mode}` }, { status: 400 });
+  }
+
+  // Check the bounded cache. Only the fixed `hyperp` key can reach it, so
+  // request input cannot grow its cardinality.
+  const cacheKey = mode;
   const cached = cache.get(cacheKey);
 
   if (cached) {
@@ -111,37 +99,10 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    let result: PublishersResponse;
+    const result = await fetchHyperpPublishers();
 
-    switch (mode) {
-      case "pyth-pinned":
-        if (!feedId || !/^(0x)?[0-9a-fA-F]+$/.test(feedId)) {
-          return NextResponse.json(
-            { error: "Missing or invalid feedId for pyth-pinned mode" },
-            { status: 400 },
-          );
-        }
-        // Pyth feed IDs are 32 bytes = 64 hex chars (+ optional 0x prefix)
-        if (feedId.replace(/^0x/, "").length > 128) {
-          return NextResponse.json(
-            { error: "feedId too long" },
-            { status: 400 },
-          );
-        }
-        result = await fetchPythPublishers(feedId);
-        break;
-
-      case "hyperp":
-        result = await fetchHyperpPublishers();
-        break;
-
-
-      default:
-        return NextResponse.json({ error: `Unknown mode: ${mode}` }, { status: 400 });
-    }
-
-    // Error-sentinel results (publisherCount === null: Pythnet unreachable /
-    // non-200 / bad magic, or the oracle bridge being down) are NOT cached —
+    // Error-sentinel results (publisherCount === null: the oracle bridge
+    // being down) are NOT cached —
     // caching one would pin a transient upstream blip as "no publishers" for
     // the full 5-minute TTL. Return it uncached so the next request retries.
     if (result.publisherCount === null) {
@@ -163,138 +124,6 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Pyth: Read on-chain Pythnet price account for publisher data
-// ---------------------------------------------------------------------------
-
-/**
- * Pyth price account binary layout (v2):
- *   offset  0: magic       (u32) = 0xa1b2c3d4
- *   offset  4: version     (u32)
- *   offset  8: type        (u32) = 3 (price)
- *   offset 12: size        (u32)
- *   offset 16: price_type  (u32)
- *   offset 20: exponent    (i32)
- *   offset 24: num         (u32) — number of registered publisher components
- *   offset 28: num_qt      (u32)
- *   ...
- *   offset 208+: price components, each 96 bytes:
- *     +0:  publisher pubkey (32 bytes)
- *     +32: aggregate price_info (32 bytes): price(8)+conf(8)+status(4)+corp_act(4)+pub_slot(8)
- *     +64: latest price_info   (32 bytes): price(8)+conf(8)+status(4)+corp_act(4)+pub_slot(8)
- */
-const PYTH_MAGIC = 0xa1b2c3d4;
-const COMPONENT_OFFSET = 208;
-const COMPONENT_SIZE = 96;
-
-async function fetchPythPublishers(feedIdHex: string): Promise<PublishersResponse> {
-  const feedBytes = hexToBytes(feedIdHex);
-  const accountAddress = bytesToBase58(feedBytes);
-
-  let resp: Response;
-  try {
-    resp = await fetch(PYTHNET_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getAccountInfo",
-        params: [accountAddress, { encoding: "base64", commitment: "confirmed" }],
-      }),
-      signal: AbortSignal.timeout(8000),
-    });
-  } catch (err) {
-    // GH#1807: Pythnet RPC unreachable (timeout, DNS, network) — return empty rather
-    // than propagating a 500 that triggers a client-side retry storm.
-    console.warn("[oracle/publishers] Pythnet RPC unreachable:", (err as Error).message);
-    return { mode: "pyth-pinned", publisherCount: null, publisherTotal: null, publishers: [] };
-  }
-
-  if (!resp.ok) {
-    // Non-200 from Pythnet — treat as unavailable, not as a server error.
-    console.warn(`[oracle/publishers] Pythnet RPC returned ${resp.status}`);
-    return { mode: "pyth-pinned", publisherCount: null, publisherTotal: null, publishers: [] };
-  }
-
-  const json = await resp.json();
-
-  if (!json.result?.value?.data?.[0]) {
-    // Feed not found on Pythnet — return empty response
-    return {
-      mode: "pyth-pinned",
-      publisherCount: 0,
-      publisherTotal: 0,
-      publishers: [],
-    };
-  }
-
-  // GH#1814: Validate buffer size before decoding to prevent OOM attacks.
-  // Pyth price accounts are typically ~5-10KB; reject anything larger than 1MB.
-  const b64Data = json.result.value.data[0];
-  if (typeof b64Data === "string" && Buffer.byteLength(b64Data, "base64") > 1_000_000) {
-    console.warn("[oracle/publishers] Pyth account data too large (>1MB), rejecting");
-    return {
-      mode: "pyth-pinned",
-      publisherCount: null,
-      publisherTotal: null,
-      publishers: [],
-    };
-  }
-
-  const data = Buffer.from(b64Data, "base64");
-
-  const magic = data.readUInt32LE(0);
-  if (magic !== PYTH_MAGIC) {
-    // GH#1813: Account exists but is not a Pyth price account (wrong magic bytes).
-    // Return empty rather than throwing — same graceful pattern as network error path.
-    console.warn(`[oracle/publishers] Non-Pyth account magic: 0x${magic.toString(16)}`);
-    return { mode: "pyth-pinned", publisherCount: null, publisherTotal: null, publishers: [] };
-  }
-
-  const numComponents = data.readUInt32LE(24);
-  const publishers: PublisherInfo[] = [];
-  let activeCount = 0;
-
-  for (let i = 0; i < numComponents; i++) {
-    const base = COMPONENT_OFFSET + i * COMPONENT_SIZE;
-    if (base + COMPONENT_SIZE > data.length) break;
-
-    // Publisher public key (32 bytes at base+0)
-    const pubKeyBytes = new Uint8Array(data.subarray(base, base + 32));
-    const pubKeyB58 = bytesToBase58(pubKeyBytes);
-
-    // Latest price_info.status at base+64+16 (u32, 1 = Trading)
-    const latestStatus = data.readUInt32LE(base + 64 + 16);
-    const isActive = latestStatus === 1;
-    if (isActive) activeCount++;
-
-    const name =
-      KNOWN_PYTH_PUBLISHERS[pubKeyB58] ||
-      `${pubKeyB58.slice(0, 6)}…${pubKeyB58.slice(-4)}`;
-
-    publishers.push({
-      key: pubKeyB58,
-      name,
-      status: isActive ? "active" : "offline",
-    });
-  }
-
-  // Sort: active publishers first, then by name
-  publishers.sort((a, b) => {
-    if (a.status === "active" && b.status !== "active") return -1;
-    if (a.status !== "active" && b.status === "active") return 1;
-    return a.name.localeCompare(b.name);
-  });
-
-  return {
-    mode: "pyth-pinned",
-    publisherCount: activeCount,
-    publisherTotal: numComponents,
-    publishers: publishers.slice(0, 15), // Limit for UI
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -402,37 +231,4 @@ function getAdminPublishers(authority: string | null): PublishersResponse {
       },
     ],
   };
-}
-
-// ---------------------------------------------------------------------------
-// Helpers: hex ↔ bytes ↔ base58
-// ---------------------------------------------------------------------------
-
-function hexToBytes(hex: string): Uint8Array {
-  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
-  const bytes = new Uint8Array(clean.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-function bytesToBase58(bytes: Uint8Array): string {
-  let num = 0n;
-  for (const byte of bytes) {
-    num = num * 256n + BigInt(byte);
-  }
-  let result = "";
-  while (num > 0n) {
-    const [q, r] = [num / 58n, num % 58n];
-    result = BASE58_ALPHABET[Number(r)] + result;
-    num = q;
-  }
-  for (const byte of bytes) {
-    if (byte === 0) result = "1" + result;
-    else break;
-  }
-  return result || "1";
 }

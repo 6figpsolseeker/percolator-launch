@@ -1,11 +1,14 @@
 "use client";
 
-import { FC, useState, useCallback } from "react";
+import { bpsPct } from "@/lib/format";
+import { FC, useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LogoUpload } from "./LogoUpload";
 import { getNetwork } from "@/lib/config";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
+import { launchPriceFeedStatus } from "@/lib/launch-outcome";
+import { KEEPER_REGISTER_COPY, userFacingRegistrationReason } from "@/lib/keeper-register-client";
 
 interface LaunchSuccessProps {
   tokenSymbol: string;
@@ -40,7 +43,31 @@ interface LaunchSuccessProps {
    * retryKeeperRegistration.
    */
   onRetryKeeperRegistration?: () => void | Promise<void>;
+  /** E2E B21: the market's price comes from a keeper-read DEX pool, so it is not launched
+   *  until the keeper registration succeeds. */
+  priceFeedRequired?: boolean;
+  /** UX WP-7: the background registration loop's phase (connecting / slow / ready / failed). */
+  keeperPhase?: "connecting" | "slow" | "ready" | "failed" | null;
 }
+
+/**
+ * The success screen shows its actions as soon as the market's creation has landed; the live-price
+ * registration is a secondary one-line status next to them. That status is bounded: after
+ * LAUNCH_PRICE_WAIT_MS without a connection it settles on a calm final line (with Retry) instead of
+ * an open-ended spinner. (WP-7 replaced the whole screen with an "Almost ready" waiting state that
+ * hid Trade / Sim-USDC / copy until the price connected, which could be forever.)
+ */
+export const LAUNCH_PRICE_WAIT_MS = 90_000;
+export const LAUNCH_PRICE_COPY = {
+  pendingTitle: "Market created",
+  readyTitle: "Ready to trade",
+  connecting: "Live price connecting… usually under a minute.",
+  timedOut: "Live price is still connecting; your market is live and tradable once it arrives.",
+  failed: KEEPER_REGISTER_COPY.serverTrouble,
+  ready: KEEPER_REGISTER_COPY.ready,
+  retry: "Retry",
+  retrying: "Retrying…",
+} as const;
 
 /**
  * Success state after market launch.
@@ -61,7 +88,10 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
   keeperMessage,
   keeperRegistering,
   onRetryKeeperRegistration,
+  priceFeedRequired = false,
+  keeperPhase = null,
 }) => {
+  const feed = launchPriceFeedStatus({ priceFeedRequired, keeperDelegated: !!keeperDelegated });
   const [copied, setCopied] = useState(false);
   const [copiedDevnet, setCopiedDevnet] = useState(false);
   const [mintLoading, setMintLoading] = useState(false);
@@ -69,6 +99,40 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
   const isDevnet = getNetwork() === "devnet";
   const { publicKey } = useWalletCompat();
   const router = useRouter();
+
+  const pricePending = feed === "missing";
+  const [priceTimedOut, setPriceTimedOut] = useState(false);
+  useEffect(() => {
+    if (!pricePending) return;
+    const t = setTimeout(() => setPriceTimedOut(true), LAUNCH_PRICE_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [pricePending]);
+  const priceFailed = pricePending && keeperPhase === "failed";
+  const priceStatus: "connecting" | "timed-out" | "failed" | "ready" | null = !priceFeedRequired
+    ? null
+    : !pricePending
+      ? "ready"
+      : priceFailed
+        ? "failed"
+        : priceTimedOut
+          ? "timed-out"
+          : "connecting";
+  const priceLine =
+    priceStatus === "connecting"
+      ? LAUNCH_PRICE_COPY.connecting
+      : priceStatus === "timed-out"
+        ? LAUNCH_PRICE_COPY.timedOut
+        : priceStatus === "failed"
+          ? keeperMessage
+            ? userFacingRegistrationReason(keeperMessage)
+            : LAUNCH_PRICE_COPY.failed
+          : priceStatus === "ready"
+            ? LAUNCH_PRICE_COPY.ready
+            : null;
+  // Without the creation tx on this device a retry can only repeat the same message, so none is offered.
+  const noProofHere = keeperMessage === KEEPER_REGISTER_COPY.noProof;
+  const showPriceRetry =
+    !!onRetryKeeperRegistration && !noProofHere && (priceStatus === "failed" || priceStatus === "timed-out");
 
   /**
    * PERC-475: Claim ~$500 of Sim-USDC collateral, then navigate to the trade page.
@@ -152,7 +216,7 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
   };
 
   return (
-    <div className="border border-[var(--long)]/30 bg-[var(--long)]/[0.06] p-6 text-center">
+    <div data-testid="launch-success" className="border border-[var(--long)]/30 bg-[var(--long)]/[0.06] p-6 text-center">
       {/* Success icon */}
       <div className="mb-4">
         <div className="inline-flex h-12 w-12 items-center justify-center border-2 border-[var(--long)]/40 bg-[var(--long)]/[0.1] text-[24px] text-[var(--long)]">
@@ -161,10 +225,10 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
       </div>
 
       <h2 className="text-[18px] font-bold text-[var(--long)] mb-2">
-        MARKET LAUNCHED
+        {pricePending ? LAUNCH_PRICE_COPY.pendingTitle : LAUNCH_PRICE_COPY.readyTitle}
       </h2>
       <p className="text-[13px] text-[var(--text-secondary)] mb-4">
-        {tokenSymbol}-PERP is live on Percolator devnet
+        {tokenSymbol} is live on Percolator devnet
       </p>
 
       {/* Market address */}
@@ -175,6 +239,7 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
         <button
           type="button"
           onClick={handleCopy}
+          data-testid="launch-copy-address"
           className="border border-[var(--border)] px-2 py-1.5 text-[9px] font-medium text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)]/30 transition-colors"
           title="Copy address"
         >
@@ -191,34 +256,6 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
         </a>
       </div>
 
-      {/* Keeper oracle delegation badge */}
-      {keeperDelegated && (
-        <div className="mb-4 border border-[var(--long)]/30 bg-[var(--long)]/[0.06] px-4 py-2 text-[11px] text-[var(--long)]">
-          Price feed connected — live prices start within ~1–2 min.
-        </div>
-      )}
-      {!keeperDelegated && keeperMessage && (
-        <div className="mb-4 border border-[var(--warning)]/30 bg-[var(--warning)]/[0.04] px-4 py-2.5 text-left text-[11px] text-[var(--text-secondary)]">
-          <p>Keeper registration: {keeperMessage}</p>
-          {onRetryKeeperRegistration && (
-            <button
-              type="button"
-              onClick={() => void onRetryKeeperRegistration()}
-              disabled={keeperRegistering}
-              className="mt-2.5 border border-[var(--warning)]/40 bg-[var(--warning)]/[0.06] px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--warning)] transition-colors hover:bg-[var(--warning)]/[0.12] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {keeperRegistering ? (
-                <span className="flex items-center gap-1.5">
-                  <span className="animate-spin">⟳</span> RETRYING…
-                </span>
-              ) : (
-                "RETRY REGISTRATION"
-              )}
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Market preview card */}
       <div className="border border-[var(--accent)]/20 bg-[var(--accent)]/[0.02] p-4 mb-6 inline-block text-left w-full max-w-sm mx-auto">
         <div className="flex items-center gap-3">
@@ -226,15 +263,15 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
             {tokenSymbol.slice(0, 2).toUpperCase()}
           </div>
           <div>
-            <p className="text-[13px] font-bold text-[var(--text)]">{tokenSymbol}-PERP</p>
+            <p className="text-[13px] font-bold text-[var(--text)]">{tokenSymbol}</p>
             <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="text-[9px] text-[var(--text-secondary)]">Fee: {tradingFeeBps} bps</span>
+              <span className="text-[9px] text-[var(--text-secondary)]">Fee: {bpsPct(tradingFeeBps)}</span>
               <span className="text-[9px] text-[var(--text-secondary)]">·</span>
               <span className="text-[9px] text-[var(--text-secondary)]">Leverage: {maxLeverage}x</span>
               <span className="text-[9px] text-[var(--text-secondary)]">·</span>
               {/* v17 slabs are always sized to max capacity — there is no tier to
                   report here anymore (see StepControlRoom's "Slab" pre-flight readout). */}
-              <span className="text-[9px] text-[var(--text-secondary)]">Slab: Max capacity</span>
+              <span className="text-[9px] text-[var(--text-secondary)]">Market size: max capacity</span>
             </div>
           </div>
         </div>
@@ -257,7 +294,7 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
       {insuranceMintFailed && (
         <div className="border border-[var(--warning)]/20 bg-[var(--warning)]/[0.04] px-4 py-2 mb-4 text-left w-full max-w-sm mx-auto">
           <p className="text-[11px] text-[var(--text-secondary)]">
-            Market is <strong className="text-[var(--text)]">live and tradeable</strong>. LP-vault deposits are pending (mint timed out) — retry later from market settings.
+            Market is <strong className="text-[var(--text)]">live and tradeable</strong>. Earn deposits aren't open yet (the setup step timed out). Retry later from My Markets.
           </p>
         </div>
       )}
@@ -363,10 +400,11 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
       {/* CTAs */}
       <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
         {/* PERC-475: Claim Sim-USDC collateral + trade on devnet when a collateral mint is available */}
-        {isDevnet && devnetMint && publicKey ? (
+        {isDevnet && devnetMint && publicKey && (
           <button
             type="button"
             onClick={handleMintAndTrade}
+            data-testid="launch-claim-sim-usdc"
             disabled={mintLoading}
             className="w-full sm:w-auto border border-[var(--long)]/50 bg-[var(--long)]/[0.08] px-8 py-3 text-[13px] font-bold uppercase tracking-[0.1em] text-[var(--long)] transition-all hud-btn-corners hover:bg-[var(--long)]/[0.15] disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -378,14 +416,16 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
               "GET SIM-USDC & TRADE →"
             )}
           </button>
-        ) : (
-          <Link
-            href={`/trade/${marketAddress}`}
-            className="w-full sm:w-auto border border-[var(--accent)]/50 bg-[var(--accent)]/[0.08] px-8 py-3 text-[13px] font-bold uppercase tracking-[0.1em] text-[var(--accent)] transition-all hud-btn-corners hover:bg-[var(--accent)]/[0.15]"
-          >
-            TRADE THIS MARKET →
-          </Link>
         )}
+        {/* Always present, from the moment the market's creation lands — even while the live price
+            is still connecting, and alongside the Sim-USDC claim when that is offered. */}
+        <Link
+          href={`/trade/${marketAddress}`}
+          data-testid="launch-go-to-market"
+          className="w-full sm:w-auto border border-[var(--accent)]/50 bg-[var(--accent)]/[0.08] px-8 py-3 text-center text-[13px] font-bold uppercase tracking-[0.1em] text-[var(--accent)] transition-all hud-btn-corners hover:bg-[var(--accent)]/[0.15]"
+        >
+          TRADE THIS MARKET →
+        </Link>
         {/* /my-markets had zero navigational entry point — link to it here, at
             the moment a creator has just proven they own a market, so they can
             find their creator dashboard again later. */}
@@ -403,6 +443,29 @@ export const LaunchSuccess: FC<LaunchSuccessProps> = ({
           DEPLOY ANOTHER MARKET
         </button>
       </div>
+      {priceLine && (
+        <div
+          data-testid="launch-price-status"
+          data-status={priceStatus ?? undefined}
+          className="mx-auto mt-3 flex max-w-md flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[11px] text-[var(--text-secondary)]"
+        >
+          {priceStatus === "connecting" && (
+            <span aria-hidden="true" className="inline-block h-[6px] w-[6px] animate-pulse rounded-full bg-[var(--text-muted)]" />
+          )}
+          <span data-testid="launch-price-status-line">{priceLine}</span>
+          {showPriceRetry && (
+            <button
+              type="button"
+              data-testid="launch-price-retry"
+              onClick={() => void onRetryKeeperRegistration?.()}
+              disabled={keeperRegistering}
+              className="text-[var(--accent)] underline underline-offset-2 hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {keeperRegistering ? LAUNCH_PRICE_COPY.retrying : LAUNCH_PRICE_COPY.retry}
+            </button>
+          )}
+        </div>
+      )}
       {mintError && (
         <div className="mt-2 text-[11px] text-[var(--short)]">
           <p>{mintError}</p>

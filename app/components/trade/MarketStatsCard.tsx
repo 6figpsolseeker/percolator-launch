@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useState, useMemo } from "react";
+import { FC, useMemo } from "react";
 import { useEngineState } from "@/hooks/useEngineState";
 import { useMarketConfig } from "@/hooks/useMarketConfig";
 import { useSlabState } from "@/components/providers/SlabProvider";
@@ -11,7 +11,6 @@ import { sanitizeOnChainValue, sanitizeAccountCount, sanitizeBps, sanitizeFundin
 import { useLivePrice } from "@/hooks/useLivePrice";
 import { resolveMarketPriceE6, computeMarketSpread } from "@/lib/oraclePrice";
 import { FundingRateCard } from "./FundingRateCard";
-import { FundingRateChart } from "./FundingRateChart";
 import { sanitizeSymbol } from "@/lib/symbol-utils";
 import { OracleFreshnessIndicator } from "@/components/oracle/OracleFreshnessIndicator";
 import { useMarketInfo } from "@/hooks/useMarketInfo";
@@ -48,7 +47,6 @@ export const MarketStatsCard: FC = () => {
   // BUG FIX: Use Supabase market symbol for display, fall back to collateral token symbol
   const collateralSymbol = sanitizeSymbol(tokenMeta?.symbol, mintAddress);
   const symbol = marketInfo?.symbol ?? collateralSymbol;
-  const [showFundingChart, setShowFundingChart] = useState(false);
 
   // ─── Mark / Index / Spread ────────────────────────────────────────────────
   // Shared with MarketInfoBar's top-bar spread stat — see lib/oraclePrice.ts.
@@ -283,27 +281,7 @@ export const MarketStatsCard: FC = () => {
       <OracleFreshnessIndicator />
 
       {/* Funding Rate Section — detailed view with explainer + countdown */}
-      {slabAddress && (
-        <>
-          <FundingRateCard slabAddress={slabAddress} />
-
-          {/* Funding Chart Toggle */}
-          <div className="rounded-none border border-[var(--border)]/50 bg-[var(--bg)]/80">
-            <button
-              onClick={() => setShowFundingChart(!showFundingChart)}
-              className="flex w-full items-center justify-between px-2 py-1 text-left text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text-secondary)] transition-colors hover:text-[var(--text)]"
-            >
-              <span>Funding History</span>
-              <span className={`text-[9px] text-[var(--text-secondary)] transition-transform duration-200 ${showFundingChart ? "rotate-180" : ""}`}>▾</span>
-            </button>
-            {showFundingChart && (
-              <div className="px-2 pb-2">
-                <FundingRateChart slabAddress={slabAddress} />
-              </div>
-            )}
-          </div>
-        </>
-      )}
+      {slabAddress && <FundingRateCard slabAddress={slabAddress} />}
     </div>
   );
 };

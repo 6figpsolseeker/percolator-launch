@@ -24,8 +24,8 @@ const state = vi.hoisted(() => ({
   poolA: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
   poolB: 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
 
-  fakeStore: '[]',
-  fakeEtagVersion: 0,
+  /** Blob store by pathname (the registry is versioned snapshots + the legacy seed blob). */
+  store: new Map<string, string>(),
 
   registrationReads: 0,
   readSnapshots: [] as string[],
@@ -95,14 +95,20 @@ vi.mock('@solana/web3.js', () => {
         };
       }
 
-      /*
-       * Force classifyPoolByOwner() into its documented dexType
-       * fallback path. The body supplies dexType: "meteora-dlmm".
-       * (Any SUPPORTED type works — this test is about the concurrency
-       * race, not the DEX. It used "raydium-clmm" until that type was
-       * blocked for new markets, which made the route 400 here.)
-       */
       throw new Error('mock mainnet RPC unavailable');
+    }
+
+    /*
+     * Mainnet pool classification (lib/dex-pool-owner.ts): the pool is a
+     * Meteora DLMM pool by OWNER. The route no longer falls back to the client
+     * dexType string when mainnet is unreachable (E2E B21), so this test, which
+     * is about the concurrency race and not the DEX, supplies a real owner.
+     */
+    async getMultipleAccountsInfo(keys: PublicKey[]): Promise<unknown[]> {
+      return keys.map(() => ({
+        owner: { toBase58: () => 'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo' },
+        data: new Uint8Array(0),
+      }));
     }
   }
 
@@ -160,80 +166,48 @@ vi.mock('@sentry/nextjs', () => ({
   captureMessage: vi.fn(),
 }));
 
-vi.mock('@vercel/blob', () => {
-  class BlobPreconditionFailedError extends Error {
-    constructor() {
-      super('Blob precondition failed');
-      this.name = 'BlobPreconditionFailedError';
+vi.mock('@vercel/blob', () => ({
+  list: vi.fn(async ({ prefix }: { prefix: string }) => ({
+    blobs: [...state.store.keys()]
+      .filter((pathname) => pathname.startsWith(prefix))
+      .map((pathname) => ({ pathname, url: `https://blob.test/${pathname}` })),
+    hasMore: false,
+  })),
+
+  put: vi.fn(async (pathname: string, body: unknown, options: { allowOverwrite?: boolean } = {}) => {
+    const nextRegistry = JSON.parse(String(body)) as Array<{ slabAddress?: string }>;
+    const slabs = nextRegistry
+      .map((market) => market.slabAddress)
+      .filter((slab): slab is string => typeof slab === 'string');
+    const containsA = slabs.includes(state.slabA);
+    const containsB = slabs.includes(state.slabB);
+
+    /*
+     * A commits first. B's create of the SAME snapshot sequence then conflicts (create-only),
+     * and the production retry reads A's snapshot and persists the merged [A, B] one.
+     */
+    if (containsB && !containsA) {
+      await state.firstWriteCommitted;
     }
-  }
 
-  const currentEtag = () => `etag-${state.fakeEtagVersion}`;
+    if (options.allowOverwrite === false && state.store.has(pathname)) {
+      throw new Error('Vercel Blob: This blob already exists');
+    }
 
-  return {
-    BlobPreconditionFailedError,
+    state.store.set(pathname, JSON.stringify(nextRegistry));
+    state.committedWrites.push(slabs);
 
-    list: vi.fn(async () => ({
-      blobs: [
-        {
-          pathname: 'playground/registered-markets.json',
-          url: 'https://blob.test/playground/registered-markets.json',
-        },
-      ],
-    })),
+    if (containsA && !containsB) {
+      state.releaseFirstWrite();
+    }
 
-    put: vi.fn(
-      async (
-        _pathname: string,
-        body: unknown,
-        options: {
-          ifMatch?: string;
-          allowOverwrite?: boolean;
-        } = {},
-      ) => {
-        const nextRegistry = JSON.parse(String(body)) as Array<{
-          slabAddress?: string;
-        }>;
+    return { url: `https://blob.test/${pathname}`, pathname };
+  }),
 
-        const slabs = nextRegistry
-          .map((market) => market.slabAddress)
-          .filter((slab): slab is string => typeof slab === 'string');
-
-        const containsA = slabs.includes(state.slabA);
-        const containsB = slabs.includes(state.slabB);
-
-        /*
-         * A commits first. B's stale conditional write conflicts, then the
-         * production retry reads A and persists the merged [A, B] snapshot.
-         */
-        if (containsB && !containsA) {
-          await state.firstWriteCommitted;
-        }
-
-        if (options.ifMatch !== undefined && options.ifMatch !== currentEtag()) {
-          throw new BlobPreconditionFailedError();
-        }
-
-        if (options.allowOverwrite === false && state.fakeStore !== '[]') {
-          throw new BlobPreconditionFailedError();
-        }
-
-        state.fakeStore = JSON.stringify(nextRegistry);
-        state.committedWrites.push(slabs);
-        state.fakeEtagVersion += 1;
-
-        if (containsA && !containsB) {
-          state.releaseFirstWrite();
-        }
-
-        return {
-          url: 'https://blob.test/playground/registered-markets.json',
-          etag: currentEtag(),
-        };
-      },
-    ),
-  };
-});
+  del: vi.fn(async (urls: string[]) => {
+    for (const url of urls) state.store.delete(url.replace('https://blob.test/', ''));
+  }),
+}));
 
 const { POST } = await import('@/app/api/playground/keeper-register/route');
 
@@ -282,8 +256,8 @@ function extractMarkets(payload: unknown): Array<{ slabAddress?: string }> {
 beforeEach(() => {
   vi.clearAllMocks();
 
-  state.fakeStore = '[]';
-  state.fakeEtagVersion = 0;
+  state.store.clear();
+  state.store.set('playground/registered-markets.json', '[]');
   state.registrationReads = 0;
   state.readSnapshots.length = 0;
   state.committedWrites.length = 0;
@@ -296,9 +270,9 @@ beforeEach(() => {
     state.releaseFirstWrite = resolve;
   });
 
-  globalThis.fetch = vi.fn(async () => {
-    const capturedSnapshot = state.fakeStore;
-    const capturedEtag = `etag-${state.fakeEtagVersion}`;
+  globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+    const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const capturedSnapshot = state.store.get(href.replace('https://blob.test/', '').split('?')[0]) ?? '[]';
 
     /*
      * The first two reads belong to the two concurrent POST requests.
@@ -330,7 +304,6 @@ beforeEach(() => {
       status: 200,
       headers: {
         'content-type': 'application/json',
-        etag: capturedEtag,
       },
     });
   }) as typeof fetch;

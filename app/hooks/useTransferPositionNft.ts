@@ -19,6 +19,7 @@ import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { usePositionNft } from "@/hooks/usePositionNft";
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { humanizeError } from "@/lib/errorMessages";
+import { plainMessage } from "@/lib/limits/user-message";
 import { useToast } from "@/hooks/useToast";
 import { PERCOLATOR_NFT_PROGRAM_ID } from "@/lib/nft-program";
 
@@ -381,7 +382,7 @@ export function useTransferPositionNft(slabAddress: string, override?: TransferN
           return null;
         }
 
-        const msg = humanizeError(errMsg);
+        const msg = plainMessage(errMsg, { surface: "nft" }, humanizeError);
         setError(msg);
         toast(msg, "error");
         return null;

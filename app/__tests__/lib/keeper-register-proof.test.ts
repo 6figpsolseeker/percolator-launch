@@ -1,9 +1,6 @@
 import { describe, it, expect } from "vitest";
-import {
-  buildKeeperRegisterProofMessage,
-  canonicalizeKeeperRegisterParams,
-  type KeeperRegisterProofParams,
-} from "@/lib/keeper-register-proof";
+import { canonicalizeKeeperRegisterParams, type KeeperRegisterProofParams } from "@/lib/keeper-register-proof";
+import { keeperRegisterMemoText } from "@/lib/keeper-register-memo";
 
 /**
  * GH#2505 / GH#2468 — the stateless deployer proof signed only
@@ -28,18 +25,19 @@ const base: KeeperRegisterProofParams = {
   label: "SOL/USDC — Meteora DLMM",
 };
 
-const bytes = (p: KeeperRegisterProofParams, minute = 29_000_000) =>
-  Buffer.from(buildKeeperRegisterProofMessage(p, minute)).toString("utf8");
+// UX WP-7: the binding now lives in the creation-tx memo (sha256 of the canonical params); the
+// signed-message proof and its minute window are gone.
+const bytes = (p: KeeperRegisterProofParams) => keeperRegisterMemoText(p);
 
 describe("keeper-register proof binds the registration parameters (GH#2505, GH#2468)", () => {
-  it("a substituted POOL produces a different message — the #2468 attack", () => {
+  it("a substituted POOL produces a different message — the #2468 attack", async () => {
     // The whole of #2468: same slab, same minute, different pool. Under the old
     // message these were byte-identical, so one signature authorised both.
     const attacker = { ...base, dexPoolAddress: "EviLPooL111111111111111111111111111111111" };
-    expect(bytes(attacker)).not.toBe(bytes(base));
+    expect(await bytes(attacker)).not.toBe(await bytes(base));
   });
 
-  it("every bound field changes the message", () => {
+  it("every bound field changes the message", async () => {
     const variants: Array<[string, KeeperRegisterProofParams]> = [
       ["slabAddress", { ...base, slabAddress: "OtherSlab11111111111111111111111111111111" }],
       ["dexPoolAddress", { ...base, dexPoolAddress: "OtherPool11111111111111111111111111111111" }],
@@ -49,15 +47,11 @@ describe("keeper-register proof binds the registration parameters (GH#2505, GH#2
       ["label", { ...base, label: "something else" }],
     ];
     for (const [field, v] of variants) {
-      expect(bytes(v), `${field} must be covered by the signature`).not.toBe(bytes(base));
+      expect(await bytes(v), `${field} must be covered by the signature`).not.toBe(await bytes(base));
     }
   });
 
-  it("the minute is still bound, so the tolerance window stays finite", () => {
-    expect(bytes(base, 29_000_000)).not.toBe(bytes(base, 29_000_001));
-  });
-
-  it("is order-independent — client and route cannot disagree by object shape", () => {
+  it("is order-independent — client and route cannot disagree by object shape", async () => {
     const reordered: KeeperRegisterProofParams = {
       label: base.label,
       symbol: base.symbol,
@@ -66,40 +60,41 @@ describe("keeper-register proof binds the registration parameters (GH#2505, GH#2
       dexPoolAddress: base.dexPoolAddress,
       slabAddress: base.slabAddress,
     };
-    expect(bytes(reordered)).toBe(bytes(base));
+    expect(await bytes(reordered)).toBe(await bytes(base));
   });
 
-  it("an absent optional encodes as empty, not omitted", () => {
+  it("an absent optional encodes as empty, not omitted", async () => {
     // If optionals were dropped rather than emptied, {symbol: undefined} and
     // {symbol: ""} would differ while {symbol: undefined, label: "x"} could
     // collide with {symbol: "x", label: undefined} — two different registrations
     // sharing one signature.
     const noSymbol = { ...base, symbol: undefined };
     const emptySymbol = { ...base, symbol: "" };
-    expect(bytes(noSymbol)).toBe(bytes(emptySymbol));
+    expect(await bytes(noSymbol)).toBe(await bytes(emptySymbol));
 
     const swapA: KeeperRegisterProofParams = { ...base, symbol: "X", label: undefined };
     const swapB: KeeperRegisterProofParams = { ...base, symbol: undefined, label: "X" };
-    expect(bytes(swapA)).not.toBe(bytes(swapB));
+    expect(await bytes(swapA)).not.toBe(await bytes(swapB));
   });
 
-  it("a field's value cannot imitate the delimiter", () => {
+  it("a field's value cannot imitate the delimiter", async () => {
     // The separator is ASCII Unit Separator (0x1F), which cannot be typed into
     // the wizard or appear in a base58 address. Even so, pin that a value
     // containing '=' — which CAN appear in a label — does not shift the parse.
     const tricky = { ...base, label: "symbol=JUP" };
-    expect(bytes(tricky)).not.toBe(bytes({ ...base, symbol: "JUP" }));
+    expect(await bytes(tricky)).not.toBe(await bytes({ ...base, symbol: "JUP" }));
   });
 
-  it("canonicalisation is stable for identical input", () => {
+  it("canonicalisation is stable for identical input", async () => {
     expect(canonicalizeKeeperRegisterParams(base)).toBe(canonicalizeKeeperRegisterParams({ ...base }));
   });
 
-  it("still binds the slab — the property the old message had, kept", () => {
+  it("still binds the slab — the property the old message had, kept", async () => {
     // Guard against "fixing" this by replacing the slab binding rather than
     // adding to it.
-    const msg = bytes(base);
-    expect(msg).toContain(base.slabAddress);
-    expect(msg).toContain("keeper-register");
+    // The memo carries a hash; the slab is bound through the canonical params it hashes.
+    expect(canonicalizeKeeperRegisterParams(base)).toContain(base.slabAddress);
+    expect(await bytes(base)).toMatch(/^percolator:keeper-register:v2:/);
+    expect(await bytes({ ...base, slabAddress: "OtherSlab11111111111111111111111111111111" })).not.toBe(await bytes(base));
   });
 });

@@ -35,7 +35,7 @@ export const WarmupExplainerModal: FC<WarmupExplainerModalProps> = ({
           {/* Description */}
           <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
             When you close a profitable position, PnL is <strong className="text-[var(--text)]">locked</strong> and
-            linearly vests over ~1000 slots (~6.7 min). This prevents oracle manipulation attacks
+            vests evenly over about 7 minutes. This prevents oracle manipulation attacks
             by ensuring fake profits cannot be instantly withdrawn.
           </p>
 
@@ -43,7 +43,7 @@ export const WarmupExplainerModal: FC<WarmupExplainerModalProps> = ({
           <div className="border border-[var(--border)]/30 divide-y divide-[var(--border)]/30">
             <div className="flex items-center justify-between px-3 py-1.5">
               <span className="text-[10px] text-[var(--text-dim)]">Period</span>
-              <span className="text-[10px] text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>1,000 slots</span>
+              <span className="text-[10px] text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>about 7 min</span>
             </div>
             <div className="flex items-center justify-between px-3 py-1.5">
               <span className="text-[10px] text-[var(--text-dim)]">Duration</span>
@@ -55,7 +55,7 @@ export const WarmupExplainerModal: FC<WarmupExplainerModalProps> = ({
             </div>
             <div className="flex items-center justify-between px-3 py-1.5">
               <span className="text-[10px] text-[var(--text-dim)]">Enforcement</span>
-              <span className="text-[10px] text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>On-chain (crank)</span>
+              <span className="text-[10px] text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>On-chain, automatic</span>
             </div>
           </div>
 

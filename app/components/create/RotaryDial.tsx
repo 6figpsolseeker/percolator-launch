@@ -51,6 +51,7 @@ export const RotaryDial: FC<RotaryDialProps> = ({
   disabled = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sliderRef = useRef<HTMLDivElement>(null);
   const lastDetent = useRef(value);
 
   /** Needle position actually painted — lags `value` during the boot sweep. */
@@ -229,9 +230,32 @@ export const RotaryDial: FC<RotaryDialProps> = ({
     [clamp, onChange, pulse, value],
   );
 
+  // Scroll-to-adjust. React registers `wheel` as a PASSIVE root listener, so a
+  // synthetic `onWheel` can't preventDefault — the page scrolled and carried the
+  // cursor off the dial, so the wheel never usefully moved the value even though
+  // the hint advertises "scroll". Bind our OWN non-passive listener so the wheel
+  // adjusts the dial and the page holds still while the pointer is over it. The
+  // handler reads the latest value/step/commit from a ref so it subscribes once
+  // instead of re-adding the listener on every detent.
+  const wheelLatest = useRef({ value, step, disabled, commit });
+  wheelLatest.current = { value, step, disabled, commit };
+  useEffect(() => {
+    const el = sliderRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const s = wheelLatest.current;
+      if (s.disabled) return;
+      e.preventDefault();
+      s.commit(s.value + (e.deltaY < 0 ? s.step : -s.step));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   return (
     <div className="flex flex-col items-center">
       <div
+        ref={sliderRef}
         role="slider"
         tabIndex={disabled ? -1 : 0}
         aria-label={label}
@@ -240,10 +264,6 @@ export const RotaryDial: FC<RotaryDialProps> = ({
         aria-valuenow={value}
         aria-valuetext={format(value)}
         aria-disabled={disabled}
-        onWheel={(e) => {
-          if (disabled) return;
-          commit(value + (e.deltaY < 0 ? step : -step));
-        }}
         onKeyDown={(e) => {
           if (disabled) return;
           if (e.key === "ArrowUp" || e.key === "ArrowRight") {

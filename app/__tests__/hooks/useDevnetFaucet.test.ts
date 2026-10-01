@@ -3,6 +3,23 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import { PublicKey } from "@solana/web3.js";
+
+const WALLET = new PublicKey("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM");
+
+vi.mock("@/hooks/useWalletCompat", () => ({
+  useWalletCompat: () => ({ publicKey: WALLET, connected: true }),
+  useConnectionCompat: () => ({
+    connection: {
+      getBalance: vi.fn().mockResolvedValue(0),
+      getTokenAccountBalance: vi.fn().mockRejectedValue(new Error("could not find account")),
+    },
+  }),
+}));
+vi.mock("@/lib/config", () => ({
+  getConfig: () => ({ testUsdcMint: "DvH13uxzTzo1xVFwkbJ6YASkZWs6bm3vFDH4xu7kUYTs" }),
+}));
 
 // Mock environment
 const env = process.env;
@@ -40,4 +57,22 @@ describe("useDevnetFaucet", () => {
     },
     30000
   ); // Increased timeout for dynamic import
+
+  // GH#2702: /api/faucet requires `type` (GH#1815), so omitting it 400s every USDC airdrop.
+  it("airdropUsdc POSTs /api/faucet with type 'usdc'", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ funded: true }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { useDevnetFaucet } = await import("@/hooks/useDevnetFaucet");
+    const { result } = renderHook(() => useDevnetFaucet());
+
+    await act(async () => {
+      await result.current.airdropUsdc();
+    });
+
+    const call = fetchMock.mock.calls.find(([url]) => url === "/api/faucet");
+    expect(call).toBeDefined();
+    expect(JSON.parse(call![1].body)).toEqual({ wallet: WALLET.toBase58(), type: "usdc" });
+  });
 });

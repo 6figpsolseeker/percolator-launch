@@ -10,8 +10,29 @@ import { PublicKey } from "@solana/web3.js";
 
 vi.mock("@percolatorct/sdk", () => ({
   V17_PORTFOLIO_IDENTITY_TRAILER_LEN: 0,
+  V17_PORTFOLIO_ACCOUNT_LEN: 9563,
   decodePortfolioMatcherControl: () => ({ enabled: true }),
 }));
+
+// LP SELECTION is lib/market-lp.ts's job (identity rules, tested in market-lp.test.ts).
+// These tests pin matcherCaps' own caching/readiness on top of it, so the resolver is
+// stubbed: the first enabled portfolio the fake scan returns stands in for "the LP".
+vi.mock("@/lib/market-lp", async () => {
+  const sdk = await import("@percolatorct/sdk");
+  const { PublicKey: Pk } = await import("@solana/web3.js");
+  return {
+    resolveMarketLp: async (c: { getProgramAccounts: () => Promise<{ account: { data: Uint8Array } }[]> }) => {
+      const rows = await c.getProgramAccounts();
+      for (const r of rows) {
+        const d = r.account.data;
+        const off = d.length - 104 - sdk.V17_PORTFOLIO_IDENTITY_TRAILER_LEN;
+        if (off < 0) continue;
+        return { matcherCtx: new Pk(d.subarray(off + 32, off + 64)) };
+      }
+      return null;
+    },
+  };
+});
 
 import { readMatcherContextReadiness } from "@/lib/matcherCaps";
 
@@ -24,9 +45,12 @@ const nextSlab = () => new PublicKey(new Uint8Array(32).fill(n++)); // fresh key
 
 /** Portfolio bytes whose trailing 104-byte matcher config points at CTX. */
 function portfolioWithCtx(): Buffer {
-  const b = Buffer.alloc(200);
-  const off = b.length - 104;
+  // v18 + F-3 shape: full portfolio length, header kind 2, enabled config before the 24-B trailer.
+  const b = Buffer.alloc(9563);
+  b[10] = 2;
+  const off = b.length - 104; // the mock's trailer length is 0
   Buffer.from(CTX.toBytes()).copy(b, off + 32);
+  b.writeBigUInt64LE(1n, off + 96);
   return b;
 }
 

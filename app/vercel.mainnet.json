@@ -1,12 +1,10 @@
 {
   "env": {
-    "NEXT_PUBLIC_DEFAULT_NETWORK": "mainnet",
-    "NEXT_PUBLIC_API_URL": "https://api.percolatorlaunch.com"
+    "NEXT_PUBLIC_DEFAULT_NETWORK": "mainnet"
   },
   "build": {
     "env": {
-      "NEXT_PUBLIC_DEFAULT_NETWORK": "mainnet",
-      "NEXT_PUBLIC_API_URL": "https://api.percolatorlaunch.com"
+      "NEXT_PUBLIC_DEFAULT_NETWORK": "mainnet"
     }
   }
 }

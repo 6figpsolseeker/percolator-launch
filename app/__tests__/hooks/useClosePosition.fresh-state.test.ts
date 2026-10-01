@@ -1,6 +1,14 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PublicKey } from "@solana/web3.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// M-3: a v17/v18 close reads the market fresh for the ADL-effective quantity (real v18 bytes).
+const MARKET_BYTES = Buffer.from(
+  JSON.parse(readFileSync(join(__dirname, "..", "fixtures", "5bVTTMRc.ansem.market.json"), "utf8")).dataBase64,
+  "base64",
+);
 
 const mocks = vi.hoisted(() => ({
   trade: vi.fn(),
@@ -44,6 +52,8 @@ vi.mock("@/lib/mock-mode", () => ({
 vi.mock("@/lib/mock-trade-data", () => ({
   isMockSlab: () => false,
 }));
+
+vi.mock("@/lib/lpPortfolio", () => ({ isLpPortfolio: () => false }));
 
 vi.mock("@/lib/portfolio-invalidation", () => ({
   invalidatePortfolio: mocks.invalidatePortfolio,
@@ -99,6 +109,7 @@ describe("useClosePosition fresh-state verification", () => {
     vi.mocked(useConnectionCompat).mockReturnValue({
       connection: {
         getProgramAccounts: mocks.getProgramAccounts,
+        getAccountInfo: async () => ({ data: MARKET_BYTES }),
       },
     } as ReturnType<typeof useConnectionCompat>);
 
@@ -158,6 +169,7 @@ describe("useClosePosition fresh-state verification", () => {
     mocks.isV17Account.mockReturnValue(true);
     mocks.getProgramAccounts.mockResolvedValue([
       {
+        pubkey: walletPublicKey,
         account: {
           data: Buffer.alloc(1),
         },
@@ -169,6 +181,9 @@ describe("useClosePosition fresh-state verification", () => {
       legs: [
         {
           active: true,
+          side: 0,
+          aBasis: 1_000_000_000_000_000n,
+          epochSnap: 0n,
           basisPosQ: 2n,
         },
       ],

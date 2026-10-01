@@ -15,7 +15,6 @@ vi.mock("@/lib/config", () => ({
     priorityFee: 50000,
   }),
   setNetwork: vi.fn(),
-  getBackendUrl: () => "https://percolator-api-production.up.railway.app",
   explorerTxUrl: (sig: string) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`,
   explorerAccountUrl: (addr: string) => `https://explorer.solana.com/account/${addr}?cluster=devnet`,
   getRpcEndpoint: () => "https://api.devnet.solana.com",

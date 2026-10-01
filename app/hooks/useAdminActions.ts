@@ -6,7 +6,8 @@ import { PublicKey } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   encodeTopUpInsurance,
-  encodeUpdateAuthority,
+  encodeUpdateAssetAuthority,
+  ASSET_AUTH_KIND,
   buildAccountMetas,
   buildIx,
   deriveVaultAuthority,
@@ -21,7 +22,7 @@ import {
 // UnpauseMarket (tag 58) do not exist in v17. Admin rotation uses UpdateAuthority (tag 32).
 import { sendTx } from "@/lib/tx";
 import type { DiscoveredMarket } from "@percolatorct/sdk";
-import { readAssetMarketId, readAssetControlSeqs } from "@/lib/v18-wire";
+import { readAssetMarketId, readAssetControlSeqs, readAssetAdmin } from "@/lib/v18-wire";
 
 const INLINE_ORACLE_ADMIN_REMOVED_ERROR =
   "Admin oracle update instructions were removed on-chain in beta.29. Migrate this action to the server-side oracle flow before using it.";
@@ -36,35 +37,6 @@ const INLINE_ORACLE_ADMIN_REMOVED_ERROR =
  *  - Unnecessary signature requests that will always fail on-chain
  *  - Phishing surface where users are tricked into signing predictably-failing txs
  */
-
-/**
- * Asserts the connected wallet is the market admin.
- * Throws a descriptive error if it isn't, so the caller can surface it to the UI.
- */
-function requireAdminAuthority(
-  walletKey: PublicKey,
-  market: DiscoveredMarket,
-  action: string,
-): void {
-  // v17 markets carry an empty header ({}); the market authority lives in
-  // configV17.marketauth. Dereferencing header.admin on a v17 market throws a
-  // TypeError before any tx, so read marketauth first and fall back to the v12
-  // header admin. (Mirrors the discovery pattern in useMyMarkets.)
-  const admin = (market.configV17?.marketauth ?? market.header?.admin)?.toBase58();
-  if (!admin) {
-    throw new Error(
-      `[${action}] Could not determine the market admin authority. ` +
-      `This action is unavailable for this market.`,
-    );
-  }
-  const wallet = walletKey.toBase58();
-  if (admin !== wallet) {
-    throw new Error(
-      `[${action}] Connected wallet (${wallet.slice(0, 8)}…) is not the market admin ` +
-      `(${admin.slice(0, 8)}…). Connect the admin wallet to perform this action.`,
-    );
-  }
-}
 
 /**
  * Asserts the connected wallet is the market oracle authority.
@@ -191,26 +163,50 @@ export function useAdminActions() {
     [],
   );
 
-  // v17: RenounceAdmin (tag 21) is removed. Admin rotation uses UpdateAuthority (tag 32)
-  // with 3 accounts [currentAuthority(signer), newAuthority(signer/ro), slab(w)].
-  // Passing PublicKey.default() as newPubkey effectively burns the admin key.
+  // "Burn admin key" — renounce the CREATOR's admin authority.
+  //
+  // The creator's admin key is asset 0's `asset_admin` (a wallet they hold),
+  // NOT `WrapperConfigV17.marketauth`. StakeInitPool rotates `marketauth` to the
+  // keyless stake-pool PDA at creation, so the creator never holds it — the old
+  // code targeted marketauth via UpdateAuthority (tag 32) and ALWAYS failed on a
+  // completed market ("not the market admin (stake-pool PDA)"). The correct
+  // instruction is UpdateAssetAuthority (tag 65, kind=AssetAdmin, asset 0,
+  // new=0), gated by `asset_admin`, which the creator can sign — mirrors the
+  // keeper-cosign oracle-delegate flow. On-chain, only ASSET_ADMIN is burnable
+  // to the zero pubkey.
   const renounceAdmin = useCallback(
     async (market: DiscoveredMarket) => {
       if (!wallet.publicKey || !wallet.signTransaction) throw new Error("Wallet not connected");
-      // PERC-8311: Pre-flight authority check — must be admin to renounce admin role
-      requireAdminAuthority(wallet.publicKey, market, "renounceAdmin");
       setLoading("renounceAdmin");
       try {
-        // v17: Use UpdateAuthority (tag 32) with new_pubkey = all-zeros (zero pubkey)
-        // to effectively burn the admin key. Requires 3 accounts:
-        // [currentAuthority(signer), newAuthority, slab(w)]
         const zeroPk = new PublicKey(new Uint8Array(32));
-        // v18: UpdateAuthority (tag 32) is CAS-bound to asset 0's authority_epoch
-        // lane — pass the LIVE current value (not +1), read from the market.
-        const uaInfo = await connection.getAccountInfo(market.slabAddress, "confirmed");
-        if (!uaInfo?.data) throw new Error("Market account not found");
-        const uaAuthorityEpoch = readAssetControlSeqs(new Uint8Array(uaInfo.data), 0).authorityEpoch;
-        const data = encodeUpdateAuthority({ newPubkey: zeroPk, authorityEpoch: uaAuthorityEpoch });
+        const info = await connection.getAccountInfo(market.slabAddress, "confirmed");
+        if (!info?.data) throw new Error("Market account not found");
+        const slabData = new Uint8Array(info.data);
+
+        // Pre-flight: burn-admin is gated on asset 0's `asset_admin` (creator),
+        // not marketauth. Check the connected wallet holds it before prompting a
+        // doomed signature (the on-chain program is the final gate).
+        const assetAdmin = readAssetAdmin(slabData, 0).toBase58();
+        const walletB58 = wallet.publicKey.toBase58();
+        if (assetAdmin !== walletB58) {
+          throw new Error(
+            `[renounceAdmin] Connected wallet (${walletB58.slice(0, 8)}…) is not the market admin ` +
+            `(${assetAdmin.slice(0, 8)}…). Connect the creator/admin wallet to burn the admin key.`,
+          );
+        }
+
+        // v18: UpdateAssetAuthority is CAS-bound to asset 0's market_id +
+        // authority_epoch (live current values), same as the keeper-cosign flow.
+        const marketId = readAssetMarketId(slabData, 0);
+        const authorityEpoch = readAssetControlSeqs(slabData, 0).authorityEpoch;
+        const data = encodeUpdateAssetAuthority({
+          assetIndex: 0,
+          marketId,
+          kind: ASSET_AUTH_KIND.AssetAdmin,
+          newPubkey: zeroPk,
+          authorityEpoch,
+        });
         const keys = buildAccountMetas(ACCOUNTS_UPDATE_AUTHORITY, [
           wallet.publicKey,
           zeroPk,

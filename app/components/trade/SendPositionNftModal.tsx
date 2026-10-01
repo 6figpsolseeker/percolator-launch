@@ -181,11 +181,9 @@ export const SendPositionNftModal: FC<SendPositionNftModalProps> = ({
             <p className="text-[10px] uppercase tracking-[0.12em] text-[var(--warning)] font-semibold">
               Irreversible
             </p>
-            <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
-              The NFT <em>and</em> the on-chain position ownership move in a single atomic transaction.
-              After this tx lands you will no longer be able to trade, close, or withdraw from this
-              sub-account — only the destination wallet can. Collateral remaining in the sub-account
-              transfers with it.
+            {/* UX WP-9 (§3.13): plain copy. */}
+            <p data-testid="send-nft-consequence" className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+              {sendNftCopy(parsedDest ? parsedDest.toBase58() : null)}
             </p>
           </div>
 
@@ -199,7 +197,7 @@ export const SendPositionNftModal: FC<SendPositionNftModalProps> = ({
               className="mt-0.5 accent-[var(--accent)]"
             />
             <span className="text-[10px] text-[var(--text-secondary)]">
-              I understand this transfers ownership of the position, not just the token.
+              I understand the other wallet will control this position.
             </span>
           </label>
 
@@ -237,3 +235,9 @@ export const SendPositionNftModal: FC<SendPositionNftModalProps> = ({
   if (typeof document === "undefined") return null;
   return createPortal(body, document.body);
 };
+
+/** UX WP-9 (§3.13): "Send this position to {address}. They'll control the position and its collateral. You can't undo this." */
+export function sendNftCopy(address: string | null): string {
+  const to = address ? `${address.slice(0, 4)}…${address.slice(-4)}` : "another wallet";
+  return `Send this position to ${to}. They'll control the position and its collateral. You can't undo this.`;
+}

@@ -1,5 +1,6 @@
 "use client";
 
+import { bpsPct } from "@/lib/format";
 import { FC } from "react";
 import {
   deriveMarketParams,
@@ -101,16 +102,16 @@ export const LeveragePicker: FC<LeveragePickerProps> = ({
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 border border-[var(--border)] bg-[var(--bg)] px-4 py-3 text-[11px] sm:grid-cols-4">
         <div>
           <dt className="text-[var(--text-secondary)]">Initial margin</dt>
-          <dd className="tabular-nums text-[var(--text)]">{derived.initialMarginBps} bps</dd>
+          <dd className="tabular-nums text-[var(--text)]">{bpsPct(derived.initialMarginBps)}</dd>
         </div>
         <div>
           <dt className="text-[var(--text-secondary)]">Maintenance</dt>
-          <dd className="tabular-nums text-[var(--text)]">{derived.maintenanceMarginBps} bps</dd>
+          <dd className="tabular-nums text-[var(--text)]">{bpsPct(derived.maintenanceMarginBps)}</dd>
         </div>
         <div>
           <dt className="text-[var(--text-secondary)]">Price-move budget</dt>
           <dd className="tabular-nums text-[var(--text)]">
-            {derived.maxPriceMoveBpsPerSlot} bps/slot
+            {bpsPct(Number(derived.maxPriceMoveBpsPerSlot) * 2.5)} per second
           </dd>
         </div>
         <div>

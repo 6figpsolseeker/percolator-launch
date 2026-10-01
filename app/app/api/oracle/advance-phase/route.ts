@@ -123,7 +123,9 @@ export async function POST(req: NextRequest) {
     // {success:false,skipped:true} response, so this was invisible from the client). Use
     // getConfig().programId (the canonical source of truth used everywhere else in the app,
     // already correctly network-aware) as the fallback instead of a hardcoded string.
-    const programIdStr = process.env.NEXT_PUBLIC_PROGRAM_ID ?? cfg.programId;
+    // The configured wrapper only (lib/program-ids.ts, env-overridable there). An unrelated
+    // NEXT_PUBLIC_PROGRAM_ID must never redirect a server-signed tx to an unlisted program.
+    const programIdStr = cfg.programId;
     const programId = new PublicKey(programIdStr);
 
     const data = encodeAdvanceOraclePhase();

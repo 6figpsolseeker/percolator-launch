@@ -1,0 +1,8 @@
+[package]
+name = "limits-layout2"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+percolator-prog = { path = "/Users/khubair/deploycand-v182/percolator-prog" }
+percolator = { path = "/Users/khubair/deploycand-v182/percolator", features = ["fork-facade"] }
+[workspace]

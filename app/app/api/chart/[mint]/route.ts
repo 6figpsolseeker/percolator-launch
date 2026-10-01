@@ -39,6 +39,7 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
+import { registeredPoolForSlab } from "@/lib/registered-pool";
 import { boundedSet } from "@/lib/bounded-map";
 import { geckoFetch, getGeckoConfig } from "@/lib/gecko-fetch";
 
@@ -258,8 +259,25 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ mint
   const before =
     beforeParam && /^\d+$/.test(beforeParam) && Number(beforeParam) > 0 ? beforeParam : undefined;
 
+  // A REGISTERED market's chart is its registered pool (the venue the keeper prices it from),
+  // never GeckoTerminal's "top pool" for the mint (lib/registered-pool.ts).
+  const slabParam = sp.get("slab");
+
   try {
-    const pool = await resolveTopPool(canonicalMint);
+    let registered: Awaited<ReturnType<typeof registeredPoolForSlab>> = null;
+    if (slabParam) {
+      try {
+        registered = await registeredPoolForSlab(slabParam, canonicalMint);
+      } catch {
+        // Can't tell which venue this market uses right now: never fall back to a different pool
+        // (that IS the mismatch), and never let the CDN keep this answer.
+        return NextResponse.json(
+          { candles: [], poolAddress: null, cached: false, error: "Market venue lookup failed; try again shortly." },
+          { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "5" } },
+        );
+      }
+    }
+    const pool = registered?.pool ?? (await resolveTopPool(canonicalMint));
     if (!pool) return emptyResponse();
 
     // `before` joins the key — otherwise page 2 would read (and pollute) page

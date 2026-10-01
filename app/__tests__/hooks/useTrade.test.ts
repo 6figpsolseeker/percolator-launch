@@ -30,7 +30,6 @@ vi.mock("@/lib/tx", () => ({
 }));
 
 vi.mock("@/lib/config", () => ({
-  getBackendUrl: vi.fn(() => "http://localhost:3001"),
 }));
 
 // Bypass the program-allowlist gate for tests that focus on the trade flow.

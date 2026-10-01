@@ -3,7 +3,7 @@
  * can be tested without a wallet or an RPC.
  *
  * Every value here was measured against the deployed wrapper
- * (GnwdeQrAh4qzChJeVLrM21CXXWC1akjLH3DiijwzEEYZ, v18.2 = percolator-prog
+ * (DEVNET_PROGRAM_IDS.wrapper, lib/program-ids.ts; v18.2 = percolator-prog
  * 6377376a) on 2026-09-29, by simulating against market
  * 5T1yvECyKB66QskfTSmz4fBkgDsknrNjE5LizL6P4Xr9 — a launch that stopped after
  * M1 + the keeper co-sign + M2.
@@ -75,6 +75,7 @@ export type CreateStepKind =
   | "funding"
   | "insurance"
   | "earn-vault"
+  | "vault-lp"
   | "stake-pool";
 
 /** Step kind for a sequential step number (0-5). */

@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildMarketDirectoryFallback } from "@/lib/markets-fallback";
+import { resolveDevnetProgramIds } from "@/lib/program-ids";
 import { PublicKey } from "@solana/web3.js";
 import { validateNumericParam } from "@/lib/route-validators";
 import { parseHeader, parseConfig, discoverMarkets, type DiscoveredMarket, isV17Account, parseWrapperConfigV17, parseAssetOracleProfileV17, parseMarketGroupV17OI, type V17MarketGroupOI, type RiskParams, V17_HEADER_LEN, V17_MARKET_GROUP_OFF, V17_MARKET_GROUP_LEN } from "@percolatorct/sdk";
@@ -98,47 +100,40 @@ const MAINNET_MARKET_DIRECTORY_FALLBACK: Record<string, unknown>[] = [
 ];
 
 // v18 devnet static fallback — used only when Supabase AND on-chain discovery both fail.
-// Program: GnwdeQrAh4qzChJeVLrM21CXXWC1akjLH3DiijwzEEYZ (fresh v18 wrapper, 2026-09-22).
-// Points at the live v18 SOL market. On-chain discovery (getProgramAccounts on the fresh
-// wrapper) normally supersedes this list; it exists only so the markets page is never
-// fully empty if both Supabase and discovery are down.
-const DEVNET_MARKET_DIRECTORY_FALLBACK: Record<string, unknown>[] = [
-  {
-    // Live v18 SOL market — fresh clean re-seed 2026-09-22 (shared sim-USDC collateral).
-    slab_address: "AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
-    program_id: "GnwdeQrAh4qzChJeVLrM21CXXWC1akjLH3DiijwzEEYZ",
-    mint_address: "DJ54k4wH92NTtNP8RuHAwG8si1bevXEknzctDdqYN8eC",
-    symbol: "SOL-PERP",
-    name: "SOL/USD Perpetual (Devnet)",
-    decimals: 6,
-    deployer: null,
-    oracle_authority: null,
-    oracle_mode: "hyperp",
-    dex_pool_address: null,
-    mainnet_ca: "So11111111111111111111111111111111111111112",
-    created_at: null,
-    stats_updated_at: null,
-    is_zombie: false,
-    last_price: null,
-    mark_price: null,
-    index_price: null,
-    volume_24h: 0,
-    trade_count_24h: 0,
-    open_interest_long: 0,
-    open_interest_short: 0,
-    total_open_interest: 0,
-    total_open_interest_usd: 0,
-    insurance_fund: 0,
-    insurance_balance: 0,
-    total_accounts: 0,
-    funding_rate: null,
-    net_lp_pos: 0,
-    lp_sum_abs: 0,
-    c_tot: 0,
-    volume_24h_usd: 0,
-    vault_balance: 0,
-  },
-];
+// E2E B3: built from PLAYGROUND_SLAB_META (the curated-market config the relaunch re-seed
+// repoints) and the CONFIGURED wrapper id, never from a hard-coded slab that goes stale on a
+// re-seed (it returned the old SOL slab `Azaggu…` with the new program id).
+const DEVNET_ROW_TEMPLATE: Record<string, unknown> = {
+  mint_address: "DJ54k4wH92NTtNP8RuHAwG8si1bevXEknzctDdqYN8eC",
+  decimals: 6,
+  deployer: null,
+  oracle_authority: null,
+  oracle_mode: "hyperp",
+  created_at: null,
+  stats_updated_at: null,
+  is_zombie: false,
+  last_price: null,
+  mark_price: null,
+  index_price: null,
+  volume_24h: 0,
+  trade_count_24h: 0,
+  open_interest_long: 0,
+  open_interest_short: 0,
+  total_open_interest: 0,
+  total_open_interest_usd: 0,
+  insurance_fund: 0,
+  insurance_balance: 0,
+  total_accounts: 0,
+  funding_rate: null,
+  net_lp_pos: 0,
+  lp_sum_abs: 0,
+  c_tot: 0,
+  volume_24h_usd: 0,
+  vault_balance: 0,
+};
+function devnetMarketDirectoryFallback(): Record<string, unknown>[] {
+  return buildMarketDirectoryFallback(PLAYGROUND_SLAB_META, resolveDevnetProgramIds().wrapper, DEVNET_ROW_TEMPLATE);
+}
 
 // PLAYGROUND_SLAB_META is imported from @/lib/playground-slab-meta (shared with [slab]/route.ts)
 
@@ -454,7 +449,7 @@ async function discoverMarketsOnChain(
 
 /**
  * Returns a markets response via on-chain discovery (when Supabase is not configured),
- * falling back to the static DEVNET_MARKET_DIRECTORY_FALLBACK list on failure.
+ * falling back to the static devnetMarketDirectoryFallback() list on failure.
  */
 async function onChainOrStaticResponse(request: NextRequest, reason: string): Promise<NextResponse> {
   try {
@@ -573,7 +568,7 @@ function fallbackMarketsResponse(request: NextRequest, reason: string): NextResp
   const network = getConfig().network;
   const rows = network === "mainnet"
     ? MAINNET_MARKET_DIRECTORY_FALLBACK
-    : DEVNET_MARKET_DIRECTORY_FALLBACK;
+    : devnetMarketDirectoryFallback();
   const programIdParam = request?.nextUrl?.searchParams?.get("program_id") ?? null;
   const searchParam =
     request?.nextUrl?.searchParams?.get("search") ??

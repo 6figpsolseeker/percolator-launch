@@ -215,7 +215,7 @@ export default function TradeRedirectPage() {
         <div className="flex items-center gap-2 rounded-sm border border-[var(--border)] bg-[var(--bg)]/95 px-3 py-1.5 backdrop-blur-sm">
           <div className="h-3 w-3 animate-spin rounded-full border border-[var(--accent)] border-t-transparent" />
           <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-[0.15em]">
-            Loading SOL-PERP…
+            Loading SOL…
           </span>
         </div>
       </div>

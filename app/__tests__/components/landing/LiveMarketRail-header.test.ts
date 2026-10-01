@@ -29,9 +29,9 @@ const SRC = fs.readFileSync(
 describe("LiveMarketRail column header", () => {
   it("defines a RailHeader and renders it inside the card before the rows", () => {
     expect(SRC).toMatch(/const RailHeader: FC =/);
-    // Rendered ahead of the RAIL_SLABS.map(...) row list.
+    // Rendered ahead of the rows.map(...) row list.
     const headerAt = SRC.indexOf("<RailHeader />");
-    const mapAt = SRC.indexOf("RAIL_SLABS.map");
+    const mapAt = SRC.indexOf("rows.map");
     expect(headerAt).toBeGreaterThan(-1);
     expect(mapAt).toBeGreaterThan(-1);
     expect(headerAt).toBeLessThan(mapAt);

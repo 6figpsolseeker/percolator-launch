@@ -71,7 +71,7 @@ function CreatePageInner() {
               className="mt-2 text-[11px] text-[var(--text-secondary)]"
               style={{ fontFamily: "var(--font-mono)" }}
             >
-              ~0.19 SOL rent &middot; max capacity &middot; 1 approval
+              ≈ 0.19 SOL &middot; 1 approval &middot; about a minute
             </div>
           </div>
         </ScrollReveal>

@@ -386,7 +386,7 @@ describe("MarketBrowser Component Tests", () => {
 
       expect(screen.getByText(/Error:/i)).toBeInTheDocument();
       expect(
-        screen.getByText(/Set the NEXT_PUBLIC_PROGRAM_ID environment variable/i)
+        screen.getByText(/The Percolator program ID is not configured/i)
       ).toBeInTheDocument();
     });
 

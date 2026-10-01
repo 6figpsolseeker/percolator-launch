@@ -104,7 +104,7 @@ describe('useStakeWithdrawByPool', () => {
     mockConnection = {
       getAccountInfo: vi.fn().mockImplementation(async (pubkey: PublicKey) => {
         if (pubkey.equals(mockPool)) {
-          return { data: buildPoolAccountData(), owner: new PublicKey('GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3') };
+          return { data: buildPoolAccountData(), owner: new PublicKey('VmpVUArRnVkrjaPXQ2qaqCQa3ZrZFgsz7rjeALitF5w') };
         }
         return { data: Buffer.alloc(165), owner: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') };
       }),
@@ -196,7 +196,7 @@ describe('useStakeWithdrawByPool', () => {
     let callIdx = 0;
     mockConnection.getAccountInfo.mockImplementation(async (pubkey: PublicKey) => {
       if (pubkey.equals(mockPool)) {
-        return { data: buildPoolAccountData(), owner: new PublicKey('GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3') };
+        return { data: buildPoolAccountData(), owner: new PublicKey('VmpVUArRnVkrjaPXQ2qaqCQa3ZrZFgsz7rjeALitF5w') };
       }
       callIdx++;
       if (callIdx >= 2) return null; // collateral ATA missing

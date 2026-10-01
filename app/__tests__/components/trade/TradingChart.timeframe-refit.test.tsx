@@ -88,7 +88,7 @@ const harness = vi.hoisted(() => {
   };
 
   // Stable (never-reallocated) empty arrays for the non-winning sources.
-  // TradingChart's `lineData` useMemo depends on the RAW pyth/dex candle
+  // TradingChart's `lineData` useMemo depends on the RAW dex candle
   // arrays (not just a derived boolean) and its factory re-maps
   // percolatorCandles on every invocation — so if these mocks returned a
   // fresh `[]` literal per call, lineData would get a new reference every
@@ -151,10 +151,6 @@ vi.mock('@/hooks/usePercolatorCandles', async () => {
     },
   };
 });
-
-vi.mock('@/hooks/usePythChart', () => ({
-  usePythChart: () => ({ candles: harness.emptyCandles, status: 'error' }),
-}));
 
 vi.mock('@/hooks/useTokenChart', () => ({
   useTokenChart: () => ({

@@ -105,14 +105,14 @@ function LpPositionCard({ position: pos }: LpPositionCardProps) {
                 {/* Pool symbols on the new markets already carry "-PERP"
                     (e.g. "BONK-PERP") — appending unconditionally rendered
                     "BONK-PERP-PERP". */}
-                {displaySymbol.toUpperCase().endsWith("-PERP") ? displaySymbol : `${displaySymbol}-PERP`}
+                {displaySymbol.replace(/-PERP$/i, "")}
               </p>
               <p className="text-[10px] text-[var(--text-secondary)] truncate">
-                {pos.poolMode === 0 ? "Insurance LP" : "Trading LP"}
+                {pos.poolMode === 0 ? "Insurance stake" : "Earn deposit"}
               </p>
             </div>
             <span className="rounded bg-[var(--cyan)]/10 px-2 py-0.5 text-[10px] font-bold text-[var(--cyan)] flex-shrink-0">
-              LP
+              {pos.poolMode === 0 ? "Stake" : "Earn"}
             </span>
           </div>
 
@@ -133,7 +133,7 @@ function LpPositionCard({ position: pos }: LpPositionCardProps) {
         {/* Details grid */}
         <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-4">
           <div>
-            <p className="text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text)]">LP Balance</p>
+            <p className="text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text)]">Shares</p>
             <p
               className="text-[12px] text-[var(--text-secondary)]"
               style={{ fontFamily: "var(--font-jetbrains-mono)", fontVariantNumeric: "tabular-nums" }}
@@ -204,7 +204,7 @@ export function LpPositionsPanel({
       {/* Section heading */}
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-[10px] font-medium uppercase tracking-[0.25em] text-[var(--cyan)]/70">
-          // Insurance LP Positions
+          // Earn and stake positions
         </h2>
         {positions.length > 0 && !loading && (
           <span
@@ -244,7 +244,7 @@ export function LpPositionsPanel({
         <div className="border border-[var(--border)] bg-[var(--panel-bg)] p-6 flex flex-col items-center gap-3 text-center">
           <span className="text-2xl leading-none">⚠️</span>
           <div>
-            <p className="text-[12px] font-semibold text-[var(--text-secondary)]">Unable to load LP positions</p>
+            <p className="text-[12px] font-semibold text-[var(--text-secondary)]">Couldn't load your Earn and stake positions</p>
             <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">Please try refreshing</p>
           </div>
           {onRetry && (
@@ -259,7 +259,7 @@ export function LpPositionsPanel({
       ) : positions.length === 0 ? (
         <div className="border border-[var(--border)] bg-[var(--panel-bg)] p-6 flex items-center justify-between gap-4">
           <div>
-            <p className="text-[12px] font-medium text-[var(--text)]">No LP positions</p>
+            <p className="text-[12px] font-medium text-[var(--text)]">No Earn or stake positions</p>
             <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
               Deposit into insurance pools to earn yield while backing the fund.
             </p>

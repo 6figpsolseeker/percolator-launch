@@ -208,7 +208,11 @@ export function leverageFromMarginBps(initialMarginBps: number): number {
   return Math.floor(exact * 10) / 10;
 }
 
+import { deriveMatcherLimits, type MatcherLimits } from "@/lib/matcher-params";
+
 export interface DerivedMarketParams {
+  /** Full matcher config (kind 1 vAMM + caps + skew); see lib/matcher-params.ts. */
+  matcher: MatcherLimits;
   initialMarginBps: number;
   maintenanceMarginBps: number;
   maxPriceMoveBpsPerSlot: number;
@@ -263,29 +267,22 @@ export function deriveMarketParams(
   const maxPriceMoveBpsPerSlot = maxPriceMoveForMaintenanceBps(maintenanceMarginBps);
 
   // ── LP guardrails ────────────────────────────────────────────────────────
-  // The LP can back `lpCollateral x leverage` of notional at its own margin.
-  // Cap its ONE-SIDED exposure well inside that so an adverse move can never
-  // wipe it: at 40% of capacity a full adverse move to liquidation still
-  // leaves the LP solvent. This is the guardrail whose absence killed Jimothy.
-  const lpCapacityAtoms = lpCollateralAtoms * BigInt(Math.floor(lev));
-  const inventoryCapAtoms = (lpCapacityAtoms * 40n) / 100n;
-  // notional atoms -> base q:  q = notional * 1e6 / price_e6
-  const px = initialPriceE6 > 0n ? initialPriceE6 : 1_000_000n;
-  const maxInventoryAbs = (inventoryCapAtoms * 1_000_000n) / px;
-  // A single fill may take at most a quarter of the inventory cap, so no one
-  // trade can jump the LP from flat to fully loaded.
-  const maxFillAbs = maxInventoryAbs / 4n;
+  // Formulas, guards (never 0, <= i128::MAX) and source citations live in
+  // lib/matcher-params.ts. Inventory cap = 40% of LP capacity (collateral x
+  // leverage) in base units; one fill <= a quarter of that.
+  const matcher = deriveMatcherLimits(Math.floor(lev), lpCollateralAtoms, initialPriceE6);
+  const { maxInventoryAbs, maxFillAbs, skewSpreadMultBps } = matcher;
 
   return {
     initialMarginBps,
     maintenanceMarginBps,
     maxPriceMoveBpsPerSlot,
     maxAccrualDtSlots: ACCRUAL_DT_SLOTS,
+    matcher,
     maxInventoryAbs,
     maxFillAbs,
-    // Widen the spread as inventory builds, so loading the LP up gets
-    // progressively more expensive instead of being free at a flat 50 bps.
-    skewSpreadMultBps: 50,
+    // Widen the spread as inventory builds (see matcher-params.ts skew note).
+    skewSpreadMultBps,
     estimatedFreezeSecondsFor26PctMove: Math.round((2600 / maxPriceMoveBpsPerSlot) * 0.4),
   };
 }

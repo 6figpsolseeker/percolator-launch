@@ -105,6 +105,8 @@ export const WalletProvider: FC<{ children: ReactNode }> = ({ children }) => {
           <PreferredWalletContext.Provider value={preferredWallet}>
             <WalletAdapterProviderClient>
               {children}
+              {/* UX WP-10 (FA-2): the faucet modal is mounted in BOTH provider branches. */}
+              <DevnetFaucetModal />
             </WalletAdapterProviderClient>
           </PreferredWalletContext.Provider>
         </WalletAdapterAvailableContext.Provider>

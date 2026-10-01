@@ -68,9 +68,9 @@ export function RecoveryExportButton({ className = "" }: { className?: string })
         disabled={busy}
         onClick={() => download(true)}
         className="border border-[var(--warning)]/40 bg-transparent px-3 py-2 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--warning)] hover:bg-[var(--warning)]/[0.06] transition-colors disabled:opacity-50"
-        title="Includes the slab keypair secret - required only for the slab-side ReclaimSlabRent path. Treat as sensitive."
+        title="Includes the market account's secret key, needed only to recover rent from an unfinished market. Treat as sensitive."
       >
-        ⬇ WITH SLAB SECRET (SENSITIVE)
+        ⬇ With the market account key (sensitive)
       </button>
     </div>
   );

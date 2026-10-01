@@ -10,7 +10,10 @@ import * as path from "path";
 import { getNetwork, getConfig } from "@/lib/config";
 import { assertCanonicalMatcher } from "@/lib/programAllowlist";
 
-const DEVNET_MATCHER = "4seJWjv3R5qfXY8R5ntuPHWsoqcVvaxvfFSnU2AnGMhT";
+import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
+
+// From the single source, so a relaunch can't leave a retired id pinned here.
+const DEVNET_MATCHER = DEVNET_PROGRAM_IDS.matcher;
 const KEY = "percolator-network";
 
 describe("GH#2704: deployment network pins getNetwork()", () => {

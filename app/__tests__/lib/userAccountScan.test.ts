@@ -385,9 +385,11 @@ describe("userAccountScan — isLpPortfolio (GH bug: market creator's LP mistake
    *  PortfolioMatcherConfigV16 has `enabled` set (or not) at the correct
    *  offset — mirrors useTrade.v17-portfolio-selection.test.ts's
    *  createLpPortfolioData helper, trimmed to just what isLpPortfolio reads. */
-  function makePortfolioBuffer(enabled: boolean, totalLen = 200): Buffer {
+  // F-3: a real portfolio is V17_PORTFOLIO_ACCOUNT_LEN bytes with header kind byte [10] = 2.
+  function makePortfolioBuffer(enabled: boolean, totalLen = 9563): Buffer {
     const buf = Buffer.alloc(totalLen);
-    const matcherConfigOffset = buf.length - 104;
+    buf[10] = 2;
+    const matcherConfigOffset = buf.length - 104 - 24; // v18: 24-byte identity trailer
     buf.writeBigUInt64LE(enabled ? 1n : 0n, matcherConfigOffset + 96);
     return buf;
   }

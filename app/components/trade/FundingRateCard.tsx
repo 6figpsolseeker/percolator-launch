@@ -13,65 +13,8 @@ import { isMockMode } from "@/lib/mock-mode";
 import { isMockSlab } from "@/lib/mock-trade-data";
 import { sanitizeFundingRateBps } from "@/lib/health";
 import { useTokenMeta } from "@/hooks/useTokenMeta";
-import { V17_ENGINE_CONFIG_OFF } from "@/lib/v17-engine-config";
+import { readV17MaxAbsFunding } from "@/lib/v17-engine-config";
 import { pollWhenVisible } from "@/lib/pollWhenVisible";
-
-/**
- * M19: `max_abs_funding_e9_per_slot` — a V16ConfigAccount field (u64) at
- * relative offset 126 (fully-packed repr(C) Pod struct, no padding — same
- * derivation lib/v17-engine-config.ts already uses for the fields it reads:
- * maxPortfolioAssets(2)+maxMarketSlots(4)+minNonzeroMmReq(16)+
- * minNonzeroImReq(16)+hMin(8)+hMax(8)+maintenanceMarginBps(8)+
- * initialMarginBps(8)+maxTradingFeeBps(8)+liquidationFeeBps(8)+
- * liquidationFeeCap(16)+minLiquidationAbs(16)=118, then
- * maxAccrualDtSlots(8)=126). When this is 0, the engine's accrue clamps the
- * *applied* funding rate to exactly 0 on every crank — funding is
- * structurally OFF for the market, not just quiet. Verified 0 on all 5 live
- * devnet markets (DEFINITIVE-PLAN-2026-07-08.md, finding M19).
- */
-const V17_MAX_ABS_FUNDING_REL = 126;
-
-function readV17MaxAbsFunding(data: Uint8Array): bigint | null {
-  const off = V17_ENGINE_CONFIG_OFF + V17_MAX_ABS_FUNDING_REL;
-  if (off + 8 > data.length) return null;
-  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  return dv.getBigUint64(off, true);
-}
-
-/** P3-4: Mini bar chart showing last N 8h funding rate periods */
-function FundingMiniChart({ rates }: { rates: number[] }) {
-  if (!rates.length) return null;
-  // Guard against Infinity/NaN from overflow data slipping through
-  const safeRates = rates.filter(r => Number.isFinite(r));
-  if (!safeRates.length) return null;
-  const max = Math.max(...safeRates.map(Math.abs), 0.0001);
-  return (
-    <div className="flex items-end gap-1 h-8">
-      {safeRates.map((r, i) => {
-        const heightPct = Math.max(10, (Math.abs(r) / max) * 100);
-        const isPos = r >= 0;
-        return (
-          <div
-            key={i}
-            title={`${r >= 0 ? "+" : ""}${r.toFixed(4)}%`}
-            // #2368: semantic colours come from the design tokens, not Tailwind's
-            // palette — `bg-green-500`/`bg-red-500` are fixed sRGB and do not follow a
-            // theme change, so this sparkline drifted from every other long/short
-            // surface.
-            //
-            // Direction matches THIS FILE's own convention for the same quantity: a
-            // POSITIVE funding rate is rendered with --short (`:365` for
-            // eightHourRatePercent, `:298` for userPays), because positive funding
-            // means longs pay. The old green/red pair read the opposite way round,
-            // so the sparkline disagreed with the headline rate directly above it.
-            className={`w-6 rounded-sm ${isPos ? "bg-[var(--short)]/60" : "bg-[var(--long)]/60"}`}
-            style={{ height: `${heightPct}%` }}
-          />
-        );
-      })}
-    </div>
-  );
-}
 
 interface FundingData {
   currentRateBpsPerSlot: number;
@@ -127,8 +70,6 @@ export const FundingRateCard: FC<{ slabAddress: string }> = ({ slabAddress }) =>
   const [error, setError] = useState<string | null>(null);
   const [showExplainer, setShowExplainer] = useState(false);
   const [countdown, setCountdown] = useState(0);
-  // P3-4: last 4 funding rate periods for mini bar chart (8h rates in %)
-  const [miniChartRates, setMiniChartRates] = useState<number[]>([]);
 
   // Fetch funding data from API, fall back to on-chain data.
   // GH#1832: AbortController prevents stale responses from a previous market
@@ -172,28 +113,6 @@ export const FundingRateCard: FC<{ slabAddress: string }> = ({ slabAddress }) =>
           netLpPosition: BigInt(data.netLpPosition ?? 0),
           currentSlot: 0,
         });
-        // P3-4: fetch last 4 funding history points for mini bar chart
-        // /history returns { rateBpsPerSlot } — convert to 8h rate%:
-        // 8h rate% = (rateBpsPerSlot * 9000 * 8) / 100
-        // GH#1943: was (raw / 10000) * 9000 * 8 — 10,000x underreport, fixed.
-        try {
-          const histRes = await fetch(`/api/funding/${slabAddress}/history?limit=4`, { signal });
-          if (histRes.ok && !cancelled) {
-            const histData = await histRes.json();
-            const pts: { rateBpsPerSlot?: number }[] = histData.history ?? [];
-            // Clamp outlier values before display — legacy on-chain data can have overflowed
-            // rateBpsPerSlot (e.g. from unchecked i64 arithmetic). Guard: ±10_000 bps max.
-            const RATE_BPS_MAX = 10_000;
-            const rates = pts
-              .map(p => {
-                const raw = p.rateBpsPerSlot ?? 0;
-                if (!Number.isFinite(raw) || Math.abs(raw) > RATE_BPS_MAX) return null;
-                return (raw * 9000 * 8) / 100;
-              })
-              .filter((r): r is number => r !== null);
-            if (!cancelled) setMiniChartRates(rates);
-          }
-        } catch { /* silently skip — mini chart is optional */ }
         if (!cancelled) setError(null);
       } catch (err) {
         // Ignore AbortError — this is expected when switching markets
@@ -215,8 +134,6 @@ export const FundingRateCard: FC<{ slabAddress: string }> = ({ slabAddress }) =>
             currentSlot: 0,
           });
           setError(null); // Clear error — on-chain data is valid
-          // Mini chart fallback: repeat current rate 4x
-          setMiniChartRates([hourly * 8, hourly * 8, hourly * 8, hourly * 8]);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -357,7 +274,7 @@ export const FundingRateCard: FC<{ slabAddress: string }> = ({ slabAddress }) =>
             <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-[var(--text)]">
               Funding Rate
             </span>
-            <InfoIcon tooltip="Funding rates balance long/short positions. Percolator uses inventory-based funding to protect LPs." />
+            <InfoIcon tooltip="Funding rates balance long/short positions. Percolator uses inventory-based funding to protect the market's liquidity." />
             <button
               onClick={() => setShowExplainer(true)}
               className="text-[8px] text-[var(--accent)] hover:underline"
@@ -388,14 +305,6 @@ export const FundingRateCard: FC<{ slabAddress: string }> = ({ slabAddress }) =>
             {(fundingData.aprPercent ?? 0) >= 0 ? "+" : ""}{(fundingData.aprPercent ?? 0).toFixed(1)}% APR
           </span>
         </div>
-
-        {/* P3-4: Mini bar chart — last 4 periods */}
-        {miniChartRates.length > 0 && (
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[9px] text-[var(--text)] uppercase tracking-[0.1em]">Last {miniChartRates.length} periods</span>
-            <FundingMiniChart rates={miniChartRates} />
-          </div>
-        )}
 
         {/* Position-Specific Estimate */}
         {positionDirection && estimatedFunding24h !== null && (

@@ -67,9 +67,10 @@ You don't need deep protocol knowledge to fix UI, but these terms show up everyw
   on a real perps DEX). Get it once from the faucet; trade any market with one balance.
 - **AuthMark** — the on-chain price that trades **settle** against. It's derived from the
   market's mainnet DEX pool and pushed on-chain by the keeper.
-- **Display price (Pyth)** — the continuously-ticking price shown in the UI (Pyth Hermes,
-  like Hyperliquid's index price). It's ~0.1% from the AuthMark. **The UI ticks off Pyth;
-  trades settle at the AuthMark. This is intentional — don't "fix" it.**
+- **Display price** — the continuously-ticking price shown in the UI, read straight from
+  the market's mainnet DEX pool (SOL/USD conversion from Jupiter). It can sit slightly off
+  the AuthMark between keeper pushes. **The UI ticks off the pool; trades settle at the
+  AuthMark. This is intentional — don't "fix" it.** The playground uses no Pyth.
 - **Keeper** — an off-chain service (maintainer-run) that reads mainnet DEX pools and
   pushes the AuthMark to the devnet markets. You never run it.
 - **Position NFT** — you can "wrap" a position into a transferable NFT. Minting **escrows**
@@ -87,7 +88,7 @@ You don't need deep protocol knowledge to fix UI, but these terms show up everyw
         ▼
    Next.js app  (app/)  ────────────────►  Solana devnet
      ├─ its own /api routes                 (Percolator v17 programs,
-     ├─ Pyth WS  → ticking display price      one "slab" account per market)
+     ├─ price WS → ticking display price      one "slab" account per market)
      └─ direct on-chain reads/writes                 ▲
                                                      │ AuthMark (the trade price)
                               maintainer's keeper ───┘
@@ -99,8 +100,8 @@ You don't need deep protocol knowledge to fix UI, but these terms show up everyw
 - The **programs are already deployed** on devnet — you never build or deploy them.
 - A **maintainer runs the keeper**, so markets stay priced 24/7. Contributors don't run
   or need it.
-- The **app** runs entirely on its own `/api` routes + on-chain reads + the local Pyth
-  price feed. **No backend service, no secrets.**
+- The **app** runs entirely on its own `/api` routes + on-chain reads + the local
+  DEX-pool price feed. **No backend service, no secrets.**
 
 ---
 
@@ -160,7 +161,7 @@ your env.
 Open **two terminals**, both in `app/`:
 
 ```bash
-# Terminal 1 — live display prices (streams Pyth, no key needed)
+# Terminal 1 — live display prices (mainnet DEX pools + Jupiter SOL/USD)
 pnpm dev:price-ws
 
 # Terminal 2 — the Next.js app
@@ -203,7 +204,7 @@ app/
   components/trade/     the trade UI (see below)
   hooks/               data reads + tx builders (see below)
   lib/                 config, math, formatters, price store
-  scripts/local-price-ws-server.ts   the Pyth display-price feed
+  scripts/local-price-ws-server.ts   the DEX-pool display-price feed
 ```
 
 **Key trade components** (`app/components/trade/`):
@@ -349,3 +350,22 @@ Run `npx tsc --noEmit` and `pnpm test` locally before pushing so CI passes first
   `npx tsc --noEmit` · `pnpm test`.
 
 Thanks for contributing! 🎉
+
+---
+
+## 16. Relaunch (2026-10-01) — current program IDs
+
+Section 15 above lists the **pre-relaunch** programs and markets. They are retired: the playground
+now runs on all-fresh devnet programs (single source: `app/lib/program-ids.ts`) and
+`@percolatorct/sdk` **8.0.0**.
+
+- **Programs** (devnet):
+  - wrapper `ETDLAdiAyWnEUngspYczTXUceT6X8f92eZQvr8nmSkWB`
+  - matcher `EDKKgRaVHna6FCxiY1kgMzegD9rpaN1nwJNSzAzeBUBX`
+  - nft `EMYT15LZWaP7Mmmm245kQPbrTyVjG16yZiU9kfNTF3GZ`
+  - vault/stake `VmpVUArRnVkrjaPXQ2qaqCQa3ZrZFgsz7rjeALitF5w`
+- **Markets:** there are no curated seed markets. Markets are created in the app's **Create**
+  wizard (`/create`) and show up on `/markets` automatically. With none created yet, `/markets`
+  reads "No markets yet — create the first one". The six section-15 slabs belong to the retired
+  wrapper and are no longer listed.
+- **Collateral:** sim-USDC `DJ54k4wH92NTtNP8RuHAwG8si1bevXEknzctDdqYN8eC` (unchanged).

@@ -1,0 +1,171 @@
+{
+  "total": 10,
+  "report": [
+    {
+      "width": 1440,
+      "route": "/",
+      "lines": 86,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/markets",
+      "lines": 38,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/trade/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 24,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/earn",
+      "lines": 69,
+      "hits": [
+        {
+          "term": "LP",
+          "line": "Every trade on that market generates LP fees"
+        },
+        {
+          "term": "LP",
+          "line": "Redeem LP tokens for your share after cooldown"
+        },
+        {
+          "term": "LP",
+          "line": "LP deposits are exposed to trader PnL — when traders win, LPs may see drawdowns. The insurance fund provides a buffer. Only deposit what you"
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/earn/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 46,
+      "hits": [
+        {
+          "term": "-PERP",
+          "line": "UNKNOWN-PERP Vault"
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/create",
+      "lines": 34,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/portfolio",
+      "lines": 29,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/my-markets",
+      "lines": 23,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/stake",
+      "lines": 80,
+      "hits": [
+        {
+          "term": "LP",
+          "line": "// INSURANCE LP"
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "route": "/faucet",
+      "lines": 24,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/",
+      "lines": 62,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/markets",
+      "lines": 36,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/trade/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 20,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/earn",
+      "lines": 57,
+      "hits": [
+        {
+          "term": "LP",
+          "line": "Every trade on that market generates LP fees"
+        },
+        {
+          "term": "LP",
+          "line": "Redeem LP tokens for your share after cooldown"
+        },
+        {
+          "term": "LP",
+          "line": "LP deposits are exposed to trader PnL — when traders win, LPs may see drawdowns. The insurance fund provides a buffer. Only deposit what you"
+        }
+      ]
+    },
+    {
+      "width": 375,
+      "route": "/earn/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 42,
+      "hits": [
+        {
+          "term": "-PERP",
+          "line": "UNKNOWN-PERP Vault"
+        }
+      ]
+    },
+    {
+      "width": 375,
+      "route": "/create",
+      "lines": 27,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/portfolio",
+      "lines": 25,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/my-markets",
+      "lines": 19,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/stake",
+      "lines": 76,
+      "hits": [
+        {
+          "term": "LP",
+          "line": "// INSURANCE LP"
+        }
+      ]
+    },
+    {
+      "width": 375,
+      "route": "/faucet",
+      "lines": 20,
+      "hits": []
+    }
+  ]
+}

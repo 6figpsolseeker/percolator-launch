@@ -43,10 +43,6 @@ const SystemCapitalCard = dynamic(
   () => import("@/components/trade/SystemCapitalCard").then((m) => m.SystemCapitalCard),
   { ssr: false, loading: cardFallback },
 );
-const AdlLeaderboard = dynamic(
-  () => import("@/components/trade/AdlLeaderboard").then((m) => m.AdlLeaderboard),
-  { ssr: false, loading: cardFallback },
-);
 const AccountsCard = dynamic(
   () => import("@/components/trade/AccountsCard").then((m) => m.AccountsCard),
   { ssr: false, loading: cardFallback },
@@ -134,7 +130,7 @@ function AnalyticsPageInner({ slab }: { slab: string }) {
           <Section title="Engine health"><EngineHealthCard /></Section>
         </ErrorBoundary>
         <ErrorBoundary label="CrankHealthCard">
-          <Section title="Crank health"><CrankHealthCard /></Section>
+          <Section title="Market updates"><CrankHealthCard /></Section>
         </ErrorBoundary>
         <ErrorBoundary label="OpenInterestCard">
           <Section title="Open interest"><OpenInterestCard slabAddress={slab} /></Section>
@@ -157,11 +153,6 @@ function AnalyticsPageInner({ slab }: { slab: string }) {
         <ErrorBoundary label="SystemCapitalCard">
           <Section title="System capital"><SystemCapitalCard /></Section>
         </ErrorBoundary>
-        {!isV17 && (
-          <ErrorBoundary label="AdlLeaderboard">
-            <Section title="ADL leaderboard"><AdlLeaderboard slabAddress={slab} /></Section>
-          </ErrorBoundary>
-        )}
         {!isV17 && (
           <ErrorBoundary label="AccountsCard">
             <Section title="All accounts & liqs"><AccountsCard /></Section>

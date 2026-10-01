@@ -1,5 +1,6 @@
 "use client";
 
+import { bpsPct } from "@/lib/format";
 import { FC } from "react";
 
 interface ConflictWarningProps {
@@ -24,7 +25,7 @@ export const ConflictWarning: FC<ConflictWarningProps> = ({
       </div>
       <div>
         <p className="text-[12px] font-medium text-[var(--short)]">
-          Trading fee ({tradingFeeBps} bps) ≥ initial margin ({initialMarginBps} bps).
+          Trading fee ({bpsPct(tradingFeeBps)}) ≥ initial margin ({bpsPct(initialMarginBps)}).
         </p>
         <p className="text-[11px] text-[var(--text-secondary)] mt-1">
           Lower the trading fee or increase the initial margin. A single trade would consume the entire margin at these settings.

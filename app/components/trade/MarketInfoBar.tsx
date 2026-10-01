@@ -82,7 +82,8 @@ function MarkPrice({ priceUsd, priceE6 }: { priceUsd: number | null; priceE6: bi
 
   return (
     <span
-      className={`text-2xl font-bold tabular-nums shrink-0 transition-colors duration-300 ease-out ${flashColor}`}
+      data-testid="header-price"
+      className={`text-base md:text-2xl font-bold tabular-nums shrink-0 whitespace-nowrap transition-colors duration-300 ease-out ${flashColor}`}
       style={{ fontFamily: "var(--font-mono)" }}
     >
       {formatMarkPrice(priceUsd)}
@@ -178,16 +179,21 @@ export const MarketInfoBar: FC<MarketInfoBarProps> = ({ slabAddress, symbol, log
   return (
     <div
       data-testid="market-info-bar"
-      className="sticky top-0 z-30 w-full border-b border-[var(--border)] bg-[var(--bg)]/95 backdrop-blur-sm px-4 py-3 flex items-center gap-5 overflow-x-auto whitespace-nowrap scrollbar-none"
+      className="sticky top-0 z-30 w-full border-b border-[var(--border)] bg-[var(--bg)]/95 backdrop-blur-sm px-4 py-2 md:py-3 flex flex-col gap-1.5 md:flex-row md:items-center md:gap-5 md:overflow-x-auto whitespace-nowrap scrollbar-none"
     >
+      {/* UX WP-10 (MB-2): on mobile two rows — row 1 "[logo] SOL  $89.55  +2.3%" (16 px mono,
+          never truncated), row 2 the stat chips, scrolling on their own. One row from md up. */}
+      <div data-testid="market-info-primary" className="flex min-w-0 items-center gap-3 md:shrink-0 md:gap-5">
       {/* Symbol + Logo — now a dropdown market switcher (top markets + search) */}
       <MarketSwitcher slabAddress={slabAddress} symbol={symbol} logoUrl={logoUrl} mintAddress={mintAddress} mainnetCa={mainnetCa} />
 
       {/* Watch this market. `label` variant — the info bar has room for a word,
           unlike the dense markets table where the glyph alone is used. */}
-      <WatchButton slab={slabAddress} symbol={symbol} variant="label" />
+      <span className="hidden md:inline-flex">
+        <WatchButton slab={slabAddress} symbol={symbol} variant="label" />
+      </span>
 
-      <span className="h-6 w-px bg-[var(--border)] shrink-0" />
+      <span className="hidden md:block h-6 w-px bg-[var(--border)] shrink-0" />
 
       {/* Mark Price — large; flashes long/short on each tick (see MarkPrice) */}
       <MarkPrice priceUsd={priceUsd} priceE6={priceE6} />
@@ -206,10 +212,12 @@ export const MarketInfoBar: FC<MarketInfoBarProps> = ({ slabAddress, symbol, log
         {change24h == null ? "0.00%" : `${isUp ? "+" : ""}${change24hDisplay.toFixed(2)}%`}
       </span>
 
-      <span className="h-6 w-px bg-[var(--border)] shrink-0" />
+      </div>
+      <span className="hidden md:block h-6 w-px bg-[var(--border)] shrink-0" />
 
-      {/* Stats group — flex-1 fills remaining space so ml-auto on badge works correctly */}
-      <div className="flex flex-1 items-center gap-5 min-w-0">
+      {/* Stats group — flex-1 fills remaining space so ml-auto on badge works correctly.
+          Mobile: its own horizontally scrollable chip row. */}
+      <div data-testid="market-info-stats" className="flex flex-1 items-center gap-5 min-w-0 overflow-x-auto scrollbar-none">
         {/* Volume 24h */}
         <div className="flex flex-col shrink-0">
           <span className="text-[9px] uppercase tracking-[0.1em] text-[var(--text-dim)]">Vol 24h</span>

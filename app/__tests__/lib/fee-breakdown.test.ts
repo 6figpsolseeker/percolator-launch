@@ -10,6 +10,8 @@
  * change fails a test instead of quietly turning the UI into a lie.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FEE_SPLIT } from "@percolatorct/sdk";
 import {
@@ -62,23 +64,19 @@ describe("the breakdown accounts for the whole fee", () => {
   });
 });
 
-describe("stakers earn nothing from trading fees, and that is deliberate", () => {
-  it("the staker share is zero", () => {
-    // Not an oversight and not a missing crank: stake pools are created with
-    // pool_mode = 0, and percolator-stake's process_accrue_fees rejects
-    // anything but pool_mode == 1. The Stake page says so; this keeps the two
-    // from drifting apart.
-    expect(STAKER_FEE_SHARE_BPS).toBe(0);
-  });
-
-  it("CONTROL: the insurance share is NOT the staker share", () => {
-    // The trap this whole breakdown exists to prevent. "16% to insurance"
-    // reads as staker income; stakers provide that fund's first-loss capital
-    // and receive none of the fee.
+describe("stakers are paid the insurance fee leg (E2E B4)", () => {
+  it("the staker share IS the insurance share (the keeper pushes the insurance reserve to the stake pool)", () => {
     const insurance = FEE_LEGS.find((l) => l.id === "insurance")!;
     expect(insurance.bps).toBeGreaterThan(0);
-    expect(STAKER_FEE_SHARE_BPS).not.toBe(insurance.bps);
-    expect(insurance.note).toMatch(/do NOT receive this share as yield/);
+    expect(STAKER_FEE_SHARE_BPS).toBe(insurance.bps);
+    expect(insurance.note).toMatch(/receive this share/);
+    expect(insurance.note).not.toMatch(/NOT receive/);
+  });
+  it("no page says stakers earn 0% any more", () => {
+    const src = (f: string) => readFileSync(join(process.cwd(), f), "utf8");
+    for (const f of ["app/stake/page.tsx", "components/FeeBreakdown.tsx", "lib/fee-breakdown.ts"]) {
+      expect(src(f)).not.toMatch(/genuinely 0%|0% by design|not a fee-earning position|do NOT receive this share/);
+    }
   });
 });
 

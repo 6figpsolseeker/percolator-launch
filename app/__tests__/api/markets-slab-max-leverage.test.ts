@@ -41,7 +41,12 @@ vi.mock("@/lib/supabase", () => ({
 }));
 vi.mock("@/lib/server-rpc", () => ({
   getServerConnection: () => ({
-    getAccountInfo: async () => ({ data: Buffer.from(state.data), owner: { toBase58: () => "x" } }),
+    // Owned by the CURRENT wrapper (the route 404s any other owner since the relaunch).
+    getAccountInfo: async () => {
+      const { getConfig } = await vi.importActual<typeof import("@/lib/config")>("@/lib/config");
+      const programId = getConfig().programId;
+      return { data: Buffer.from(state.data), owner: { toBase58: () => programId } };
+    },
   }),
 }));
 vi.mock("@/lib/lp-portfolio", () => ({ getMarketLpCapital: async () => null }));

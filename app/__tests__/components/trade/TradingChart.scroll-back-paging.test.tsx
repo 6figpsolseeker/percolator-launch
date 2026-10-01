@@ -3,7 +3,7 @@
  * useTokenChart's loadOlder(): scrolling/panning to the left edge should
  * page in older DEX/GeckoTerminal history, but ONLY while that source
  * (GeckoTerminal via useTokenChart) is the one actually on screen — panning
- * a Pyth/Percolator/oracle-fallback chart must never fire a GeckoTerminal
+ * a Percolator/oracle-fallback chart must never fire a GeckoTerminal
  * request, since only useTokenChart's route supports before_timestamp
  * paging today.
  *
@@ -72,8 +72,6 @@ const harness = vi.hoisted(() => {
   const sources = {
     percolatorStatus: 'success' as string,
     percolatorCandlesOverride: null as unknown[] | null,
-    pythStatus: 'success' as string,
-    pythCandles: [] as unknown[],
     dexStatus: 'idle' as string,
     dexCandles: [] as unknown[],
   };
@@ -119,10 +117,6 @@ vi.mock('@/hooks/usePercolatorCandles', () => ({
     candles: harness.sources.percolatorCandlesOverride ?? harness.percolatorCandles,
     status: harness.sources.percolatorStatus,
   }),
-}));
-
-vi.mock('@/hooks/usePythChart', () => ({
-  usePythChart: () => ({ candles: harness.sources.pythCandles, status: harness.sources.pythStatus }),
 }));
 
 vi.mock('@/hooks/useTokenChart', () => ({
@@ -194,8 +188,6 @@ describe('TradingChart scroll-back paging wiring (#2581)', () => {
     vi.clearAllMocks();
     harness.sources.percolatorStatus = 'success';
     harness.sources.percolatorCandlesOverride = null;
-    harness.sources.pythStatus = 'success';
-    harness.sources.pythCandles = [];
     harness.sources.dexStatus = 'idle';
     harness.sources.dexCandles = [];
 
@@ -218,7 +210,6 @@ describe('TradingChart scroll-back paging wiring (#2581)', () => {
     harness.sources.percolatorCandlesOverride = [
       { time: 1_720_000_000, open: 1, high: 1, low: 1, close: 1, volume: 1 },
     ];
-    harness.sources.pythStatus = 'error';
     harness.sources.dexStatus = 'success';
     harness.sources.dexCandles = Array.from({ length: 1000 }, (_, i) => ({
       timestamp: 1_720_000_000_000 + i * 300_000,
@@ -238,7 +229,6 @@ describe('TradingChart scroll-back paging wiring (#2581)', () => {
     harness.sources.percolatorCandlesOverride = [
       { time: 1_720_000_000, open: 1, high: 1, low: 1, close: 1, volume: 1 },
     ];
-    harness.sources.pythStatus = 'error';
     harness.sources.dexStatus = 'success';
     harness.sources.dexCandles = Array.from({ length: 1000 }, (_, i) => ({
       timestamp: 1_720_000_000_000 + i * 300_000,

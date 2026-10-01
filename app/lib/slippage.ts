@@ -84,8 +84,8 @@ export interface ComputeLimitArgs {
  * Maximum the off-chain feed may deviate from the ON-CHAIN oracle before its
  * value is refused as a basis for the slippage limit.
  *
- * PLAYGROUND.md documents the intended gap: the UI ticks off Pyth while trades
- * settle at the AuthMark, and the two sit ~0.1% apart. 2% is twenty times that,
+ * PLAYGROUND.md documents the intended gap: the UI ticks off the DEX pool while
+ * trades settle at the AuthMark, and the two sit ~0.1% apart. 2% is twenty times that,
  * so an honest feed never touches this bound.
  */
 export const MAX_FEED_DEVIATION_BPS = 200n;
@@ -107,7 +107,7 @@ export const MAX_FEED_DEVIATION_BPS = 200n;
  * So the feed is now checked against the on-chain price before it is trusted:
  *
  *   within  MAX_FEED_DEVIATION_BPS  -> use the feed. It is fresher, and the small
- *                                      documented Pyth/AuthMark gap is real signal.
+ *                                      documented feed/AuthMark gap is real signal.
  *   beyond  it                      -> REFUSE, rather than clamp.
  *
  * Refusing rather than clamping is the deliberate choice. Clamping would silently

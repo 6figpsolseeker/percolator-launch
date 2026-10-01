@@ -1,0 +1,125 @@
+{
+  "total": 0,
+  "report": [
+    {
+      "width": 1440,
+      "route": "/",
+      "lines": 86,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/markets",
+      "lines": 99,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/trade/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 102,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/earn",
+      "lines": 88,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/earn/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 61,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/create",
+      "lines": 34,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/portfolio",
+      "lines": 29,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/my-markets",
+      "lines": 23,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/stake",
+      "lines": 80,
+      "hits": []
+    },
+    {
+      "width": 1440,
+      "route": "/faucet",
+      "lines": 24,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/",
+      "lines": 62,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/markets",
+      "lines": 37,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/trade/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 20,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/earn",
+      "lines": 57,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/earn/AzagguvrWmRgcBpsKuqomW7Yb1YUUd6UzcrkiRsqdhr",
+      "lines": 42,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/create",
+      "lines": 27,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/portfolio",
+      "lines": 25,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/my-markets",
+      "lines": 19,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/stake",
+      "lines": 76,
+      "hits": []
+    },
+    {
+      "width": 375,
+      "route": "/faucet",
+      "lines": 20,
+      "hits": []
+    }
+  ]
+}

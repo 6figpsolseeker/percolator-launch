@@ -86,8 +86,6 @@ const harness = vi.hoisted(() => {
   const sources = {
     percolatorStatus: 'success' as string,
     percolatorCandlesOverride: null as unknown[] | null,
-    pythStatus: 'success' as string,
-    pythCandles: [] as unknown[],
     dexStatus: 'idle' as string,
     dexCandles: [] as unknown[],
   };
@@ -166,13 +164,6 @@ vi.mock('@/hooks/usePercolatorCandles', () => ({
   usePercolatorCandles: () => ({
     candles: harness.sources.percolatorCandlesOverride ?? harness.percolatorCandles,
     status: harness.sources.percolatorStatus,
-  }),
-}));
-
-vi.mock('@/hooks/usePythChart', () => ({
-  usePythChart: () => ({
-    candles: harness.sources.pythCandles,
-    status: harness.sources.pythStatus,
   }),
 }));
 
@@ -326,8 +317,6 @@ describe('TradingChart live-source wiring', () => {
     vi.clearAllMocks();
     harness.sources.percolatorStatus = 'success';
     harness.sources.percolatorCandlesOverride = null;
-    harness.sources.pythStatus = 'success';
-    harness.sources.pythCandles = [];
     harness.sources.dexStatus = 'idle';
     harness.sources.dexCandles = [];
 
@@ -357,10 +346,10 @@ describe('TradingChart live-source wiring', () => {
       expect(vi.mocked(selectChartSource)).toHaveBeenLastCalledWith({
         percolator: { status: 'success', pricedBars: harness.percolatorCandles.length },
         // `applicable` tells the selector a source can never answer, as opposed
-        // to not having answered yet. Symbol is 'SOL' (mapped) and a mint is
-        // passed, so both apply here; the distinction is exercised in
-        // __tests__/lib/chart-source-select.test.ts.
-        pyth: { status: 'success', pricedBars: 0, applicable: true },
+        // to not having answered yet. A mint is passed, so DEX applies here;
+        // the distinction is exercised in __tests__/lib/chart-source-select.test.ts.
+        // There is no `pyth` key: toHaveBeenLastCalledWith is exact, so a
+        // resurrected Pyth tier fails this assertion.
         dex: { status: 'idle', pricedBars: 0, applicable: true },
       });
     });
@@ -369,13 +358,12 @@ describe('TradingChart live-source wiring', () => {
   it("renders the DEX badge when a 1-bar internal series loses to 1000 DEX bars", async () => {
     // #2579, end to end through the component. Asserting the ARGUMENTS to the
     // selector is not enough: restoring the old boolean chain, or swapping the
-    // pyth/dex derivations, leaves those arguments identical and changes only
+    // source derivations, leaves those arguments identical and changes only
     // what is rendered. This pins the RESULT.
     // One bar, the shape of the real stub: o=h=l=c=114.629292.
     harness.sources.percolatorCandlesOverride = [
       { time: 1_720_000_000, open: 114.629292, high: 114.629292, low: 114.629292, close: 114.629292, volume: 1 },
     ];
-    harness.sources.pythStatus = 'error';
     harness.sources.dexStatus = 'success';
     // `timestamp`, not `time` — the DEX source is CandleData from
     // /api/chart/[mint], and finiteCandles reads that shape.
@@ -395,11 +383,12 @@ describe('TradingChart live-source wiring', () => {
       expect(screen.getByText('DEX')).toBeInTheDocument();
     });
     expect(screen.queryByText('PERC')).toBeNull();
+    // No Pyth source badge exists any more.
+    expect(screen.queryByText('PYTH')).toBeNull();
   });
 
   it("CONTROL: the internal source still wins once it has enough bars", async () => {
     // Guards against fixing the override by never choosing Percolator.
-    harness.sources.pythStatus = 'error';
     harness.sources.dexStatus = 'success';
     harness.sources.dexCandles = Array.from({ length: 1000 }, (_, i) => ({
       timestamp: 1_720_000_000_000 + i * 300_000,

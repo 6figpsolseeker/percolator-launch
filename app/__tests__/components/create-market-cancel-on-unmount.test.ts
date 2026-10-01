@@ -109,7 +109,7 @@ describe("the abortSignal reaches every place that can prompt a wallet popup", (
     const createIdx = c.indexOf("const create = useCallback(");
     const createBody = c.slice(createIdx);
     const callSites = createBody.split("await sendTx({").slice(1); // drop the text before the first call
-    expect(callSites.length).toBeGreaterThanOrEqual(12); // GH#2623: 12 sequential steps at the time of this fix
+    expect(callSites.length).toBeGreaterThanOrEqual(11); // GH#2623: was 12; C-1 removed the separate backing-seed sendTx (folded into the Earn-vault tx)
     for (const site of callSites) {
       // abortSignal must appear within this call's own options object, close
       // to the top — a generous window that still can't reach into the NEXT

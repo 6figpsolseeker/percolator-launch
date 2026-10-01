@@ -5,8 +5,9 @@
  * to the caller's ATA. The mint authority acts as fee payer so the user needs
  * zero SOL to receive their first tokens.
  *
- * Also attempts a small SOL airdrop (0.05 SOL) via the public devnet faucet so
- * the user can pay for their own subsequent transactions.
+ * Also sends 0.05 SOL so the user can pay for their own subsequent transactions: from the
+ * server wallet when PLAYGROUND_SOL_FAUCET_KEYPAIR is set (UX WP-10, FA-1: the public devnet
+ * airdrop is usually rate-limited), else best-effort via the public devnet faucet.
  *
  * Rate limit: 1 claim per wallet per hour — tracked in an in-memory Map.
  * NOTE: The map is process-local; a serverless cold-start resets it. This is
@@ -21,7 +22,9 @@
  *
  * Body: { wallet: string }
  * Response (200): { funded: true, usdc_amount: number, usdc_sig: string,
- *                   sol_airdropped: boolean, sol_sig?: string, nextClaimAt: string }
+ *                   sol_airdropped: boolean, sol_sig?: string, sol_source?: "server" | "public",
+ *                   nextClaimAt: string }
+ * No response ever names an env var or echoes raw internal error text (WP-10 AC3).
  * Response (400): { error: string }
  * Response (429): { error: string, nextClaimAt: string }
 
@@ -58,8 +61,12 @@ import {
 } from "@/lib/server-rpc";
 import * as Sentry from "@sentry/nextjs";
 import { assertSuccessfulConfirmation } from "@/lib/transaction-confirmation";
+import { grantServerSol } from "@/lib/server-sol-faucet";
 
 export const dynamic = "force-dynamic";
+
+/** Shown when the faucet is not configured; never names the env var (WP-10 AC3). */
+const FAUCET_UNAVAILABLE = "The faucet isn't available right now. Try again later.";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -242,9 +249,7 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json(
         {
-          error:
-            "Faucet not configured: DEVNET_MINT_AUTHORITY_KEYPAIR is missing. " +
-            "Add the base64/JSON keypair to your .env.local to enable live minting.",
+          error: FAUCET_UNAVAILABLE,
           hint: "missing_keypair",
         },
         { status: 503 },
@@ -361,9 +366,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             error:
-              "USDC mint was broadcast, but confirmation is still pending. " +
-              "Do not retry until the claim window expires or the transaction is reconciled.",
-            detail: msg,
+              "Your test USDC is on its way but not confirmed yet. Check your balance in a minute before trying again.",
+            detail: "confirmation pending",
             pending: true,
             retryable: false,
             usdc_sig: usdcSig,
@@ -373,8 +377,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      console.error("[playground/faucet] USDC mint failed:", msg);
       return NextResponse.json(
-        { error: `USDC mint failed: ${msg}`, retryable: true },
+        { error: "The faucet couldn't send test USDC right now. Try again in a moment.", retryable: true },
         { status: 503 },
       );
     }
@@ -396,7 +401,28 @@ export async function POST(req: NextRequest) {
     // own subsequent transactions. Non-blocking — failure is acceptable.
     let solAirdropped = false;
     let solSig: string | undefined;
-    for (const rpcEndpoint of DEVNET_RPC_POOL) {
+    let solSource: "server" | "public" | undefined;
+    // UX WP-10 (FA-1): the server wallet first, within its limits (lib/server-sol-faucet.ts:
+    // balance-aware top-up, one per wallet per day, a global daily budget, 3 per IP per hour);
+    // otherwise the public airdrop below, as before.
+    let solPending = false;
+    let solLamports = 0;
+    const grant = await grantServerSol({ connection, db: supabase, to: walletPk, ip: getClientIp(req) });
+    if (grant.status === "sent") {
+      solAirdropped = true;
+      solSig = grant.signature;
+      solSource = "server";
+      solLamports = grant.lamports;
+    } else if (grant.status === "funded") {
+      solAirdropped = true;
+      solSource = "server";
+    } else if (grant.status === "pending") {
+      // L-1: broadcast with an unknown outcome counts as spent; never send again on top of it.
+      solPending = true;
+      solSig = grant.signature;
+      solSource = "server";
+    }
+    for (const rpcEndpoint of solAirdropped || solPending ? [] : DEVNET_RPC_POOL) {
       try {
         const pubConn = new Connection(rpcEndpoint, "confirmed");
         // Wrap the airdrop + confirm in a 3 s timeout so a slow/dead RPC
@@ -418,6 +444,8 @@ export async function POST(req: NextRequest) {
         ]);
         solAirdropped = true;
         solSig = airdropSig;
+        solSource = "public";
+        solLamports = SOL_AIRDROP_AMOUNT;
         break;
       } catch {
         // Try next endpoint or give up gracefully
@@ -430,6 +458,10 @@ export async function POST(req: NextRequest) {
       usdc_sig: usdcSig,
       sol_airdropped: solAirdropped,
       ...(solSig ? { sol_sig: solSig } : {}),
+      ...(solSource ? { sol_source: solSource } : {}),
+      // I-3: the amount actually sent (0 when the wallet already had enough).
+      sol_amount: solLamports / LAMPORTS_PER_SOL,
+      ...(solPending ? { sol_pending: true } : {}),
       sim_usdc_mint: SIM_USDC_MINT,
       nextClaimAt,
     });
@@ -446,7 +478,7 @@ export async function POST(req: NextRequest) {
     Sentry.captureException(err, {
       tags: { endpoint: "/api/playground/faucet", method: "POST" },
     });
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: msg || "Internal server error" }, { status: 500 });
+    console.error("[playground/faucet] failed:", err instanceof Error ? err.message : String(err));
+    return NextResponse.json({ error: "Something went wrong and nothing was sent. Try again in a moment." }, { status: 500 });
   }
 }

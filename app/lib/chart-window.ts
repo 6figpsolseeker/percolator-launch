@@ -19,9 +19,9 @@
  * The data was there the whole time; the window excluded it. Its most recent
  * 1-minute bar was 2.6h old against a 2.0h window. "One line" was literally a
  * single bar, and the near-empty result then tripped the <10-bar threshold in
- * TradingChart, which silently swapped the market's own trades for Pyth spot
- * data — so the chart could look fine, wrong, or empty depending on whether
- * the token happens to have a Pyth feed.
+ * TradingChart, which silently swapped the market's own trades for an
+ * external spot series — so the chart could look fine, wrong, or empty
+ * depending on whether the token happened to have one.
  *
  * So the windows are sized by what they must CATCH rather than by how many
  * bars a liquid market would fill them with. The bar ceilings below are the
@@ -40,24 +40,21 @@ export interface ChartWindow {
 
 /*
  * NOTE: the resolution STRING deliberately stays with each hook.
- * usePercolatorCandles talks to our UDF route, which wants "1D"; usePythChart
- * talks to Pyth Benchmarks, which wants "D". The two tables shared identical
- * windows and differing resolutions, so folding both into one table here would
- * have sent "1D" to Pyth and silently broken every daily chart on that source.
- * Only the windows are shared, because only the windows were the bug.
+ * usePercolatorCandles talks to our UDF route, which wants "1D"; another
+ * upstream may spell the same resolution differently, so only the windows are
+ * shared here, because only the windows were the bug.
  */
 
 const HOUR = 3600;
 const DAY = 86_400;
 
 /**
- * Hard span limit on the Pyth proxy: app/api/chart/pyth/route.ts rejects
- * `to - from > 5 years` with a 400. usePythChart derives its range from the
- * same windows, so any entry past this returns 400 on every poll forever.
- * Asserted in the tests, with margin — the route's check is `>`, so sitting
- * exactly on the boundary is one off-by-one away from breaking.
+ * Sanity ceiling on any lookback window (5 years). Nothing on-chain or on the
+ * DEX side is older than this, and it keeps a mistyped `+ 3650 * DAY` from
+ * turning every poll into an all-of-history read. Asserted in the tests, with
+ * margin.
  */
-export const MAX_PYTH_SPAN_SEC = 5 * 365 * DAY;
+export const MAX_LOOKBACK_SPAN_SEC = 5 * 365 * DAY;
 
 
 /**
@@ -88,8 +85,8 @@ export const CHART_WINDOWS: Record<ChartTimeframe, ChartWindow> = {
   "1h":  { bucketSec: HOUR,      lookbackSec: 45 * DAY },    // 1080
   "4h":  { bucketSec: 4 * HOUR,  lookbackSec: 180 * DAY },   // 1080
   "1d":  { bucketSec: DAY,       lookbackSec: 1095 * DAY },  // 1095
-  "7d":  { bucketSec: DAY,       lookbackSec: 1460 * DAY },  // 1460  (4y, inside the 5y Pyth cap)
-  "30d": { bucketSec: DAY,       lookbackSec: 1700 * DAY },  // 1700  (~4.66y, inside the 5y Pyth cap)
+  "7d":  { bucketSec: DAY,       lookbackSec: 1460 * DAY },  // 1460  (4y, inside the 5y span ceiling)
+  "30d": { bucketSec: DAY,       lookbackSec: 1700 * DAY },  // 1700  (~4.66y, inside the 5y span ceiling)
 };
 
 /** Worst-case bar count for a timeframe — every bucket in the window filled. */

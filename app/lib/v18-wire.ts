@@ -117,6 +117,22 @@ export function readAssetMarketId(slabData: Uint8Array, assetIndex = 0): bigint 
   return readU64LE(slabData, off);
 }
 
+/**
+ * `asset_admin` for an asset = AssetOracleProfileV17.asset_admin (offset 368
+ * inside the 400-byte profile; see percolator-sdk slab.ts "368 asset_admin
+ * [32]"). This is the CREATOR-held admin key — unlike WrapperConfigV17.marketauth
+ * (rotated to the keyless stake-pool PDA by StakeInitPool), asset 0's asset_admin
+ * stays the creator's wallet, and is the authority for UpdateAssetAuthority
+ * (burning the admin key). Zero pubkey once renounced.
+ */
+export function readAssetAdmin(slabData: Uint8Array, assetIndex = 0): PublicKey {
+  const off = assetProfileOff(assetIndex) + 368;
+  if (slabData.length < off + 32) {
+    throw new Error(`slab too short for AssetOracleProfileV17.asset_admin @ ${off}`);
+  }
+  return new PublicKey(slabData.slice(off, off + 32));
+}
+
 /** Live AssetControlSequencesV16 (oracle-observation nonce + authority-epoch CAS). */
 export function readAssetControlSeqs(slabData: Uint8Array, assetIndex = 0): AssetControlSequencesV17 {
   return parseAssetControlSequencesV17(slabData, assetProfileOff(assetIndex));

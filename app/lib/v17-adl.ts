@@ -43,13 +43,12 @@
  *
  * WHAT THIS IS *NOT* FOR
  * ----------------------
- * `basis_pos_q` remains the correct quantity for CLOSING and for MARGIN:
- * `close_q` is clamped to `leg.basis_pos_q.unsigned_abs()` (v16.rs:12640) and
- * margin uses `risk_notional_ceil(leg.basis_pos_q.unsigned_abs(), price)`
- * (v16.rs:9707). So `Account.positionSize` deliberately stays raw basis and the
- * close path (which is percent-based and re-reads basis from a fresh scan,
- * hooks/useClosePosition.ts:256) is untouched. Effective exposure is a DISPLAY
- * and PnL-sensitivity quantity only.
+ * Engine 35ddd692 applies a trade or close to the EFFECTIVE quantity
+ * (`ceil(|basis| * a_side / a_basis)`, plan_delta v16.rs:6075) and margins on it
+ * (v16.rs:13896), so the close path sizes from lib/limits/effective-quantity.ts
+ * (M-3, code-review-live-paths-2026-10-01), not raw basis. `Account.positionSize`
+ * stays raw basis for the fill check and the wrapper caps view; this module's
+ * floor-rounded `effectiveExposureQ` is a DISPLAY quantity only.
  *
  * The SDK does not expose `a_long`/`a_short` (it parses `oi_eff_*` from the same
  * struct but skips the `a` fields, and its `solana/adl` module is forward-looking

@@ -3,6 +3,7 @@
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { useClusterSlot } from "@/hooks/useClusterSlot";
 import { readV17AssetSlotLast, readV17MaxAccrualDtSlots } from "@/lib/v17-engine-clock";
+import { CATCH_UP_CRANK_CU, CATCH_UP_TOTAL_CU } from "@/lib/self-heal";
 
 /**
  * H6 (2026-07-08): ENGINE accrual staleness ("Crank behind") — distinct from
@@ -26,13 +27,19 @@ import { readV17AssetSlotLast, readV17MaxAccrualDtSlots } from "@/lib/v17-engine
  * now owned by `useOracleFreshness`.
  */
 
-/** Block this far inside the accrual window (10%), so the gate trips before trades revert. */
-const ACCRUAL_SAFETY_MARGIN_DIVISOR = 10n;
+/**
+ * UX WP-2 (SH-2/SH-3): a lag the app can repair itself is NOT a block. sendTx's self-heal
+ * prepends up to `catchUpCranks` catch-up cranks (lib/self-heal.ts planCatchUp) after a
+ * simulated 19/21, so the ticket blocks only when the lag exceeds what those cranks cover:
+ * the keeper must catch up, and the UI shows a calm "catching up" state that clears itself.
+ * Budget: a trade-sized tx (400k CU) + k cranks of CATCH_UP_CRANK_CU within CATCH_UP_TOTAL_CU.
+ */
+const TRADE_CU_FOR_CATCH_UP = 400_000;
 /** Used only if the market's max_accrual_dt_slots is unreadable (live value is 500). */
-const FALLBACK_STALE_SLOT_LAG = 450n;
+const FALLBACK_DT_SLOTS = 500n;
 
 export interface EngineFreshnessState {
-  /** True once the engine's accrual clock has fallen further behind the live cluster slot than the market's accrual window (minus a 10% margin). */
+  /** True once the engine clock lags further than the app's own catch-up cranks can repair (SH-3: the keeper must catch up). */
   engineStale: boolean;
   /** currentSlot - engineSlotLast, or null until both are known. */
   slotLag: bigint | null;
@@ -45,8 +52,9 @@ export interface EngineFreshnessState {
 }
 
 export function engineStaleSlotLag(maxAccrualDtSlots: bigint | null): bigint {
-  if (maxAccrualDtSlots === null) return FALLBACK_STALE_SLOT_LAG;
-  return maxAccrualDtSlots - maxAccrualDtSlots / ACCRUAL_SAFETY_MARGIN_DIVISOR;
+  const dt = maxAccrualDtSlots ?? FALLBACK_DT_SLOTS;
+  const kMax = BigInt(Math.max(1, Math.floor((CATCH_UP_TOTAL_CU - TRADE_CU_FOR_CATCH_UP) / CATCH_UP_CRANK_CU)));
+  return dt * kMax;
 }
 
 /**

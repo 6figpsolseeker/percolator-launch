@@ -12,7 +12,7 @@ vi.mock("@/lib/config", () => ({
   getNetwork: () => netState.network,
 }));
 
-import { sendTx, presimulateOrThrow } from "@/lib/tx";
+import { sendTx, presimulateOrThrow, SimulationRefusal } from "@/lib/tx";
 
 const SIG = bs58.encode(new Uint8Array(64).fill(7));
 // The retry's re-sent keeper hand-off, as the deployed wrapper answers it.
@@ -77,16 +77,16 @@ describe("sendTx simulateBeforeSign (devnet sign-then-submit path)", () => {
     expect(events).toEqual(["simulate"]);
   });
 
-  it("CONTROL: without the flag the wallet is prompted before the verdict (the wallet shows its own warning)", async () => {
+  it("UX WP-1: WITHOUT the flag too, a doomed tx never opens the wallet (SimulationRefusal)", async () => {
     const { conn, events } = makeConn(UNAUTHORIZED_SIM);
     const wallet = makeWallet(events);
 
-    await expect(sendTx({ connection: conn, wallet, instructions: [] })).rejects.toThrow(
-      /Transaction simulation failed/,
-    );
-    // Overlapped ordering: the prompt happened, but nothing was broadcast.
-    expect(wallet.signTransaction).toHaveBeenCalledTimes(1);
-    expect(events).not.toContain("broadcast");
+    const err = await sendTx({ connection: conn, wallet, instructions: [] }).catch((e) => e);
+    expect(err).toBeInstanceOf(SimulationRefusal);
+    expect(err.message).toMatch(/Transaction simulation failed: .*"Custom":8/);
+    expect(err.code).toBe(8);
+    expect(wallet.signTransaction).not.toHaveBeenCalled();
+    expect(events).toEqual(["simulate"]);
   });
 
   it("simulates before the prompt even with keypair signers (sigVerify:false needs no signatures)", async () => {
@@ -108,7 +108,7 @@ describe("sendTx simulateBeforeSign (devnet sign-then-submit path)", () => {
     expect(simOpts.sigVerify).toBe(false);
   });
 
-  it("CONTROL: without the flag a multi-signer tx is not simulated by us at all", async () => {
+  it("UX WP-1: without the flag a multi-signer tx is ALSO simulated before the prompt", async () => {
     const { conn, events } = makeConn({ value: { err: null, logs: [] } });
     const wallet = makeWallet(events);
     const extra = Keypair.generate();
@@ -119,7 +119,7 @@ describe("sendTx simulateBeforeSign (devnet sign-then-submit path)", () => {
       instructions: [SystemProgram.transfer({ fromPubkey: extra.publicKey, toPubkey: wallet.publicKey, lamports: 1 })],
       signers: [extra],
     });
-    expect(events).not.toContain("simulate");
+    expect(events).toEqual(["simulate", "wallet-prompt", "broadcast"]);
   });
 });
 

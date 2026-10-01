@@ -10,7 +10,7 @@ import {
   // initialized (magic bytes absent) for this path to be valid.
 } from "@percolatorct/sdk";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
-import { getConfig } from "@/lib/config";
+import { getAllProgramIds } from "@/lib/config";
 
 
 export type ReclaimStatus = "idle" | "sending" | "success" | "error";
@@ -124,14 +124,10 @@ export function useReclaimSlabRent(): UseReclaimSlabRentResult {
 
       // Build the set of all known Percolator program IDs (env default + all tier-specific programs).
       // PERC-1095: Small/Medium/Large slabs are owned by their tier program, not NEXT_PUBLIC_PROGRAM_ID.
-      const cfg = getConfig();
-      const knownProgramIds = new Set<string>([
-        process.env.NEXT_PUBLIC_PROGRAM_ID ?? "",
-        // PERC-1095 follow-up: also include cfg.programId (the runtime-resolved program ID for
-        // mainnet-large slabs and any tier without an entry in programsBySlabTier).
-        cfg.programId,
-        ...(cfg.programsBySlabTier ? Object.values(cfg.programsBySlabTier) : []),
-      ].filter(Boolean));
+      // P0b: the canonical allowlist (lib/program-ids.ts via config). This used to
+      // read NEXT_PUBLIC_PROGRAM_ID, which is unset on Vercel (always "") and set
+      // to an unrelated key in tests, so the gate was never what it claimed.
+      const knownProgramIds = new Set<string>(getAllProgramIds());
 
       setStatus("sending");
       setError(null);

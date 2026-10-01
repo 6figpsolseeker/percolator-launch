@@ -16,6 +16,7 @@
 
 import { FC, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useDevnetFaucet } from "@/hooks/useDevnetFaucet";
 
 /* ── Step indicator ──────────────────────────────────── */
@@ -79,6 +80,8 @@ const Spinner: FC = () => (
 /* ── Main Modal ──────────────────────────────────────── */
 export const DevnetFaucetModal: FC = () => {
   const faucet = useDevnetFaucet();
+  const router = useRouter();
+  const pathname = usePathname();
   const modalRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape
@@ -345,7 +348,12 @@ export const DevnetFaucetModal: FC = () => {
             {/* Done / Dismiss */}
             {allDone ? (
               <button
-                onClick={faucet.dismiss}
+                data-testid="faucet-start-trading"
+                onClick={() => {
+                  faucet.dismiss();
+                  // UX WP-10 (FA-2): "Start Trading" goes to a market, not just closes the modal.
+                  if (!pathname?.startsWith("/trade/")) router.push("/markets");
+                }}
                 className="flex-1 rounded-none bg-[var(--long)] py-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-white transition-all hover:brightness-110 active:scale-[0.99]"
               >
                 Start Trading →
@@ -361,7 +369,7 @@ export const DevnetFaucetModal: FC = () => {
           </div>
 
           <p className="mt-2 text-center text-[9px] text-[var(--text-dim)]">
-            Devnet tokens have no real value · 1 claim per wallet per 24h
+            Devnet tokens have no real value · 1 claim per wallet per day
           </p>
         </div>
       </div>

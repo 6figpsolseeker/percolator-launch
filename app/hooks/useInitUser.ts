@@ -19,79 +19,22 @@ import {
   getAta,
   detectSlabLayout,
   isV17Account,
-  parsePortfolioV17,
   V17_PORTFOLIO_ACCOUNT_LEN,
   deriveVaultAuthority,
 } from "@percolatorct/sdk";
 import { sendTx } from "@/lib/tx";
-import { isLpPortfolio } from "@/lib/userAccountScan";
+import { findOwnerPortfolio } from "@/lib/owner-portfolio";
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { assertKnownProgram } from "@/lib/programAllowlist";
 import { humanizeError } from "@/lib/errorMessages";
 import { fetchPortfolioIdentity } from "@/lib/v18-wire";
 import { assertDepositWithinBalance, DepositExceedsBalanceError } from "@/lib/deposit-guard";
+import { readU64LE } from "@/lib/u64le";
 
-// ---------------------------------------------------------------------------
-// v17 portfolio discovery helper — mirrors useDeposit's findV17Portfolio.
-// Kept here (rather than a shared util) so useInitUser has no cross-hook
-// import dependency; logic MUST stay byte-for-byte identical to useDeposit.ts.
-// ---------------------------------------------------------------------------
-
-// V17 magic bytes at offset 0: PERCV16\0 in raw form [0x00,0x36,0x31,0x56,0x43,0x52,0x45,0x50]
-const V17_PORTFOLIO_MAGIC_INIT = Buffer.from([0x00, 0x36, 0x31, 0x56, 0x43, 0x52, 0x45, 0x50]);
-
-// market_group_id at HEADER_LEN(16) + provenance.market_group_id(0) = offset 16
-const V17_PF_MARKET_OFF = 16;
-// Mutable owner (SDK PF_OWNER_OFF) at HEADER_LEN(16) + provenance(100) = offset 116.
-// NOT offset 80 (provenanceOwner — IMMUTABLE, set at creation). MintPositionNft moves
-// the mutable owner to the escrow PDA on wrap but leaves provenance pointing at the
-// original wallet, so filtering on 80 would treat a wrapped portfolio as still owned
-// (blocking InitPortfolio for a wallet whose only portfolio here is wrapped).
-const V17_PF_OWNER_OFF = 116;
-
-async function findV17PortfolioForInit(
-  connection: import("@solana/web3.js").Connection,
-  programId: PublicKey,
-  marketPk: PublicKey,
-  ownerPk: PublicKey,
-): Promise<PublicKey | null> {
-  try {
-    const accounts = await connection.getProgramAccounts(programId, {
-      filters: [
-        { memcmp: { offset: 0, bytes: V17_PORTFOLIO_MAGIC_INIT.toString("base64"), encoding: "base64" } },
-        { memcmp: { offset: V17_PF_MARKET_OFF, bytes: marketPk.toBase58() } },
-        { memcmp: { offset: V17_PF_OWNER_OFF, bytes: ownerPk.toBase58() } },
-      ],
-    });
-    // Drop the market's LP portfolio BEFORE the sort/pick below — CRITICAL:
-    // a market CREATOR must never have their own LP mistaken for "already has
-    // a portfolio here" (that would silently skip InitPortfolio and leave the
-    // creator with no tradeable account of their own). See isLpPortfolio's
-    // doc comment.
-    const nonLpAccounts = accounts.filter(({ account }) => !isLpPortfolio(account.data));
-    if (nonLpAccounts.length === 0) return null;
-    // BUG 11: with no cross-instance lock (OrderTicket / DepositWithdrawCard /
-    // useAutoDeposit each mount their own useInitUser and can race through this
-    // TOCTOU check concurrently), more than one portfolio can end up owned by
-    // the same wallet on this market. getProgramAccounts's result order is not
-    // guaranteed stable across calls/nodes, so picking accounts[0] as-is would
-    // let different hook instances (and later deposit/trade) converge on
-    // DIFFERENT accounts non-deterministically ("deposit disappeared"). Sort
-    // deterministically by pubkey so every caller lands on the same one.
-    const sorted =
-      nonLpAccounts.length > 1
-        ? [...nonLpAccounts].sort((a, b) => a.pubkey.toBase58().localeCompare(b.pubkey.toBase58()))
-        : nonLpAccounts;
-    // Defense-in-depth: re-verify the mutable owner actually matches after fetch —
-    // memcmp filters are advisory server-side; don't trust them blindly.
-    const data = sorted[0].account.data;
-    const portfolio = parsePortfolioV17(data instanceof Buffer ? data : Buffer.from(data));
-    if (!portfolio.owner.equals(ownerPk)) return null;
-    return sorted[0].pubkey;
-  } catch {
-    return null;
-  }
-}
+/** Shared discovery (lib/owner-portfolio.ts): `null` only when the scan found
+ *  none; an RPC failure throws PortfolioLookupError instead of reading as "no
+ *  account" and creating a duplicate portfolio (M-4). */
+const findV17PortfolioForInit = findOwnerPortfolio;
 
 // Full v17 portfolio account size — must match V17_PORTFOLIO_ACCOUNT_LEN from SDK.
 // InitPortfolio reallocs to this size and does NOT add lamports, so the CreateAccount
@@ -227,7 +170,7 @@ export function useInitUser(slabAddress: string) {
               } else {
                 // SPL / Token-2022 token account: amount is a u64 LE at offset 64.
                 const ataBalance =
-                  ataInfo.data.length >= 72 ? ataInfo.data.readBigUInt64LE(64) : 0n;
+                  ataInfo.data.length >= 72 ? readU64LE(ataInfo.data, 64) : 0n;
                 // Never SILENTLY shrink the deposit: an over-balance request
                 // used to be clamped here, so the user typed N and only the
                 // wallet's (smaller) balance moved with no warning. Refuse

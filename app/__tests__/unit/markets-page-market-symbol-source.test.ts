@@ -17,12 +17,24 @@ describe("/markets market identity display", () => {
     expect(source).toContain("const displaySymbol = resolveMarketDisplaySymbol(m);");
     expect(source).toContain("mintAddress={logoMintAddress}");
     expect(source).toContain("symbol={displaySymbol ?? undefined}");
-    expect(source).toContain("displaySymbol ? `${displaySymbol}/USD`");
+    // UX WP-10 (§4.2 unit rule): the base symbol ("SOL", never "SOL-PERP") before "/USD".
+    expect(source).toContain("displaySymbol ? `${baseSymbol(displaySymbol)}/USD`");
   });
 
   it("does not prefer collateral token metadata for market identity", () => {
     expect(source).not.toContain("const onChainSym = tokenMetaMap.get(m.mintAddress)?.symbol");
     expect(source).not.toContain("const onChainName = tokenMetaMap.get(m.mintAddress)?.name");
     expect(source).not.toContain("tokenMetaMap.get(m.mintAddress)?.symbol ||");
+  });
+});
+
+describe("baseSymbol (UX WP-10 unit rule)", () => {
+  it("strips -PERP / /USDC suffixes", async () => {
+    const { baseSymbol } = await import("@/lib/symbol-utils");
+    expect(baseSymbol("SOL-PERP")).toBe("SOL");
+    expect(baseSymbol("PENGU-PERP")).toBe("PENGU");
+    expect(baseSymbol("TRUMP")).toBe("TRUMP");
+    expect(baseSymbol("JUP/USDC")).toBe("JUP");
+    expect(baseSymbol("")).toBe("");
   });
 });

@@ -183,6 +183,7 @@ export const ClosePositionForm: FC<ClosePositionFormProps> = ({
         </div>
         <input
           type="range"
+          data-testid="close-percent-input"
           min={1}
           max={100}
           step={1}
@@ -202,6 +203,8 @@ export const ClosePositionForm: FC<ClosePositionFormProps> = ({
             <button
               key={p}
               onClick={() => updatePercent(p)}
+              data-testid="close-percent-chip"
+              data-percent={p}
               className={`flex-1 rounded-none py-1 text-[10px] font-medium transition-colors duration-150 ${
                 percent === p
                   ? "bg-[var(--short)] text-white"
@@ -285,7 +288,7 @@ export const ClosePositionForm: FC<ClosePositionFormProps> = ({
       )}
 
       {error && (
-        <div className="mb-4 rounded-none border border-[var(--short)]/20 bg-[var(--short)]/5 px-3 py-2">
+        <div data-testid="close-error" className="mb-4 rounded-none border border-[var(--short)]/20 bg-[var(--short)]/5 px-3 py-2">
           <p className="text-[10px] text-[var(--short)]">{error}</p>
         </div>
       )}
@@ -295,6 +298,7 @@ export const ClosePositionForm: FC<ClosePositionFormProps> = ({
         {isModal && (
           <button
             onClick={onCancel}
+            data-testid="close-cancel"
             disabled={loading}
             className="flex-1 rounded-none border border-[var(--border)] py-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-secondary)] transition-colors hover:border-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50"
           >
@@ -303,6 +307,7 @@ export const ClosePositionForm: FC<ClosePositionFormProps> = ({
         )}
         <button
           onClick={() => onConfirm(percent)}
+          data-testid="close-confirm"
           onPointerEnter={onSubmitIntent}
           onFocus={onSubmitIntent}
           disabled={closeBlocked}

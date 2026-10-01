@@ -8,6 +8,7 @@ import { useSlabState } from "@/components/providers/SlabProvider";
 import { assertKnownProgram } from "@/lib/programAllowlist";
 import { sendTx } from "@/lib/tx";
 import { humanizeError } from "@/lib/errorMessages";
+import { plainMessage } from "@/lib/limits/user-message";
 import { useToast } from "@/hooks/useToast";
 import { isLpPortfolio } from "@/lib/userAccountScan";
 import { PERCOLATOR_NFT_PROGRAM_ID } from "@/lib/nft-program";
@@ -231,7 +232,7 @@ export function useMintPositionNft(slabAddress: string) {
       return sig;
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
-      const msg = humanizeError(errMsg);
+      const msg = plainMessage(errMsg, { surface: "nft" }, humanizeError);
       console.error("[useMintPositionNft]", errMsg);
       setError(msg);
       toast(msg, "error");

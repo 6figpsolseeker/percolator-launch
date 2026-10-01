@@ -23,6 +23,14 @@ export interface OraclePublishersState {
   error: string | null;
 }
 
+const EMPTY_STATE: OraclePublishersState = {
+  publisherCount: null,
+  publisherTotal: null,
+  publishers: [],
+  loading: false,
+  error: null,
+};
+
 /** Normal refresh interval for publisher data (60s — changes rarely) */
 const POLL_INTERVAL_MS = 60_000;
 /** Back-off interval after a failed fetch (5 minutes — avoid retry storm on 500s) */
@@ -31,25 +39,22 @@ const ERROR_BACKOFF_MS = 5 * 60_000;
 /**
  * Fetch live oracle publisher data for the current market.
  *
- * - pyth-pinned: Reads Pythnet on-chain price account → real publisher count
  * - hyperp: Queries oracle bridge for DEX price sources
  * - admin: Returns the single oracle authority
  *
+ * NO PYTH: any other mode (the legacy on-chain `pyth-pinned` mode included)
+ * has no non-Pyth publisher source, so the hook stays idle — no request, and
+ * the UI shows no publisher count or list for it.
+ *
  * GH#1807: The effect was previously keyed on `config` (the full slab object), which
  * changes every 3s from SlabProvider. This triggered a new fetch on every poll cycle,
- * creating a continuous 500-storm when the Pythnet RPC was unreachable. Fixed by:
- *   1. Deriving a stable `fetchKey` (mode + feedId/authority) and keying the effect on that.
+ * creating a continuous 500-storm when the upstream was unreachable. Fixed by:
+ *   1. Deriving a stable `fetchKey` (mode + authority) and keying the effect on that.
  *   2. Using ERROR_BACKOFF_MS (5 min) after a failed fetch instead of retrying immediately.
  */
 export function useOraclePublishers(): OraclePublishersState {
   const { config } = useSlabState();
-  const [state, setState] = useState<OraclePublishersState>({
-    publisherCount: null,
-    publisherTotal: null,
-    publishers: [],
-    loading: false,
-    error: null,
-  });
+  const [state, setState] = useState<OraclePublishersState>(EMPTY_STATE);
   const abortRef = useRef<AbortController | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
@@ -58,26 +63,23 @@ export function useOraclePublishers(): OraclePublishersState {
   const fetchKey = useMemo(() => {
     if (!config) return null;
     const mode = detectOracleMode(config);
-    if (!mode) return null;
-
-    if (mode === "pyth-pinned" && config.indexFeedId) {
-      const feedIdBytes = config.indexFeedId.toBytes();
-      const feedIdHex = Array.from(feedIdBytes)
-        .map((b: number) => b.toString(16).padStart(2, "0"))
-        .join("");
-      return `pyth-pinned:${feedIdHex}`;
-    }
     if (mode === "admin" && config.oracleAuthority) {
       return `admin:${config.oracleAuthority.toBase58()}`;
     }
-    return mode; // "hyperp" — no extra params needed
+    if (mode === "hyperp") return mode; // no extra params needed
+    return null;
   }, [config]);
 
   useEffect(() => {
-    if (!fetchKey || !config) return;
+    if (!fetchKey || !config) {
+      // No publisher source for this market (e.g. the legacy pyth-pinned
+      // mode): drop any previous market's publishers rather than showing them.
+      setState(EMPTY_STATE);
+      return;
+    }
 
     const mode = detectOracleMode(config);
-    if (!mode) return;
+    if (mode !== "hyperp" && mode !== "admin") return;
 
     let nextIntervalMs = POLL_INTERVAL_MS;
     // Flips true in the cleanup below. Guards the `finally` block's reschedule
@@ -95,14 +97,6 @@ export function useOraclePublishers(): OraclePublishersState {
 
       try {
         const params = new URLSearchParams({ mode });
-
-        if (mode === "pyth-pinned" && config.indexFeedId) {
-          const feedIdBytes = config.indexFeedId.toBytes();
-          const feedIdHex = Array.from(feedIdBytes)
-            .map((b: number) => b.toString(16).padStart(2, "0"))
-            .join("");
-          params.set("feedId", feedIdHex);
-        }
 
         if (mode === "admin" && config.oracleAuthority) {
           params.set("authority", config.oracleAuthority.toBase58());

@@ -57,8 +57,8 @@ describe("Q-unit conversions are not decimals-based", () => {
   });
   it("LiveMarketRail: volume column is USD, not raw volume_24h", () => {
     const s = src("components/landing/LiveMarketRail.tsx");
-    expect(s).not.toMatch(/volume24h=\{stats\?\.volume_24h/);
-    expect(s).toMatch(/rowVolumeUsd\(stats\)/);
+    expect(s).not.toMatch(/volume24h=\{(stats\?|m)\.volume_24h/);
+    expect(s).toMatch(/volume24h=\{rowVolumeUsd\(m\)/);
   });
   it("MarketStatsCard OI, PositionPanel size, SystemCapitalCard OI, my-markets OI, CreatorMarketRow OI use Q_SCALE", () => {
     expect(src("components/trade/MarketStatsCard.tsx")).toMatch(/Number\(atoms\) \/ Q_SCALE\) \* priceUsd/);

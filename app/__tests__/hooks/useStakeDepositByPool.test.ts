@@ -104,7 +104,7 @@ describe('useStakeDepositByPool', () => {
     mockConnection = {
       getAccountInfo: vi.fn().mockImplementation(async (pubkey: PublicKey) => {
         if (pubkey.equals(mockPool)) {
-          return { data: buildPoolAccountData(), owner: new PublicKey('GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3') };
+          return { data: buildPoolAccountData(), owner: new PublicKey('VmpVUArRnVkrjaPXQ2qaqCQa3ZrZFgsz7rjeALitF5w') };
         }
         // Token account holding 1B base units (deposit guard reads u64 LE @ 64).
         const tokenData = Buffer.alloc(165);
@@ -227,7 +227,7 @@ describe('useStakeDepositByPool', () => {
     let callIdx = 0;
     mockConnection.getAccountInfo.mockImplementation(async (pubkey: PublicKey) => {
       if (pubkey.equals(mockPool)) {
-        return { data: buildPoolAccountData(), owner: new PublicKey('GCHhcgwPyrai8SWHEVWw3odedguFXEtJobNnWSfWBCU3') };
+        return { data: buildPoolAccountData(), owner: new PublicKey('VmpVUArRnVkrjaPXQ2qaqCQa3ZrZFgsz7rjeALitF5w') };
       }
       callIdx++;
       // calls: 1 slab, 2 collateral balance (deposit guard), 3 collateral ATA, 4 LP ATA

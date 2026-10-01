@@ -56,7 +56,7 @@ export const MarketBrowser: FC = () => {
 
   if (error) {
     const helpMsg = error === "PROGRAM_ID not configured"
-      ? "Set the NEXT_PUBLIC_PROGRAM_ID environment variable to your Percolator program address."
+      ? "The Percolator program ID is not configured (app/lib/program-ids.ts, or NEXT_PUBLIC_WRAPPER_PROGRAM_ID on devnet)."
       : error;
     return (
       <div className="rounded-sm border border-[var(--border)] bg-[var(--panel-bg)] p-8 text-center shadow-sm">
@@ -99,7 +99,7 @@ export const MarketBrowser: FC = () => {
               const decimals = meta?.decimals ?? 6;
 
               return (
-                <tr key={slab} className="hover:bg-[var(--accent)]/[0.04]">
+                <tr key={slab} data-testid="market-card" data-market={slab} data-view="table" className="hover:bg-[var(--accent)]/[0.04]">
                   <td className="px-4 py-3">
                     <div className="font-medium text-[var(--text)]">{symbol}/USD PERP</div>
                     <div className="font-mono text-xs text-[var(--text-muted)]">{shortenAddress(slab, 6)}</div>
@@ -155,7 +155,7 @@ export const MarketBrowser: FC = () => {
           const health = computeMarketHealth(m.engine);
 
           return (
-            <div key={slab} className="p-4">
+            <div key={slab} data-testid="market-card" data-market={slab} data-view="card" className="p-4">
               {/* Row 1: Market name + Health + Trade */}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2 min-w-0">

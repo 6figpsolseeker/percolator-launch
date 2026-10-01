@@ -47,26 +47,29 @@ async function run(clusterSlot: bigint, cfg: WrapperConfigV17 = liveCfg) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("useEngineFreshness — accrual clock on live bytes", () => {
-  it("threshold comes from the market's max_accrual_dt_slots (500 → 450)", () => {
-    expect(engineStaleSlotLag(500n)).toBe(450n);
-    expect(engineStaleSlotLag(null)).toBe(450n);
+  it("UX WP-2: threshold = what the app's own catch-up cranks repair (dt x 32 cranks of 25k CU; 500 -> 16,000)", () => {
+    expect(engineStaleSlotLag(500n)).toBe(16_000n);
+    expect(engineStaleSlotLag(null)).toBe(16_000n);
+    expect(engineStaleSlotLag(1n)).toBe(32n); // floor((1.2M - 400k) / 25k crank)
   });
 
   it("live capture: a cranked market is not behind, lag measured from slot_last", async () => {
     const s = await run(CAPTURE_SLOT);
     expect(s.engineSlotLast).toBe(SLOT_LAST);
     expect(s.slotLag).toBe(CAPTURE_SLOT - SLOT_LAST);
-    expect(s.staleSlotLag).toBe(450n);
+    expect(s.staleSlotLag).toBe(16_000n);
     expect(s.engineStale).toBe(false);
   });
 
-  it("crank dead while the keeper keeps pushing → crank behind", async () => {
+  it("crank dead while the keeper keeps pushing: a 600-slot lag is repaired in the user's tx (not a block)", async () => {
     const clusterSlot = SLOT_LAST + 600n;
     // The keeper is alive: last_good_oracle_slot is at the tip.
     const keeperAlive = { ...liveCfg, lastGoodOracleSlot: clusterSlot, markEwmaLastSlot: clusterSlot };
     const s = await run(clusterSlot, keeperAlive);
     expect(s.slotLag).toBe(600n);
-    expect(s.engineStale).toBe(true);
+    expect(s.engineStale).toBe(false);
+    // beyond the catch-up cap it is (the keeper must catch up; the UI waits calmly)
+    expect((await run(SLOT_LAST + 16_001n, keeperAlive)).engineStale).toBe(true);
   });
 
   it("crank live while the keeper is paused → NOT crank behind (oracle freshness owns push age)", async () => {
@@ -77,8 +80,8 @@ describe("useEngineFreshness — accrual clock on live bytes", () => {
   });
 
   it("boundary: at the threshold not stale, one slot past it stale", async () => {
-    expect((await run(SLOT_LAST + 450n)).engineStale).toBe(false);
-    expect((await run(SLOT_LAST + 451n)).engineStale).toBe(true);
+    expect((await run(SLOT_LAST + 16_000n)).engineStale).toBe(false);
+    expect((await run(SLOT_LAST + 16_001n)).engineStale).toBe(true);
   });
 
   it("unknown (no raw bytes yet) never trips the gate", async () => {

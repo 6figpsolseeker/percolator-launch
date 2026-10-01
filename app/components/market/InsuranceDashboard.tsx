@@ -15,8 +15,8 @@ import { pollWhenVisible } from "@/lib/pollWhenVisible";
 
 interface InsuranceData {
   balance: string; // U128 as string (in token units e6)
-  feeRevenue: string; // U128 as string
-  dailyAccumulationRate: number; // USD per day
+  feeRevenue: string | null; // U128 as string; null = no data source (v18)
+  dailyAccumulationRate: number | null; // USD per day; null = no data source
   coverageRatio: number; // Insurance / total_risk
   historicalBalance: Array<{ timestamp: number; balance: number }>; // 7-day history
   totalRisk: string; // Total open interest
@@ -87,7 +87,7 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
         if (cancelled) return;
         // Map API response shape to InsuranceData interface
         const balance = data.balance ?? data.currentBalance ?? "0";
-        const feeRevenue = data.feeRevenue ?? "0";
+        const feeRevenue: string | null = typeof data.feeRevenue === "string" ? data.feeRevenue : null;
         const totalRisk = data.totalRisk ?? data.totalOpenInterest ?? "0";
         const balanceNum = Number(BigInt(balance));
         const riskNum = Number(BigInt(totalRisk));
@@ -102,7 +102,7 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
             feeRevenue,
             totalRisk,
             coverageRatio,
-            dailyAccumulationRate: data.dailyAccumulationRate ?? 0,
+            dailyAccumulationRate: typeof data.dailyAccumulationRate === "number" ? data.dailyAccumulationRate : null,
             historicalBalance,
           });
           setError(null);
@@ -148,6 +148,16 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
     if (!insuranceData) return { color: "text-[var(--text-secondary)]", dotColor: "bg-[var(--text-muted)]", label: "Unknown", borderColor: "border-[var(--border)]", bgColor: "bg-transparent" };
 
     const ratio = insuranceData.coverageRatio ?? 0;
+    // Nothing at risk: coverage is not "Low", there is just no open interest to cover.
+    if (BigInt(insuranceData.totalRisk || "0") === 0n) {
+      return {
+        color: "text-[var(--text-secondary)]",
+        dotColor: "bg-[var(--text-muted)]",
+        label: "No open interest",
+        borderColor: "border-[var(--border)]",
+        bgColor: "bg-transparent",
+      };
+    }
 
     if (ratio >= 5) {
       return {
@@ -203,7 +213,8 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
   }
 
   const balanceUsd = formatUsdAmount(insuranceData.balance, decimals);
-  const feeRevenueUsd = formatUsdAmount(insuranceData.feeRevenue, decimals);
+  const feeRevenueUsd = insuranceData.feeRevenue !== null ? formatUsdAmount(insuranceData.feeRevenue, decimals) : null;
+  const hasRisk = BigInt(insuranceData.totalRisk || "0") > 0n;
 
   return (
     <>
@@ -214,7 +225,7 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
             <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-[var(--text-secondary)]">
               Insurance Fund
             </span>
-            <InfoIcon tooltip="Safety net that protects LPs from bankruptcy during extreme market events." />
+            <InfoIcon tooltip="Safety net that protects the market's liquidity from bankruptcy during extreme market events." />
             <button
               onClick={() => setShowExplainer(true)}
               className="text-[8px] text-[var(--accent)] hover:underline"
@@ -230,7 +241,8 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
           </span>
         </div>
 
-        {/* Fee Revenue row */}
+        {/* Fee Revenue row: hidden when there is no data source (v18) */}
+        {feeRevenueUsd !== null && (
         <div className="mb-1.5 flex items-baseline justify-between">
           <span className="text-[9px] uppercase tracking-[0.1em] text-[var(--text-secondary)]">Fee Revenue</span>
           <div className="flex items-baseline gap-1">
@@ -242,6 +254,7 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
             )}
           </div>
         </div>
+        )}
 
         {/* Health + Coverage — compact inline */}
         <div className={`mb-1.5 rounded-none border-l-2 ${healthStatus.borderColor} ${healthStatus.bgColor} px-1.5 py-1`}>
@@ -250,7 +263,7 @@ export const InsuranceDashboard: FC<{ slabAddress: string }> = ({
             <span className="text-[10px] font-medium text-[var(--text)]">
               <span className={healthStatus.color}>{healthStatus.label}</span>
             </span>
-            {insuranceData.coverageRatio != null && typeof insuranceData.coverageRatio === "number" && (
+            {hasRisk && insuranceData.coverageRatio != null && typeof insuranceData.coverageRatio === "number" && (
               <span className="text-[9px] text-[var(--text-secondary)]">
                 {insuranceData.coverageRatio.toFixed(1)}x coverage
               </span>

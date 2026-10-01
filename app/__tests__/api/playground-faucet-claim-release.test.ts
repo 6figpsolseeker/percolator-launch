@@ -169,7 +169,8 @@ describe("GH#2600: /api/playground/faucet releases the claim on a THROW before t
     const body = await res.json();
 
     expect(res.status).toBe(503);
-    expect(body.error).toMatch(/USDC mint failed/i);
+    // UX WP-10 AC3: a plain line, never the raw internal error.
+    expect(body.error).toMatch(/couldn't send test USDC/i);
     expect(mocks.releaseFaucetClaim).toHaveBeenCalledWith(expect.anything(), 77);
   });
 

@@ -8,10 +8,12 @@ import { SlabProvider, useSlabState } from "@/components/providers/SlabProvider"
 import { isBlockedSlab } from "@/lib/blocklist";
 import { UsdToggleProvider } from "@/components/providers/UsdToggleProvider";
 import { OrderTicket } from "@/components/trade/OrderTicket";
-import { PositionNftPanel } from "@/components/trade/PositionNftPanel";
+import { useTicketRow, ticketRowShortLabel } from "@/lib/limits/ticket-status-store";
 import { PositionsDock } from "@/components/trade/PositionsDock";
 import dynamic from "next/dynamic";
 import { MarketInfoBar } from "@/components/trade/MarketInfoBar";
+import { MarketLimitsStrip } from "@/components/limits/MarketLimitsStrip";
+import { MarketHeaderStatus, TradeMarketHealthBanner } from "@/components/market/MarketHealthBadges";
 import { AnalyticsDock } from "@/components/trade/AnalyticsDock";
 import { useIsLargeScreen } from "@/hooks/useIsLargeScreen";
 import { useAdvanceOraclePhase } from "@/hooks/useAdvanceOraclePhase";
@@ -151,9 +153,8 @@ function OrderTicketRail({ slab, framed = false }: { slab: string; framed?: bool
           <OrderTicket slabAddress={slab} />
         </RenderProfiler>
       </ErrorBoundary>
-      <div className={framed ? "flex flex-1 border-t border-[var(--border)]/60" : "border-t border-[var(--border)]/40 pt-3"}>
-        <ErrorBoundary label="PositionNftPanel"><PositionNftPanel slabAddress={slab} /></ErrorBoundary>
-      </div>
+      {/* UX WP-9 (§3.13, NF-1): the Position NFT panel left the ticket rail; its actions are in
+          the position row's "⋯" menu (components/trade/PositionNftMenu.tsx). */}
     </div>
   );
 }
@@ -175,6 +176,9 @@ const SHEET_FOCUSABLE_SELECTOR =
 
 function MobileOrderSheet({ slab }: { slab: string }) {
   const [open, setOpen] = useState(false);
+  // UX WP-3 (§4.2): the collapsed bar names a blocked ticket ("Trade · Close-only").
+  const ticketRow = useTicketRow(slab);
+  const ticketRowLabel = ticketRowShortLabel(ticketRow);
   const sheetRef = useRef<HTMLDivElement>(null);
 
   // While the bottom-sheet (role="dialog" aria-modal) is open, lock background
@@ -241,8 +245,10 @@ function MobileOrderSheet({ slab }: { slab: string }) {
         <button
           onClick={() => setOpen(true)}
           className="flex w-full items-center justify-center gap-2 py-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--text)]"
+          data-testid="mobile-trade-bar"
+          data-ticket-row={ticketRow ?? undefined}
         >
-          Trade
+          {ticketRowLabel ? `Trade · ${ticketRowLabel}` : "Trade"}
         </button>
       </div>
 
@@ -402,11 +408,10 @@ function TradePageInner({ slab }: { slab: string }) {
               <>
                 <p className="text-sm font-semibold text-[var(--text)]">Market not found on devnet</p>
                 <p className="mt-2 text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                  This slab account doesn&apos;t exist on the current devnet. The market may have been closed, or you may be looking at a mainnet market address.
+                  This market doesn&apos;t exist on devnet. It may have been closed, or the link may be for a different network.
                 </p>
                 <div className="mt-4 flex flex-col gap-2">
-                  {/* GH#2704: no "Switch to Mainnet" here. A devnet build ignores
-                      the override, and it used to strand users on mainnet IDs. */}
+                  {/* UX WP-10 (CN-1): the playground is devnet only, so it offers no mainnet switch. */}
                   <a
                     href="/markets"
                     className="w-full border border-[var(--border)] px-4 py-2 text-[11px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--text)] transition-colors duration-150"
@@ -480,7 +485,7 @@ function TradePageInner({ slab }: { slab: string }) {
       {hasNoPriceData && (
         <div className="border-b border-[var(--warning)]/30 bg-[var(--warning)]/5 px-4 py-2.5 text-center">
           <p className="text-[11px] font-medium text-[var(--warning)]">
-            ⚠ No oracle price available for this market — prices may be stale or unavailable
+            Prices for this market aren&apos;t available right now. They update automatically.
           </p>
         </div>
       )}
@@ -488,7 +493,21 @@ function TradePageInner({ slab }: { slab: string }) {
       {/* Utility row — market address + admin status. (Share, the tokens/usd
           toggle, and the Analytics link were removed; analytics now lives in
           the bottom AnalyticsDock.) */}
-      <div className="flex items-center gap-3 border-b border-[var(--border)]/30 px-3 py-1.5 overflow-x-auto whitespace-nowrap scrollbar-none">
+
+      {/* MarketBar — always mounted, already responsive/scrollable on mobile */}
+      <MarketInfoBar slabAddress={slab} symbol={symbol} logoUrl={logoUrl} mintAddress={mintAddress} mainnetCa={chartMintAddress} />
+      {/* UX WP-10 (§4.3): ONE status line under the header, only when the market is not live. */}
+      <MarketHeaderStatus slab={slab} />
+      {/* UX WP-10 (GL-1, §4.3): the market address and admin status left the page chrome; they sit
+          in a collapsed "Market details" disclosure (the "ADMIN ACTIVE" chip is no longer shown by
+          default above every market). */}
+      <details data-testid="market-details" className="border-b border-[var(--border)]/30 px-3 py-1 text-[10px] text-[var(--text-secondary)]">
+        <summary className="cursor-pointer select-none py-0.5">Market details</summary>
+      {/* The health detail lines (payout level etc.) and the limits strip (OI vs cap, liquidity,
+          band, skew) live here now, not as rows above the chart. */}
+      <TradeMarketHealthBanner slab={slab} />
+      <MarketLimitsStrip slab={slab} symbol={symbol} />
+      <div className="flex items-center gap-3 py-1 overflow-x-auto whitespace-nowrap scrollbar-none">
         <span className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]" style={{ fontFamily: "var(--font-mono)" }}>
           {shortAddress}
           <CopyButton text={slab} />
@@ -511,9 +530,7 @@ function TradePageInner({ slab }: { slab: string }) {
           </Tooltip>
         )}
       </div>
-
-      {/* MarketBar — always mounted, already responsive/scrollable on mobile */}
-      <MarketInfoBar slabAddress={slab} symbol={symbol} logoUrl={logoUrl} mintAddress={mintAddress} mainnetCa={chartMintAddress} />
+      </details>
 
       {/* ════════════════ DESKTOP (≥ lg) — named grid ════════════════ */}
       {isLargeScreen && (

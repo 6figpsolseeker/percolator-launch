@@ -33,7 +33,6 @@
  * it fails closed at market-creation time, which is a bad moment to find out.
  */
 
-export const KEEPER_REGISTER_PROOF_PREFIX = "keeper-register";
 
 /**
  * Field separator: ASCII Unit Separator (0x1F).
@@ -53,6 +52,8 @@ export interface KeeperRegisterProofParams {
   dexType: string;
   symbol?: string;
   label?: string;
+  /** sha256 of the bound markets-row payload (lib/keeper-register-memo.ts, memo v2); "" = none. */
+  payloadDigest?: string;
 }
 
 /**
@@ -72,6 +73,7 @@ export function canonicalizeKeeperRegisterParams(
     dexType: p.dexType ?? "",
     label: p.label ?? "",
     mainnetCA: p.mainnetCA ?? "",
+    payloadDigest: p.payloadDigest ?? "",
     slabAddress: p.slabAddress ?? "",
     symbol: p.symbol ?? "",
   };
@@ -79,24 +81,4 @@ export function canonicalizeKeeperRegisterParams(
     .sort()
     .map((k) => `${k}=${fields[k]}`)
     .join(FIELD_SEP);
-}
-
-/**
- * Build the exact bytes to sign / verify.
- *
- * `Uint8Array.from` rather than the TextEncoder's own result: TweetNaCl does a
- * strict `instanceof Uint8Array` check, and an encoder can return an array from
- * another JS realm in some test and browser environments. The sibling auth module
- * hit exactly this and documents it; same defence here.
- */
-export function buildKeeperRegisterProofMessage(
-  p: KeeperRegisterProofParams,
-  unixMinute: number,
-): Uint8Array {
-  const message = [
-    KEEPER_REGISTER_PROOF_PREFIX,
-    String(unixMinute),
-    canonicalizeKeeperRegisterParams(p),
-  ].join("\n");
-  return Uint8Array.from(new TextEncoder().encode(message));
 }

@@ -84,7 +84,7 @@ describe("a degraded six-prompt launch says so", () => {
     // The reason alone, with no lead-in, is an unexplained error string under a
     // progress bar. The sentence is what makes it legible.
     expect(
-      screen.getByText(/One-approval launch unavailable, so each step is signed separately/),
+      screen.getByText(/Your wallet signs each step separately/),
     ).toBeInTheDocument();
   });
 
@@ -139,7 +139,7 @@ describe("a degraded six-prompt launch says so", () => {
     renderProgress();
 
     expect(screen.getByText(/Step 2 of 6/)).toBeInTheDocument();
-    expect(screen.queryByText(/One-approval launch unavailable/)).toBeNull();
+    expect(screen.queryByText(/Your wallet signs each step separately/)).toBeNull();
   });
 
   it("CONTROL: an explicitly cleared reason renders nothing", () => {
@@ -148,7 +148,7 @@ describe("a degraded six-prompt launch says so", () => {
     renderProgress({ batchFallbackReason: null });
 
     expect(screen.getByText(/Step 2 of 6/)).toBeInTheDocument();
-    expect(screen.queryByText(/One-approval launch unavailable/)).toBeNull();
+    expect(screen.queryByText(/Your wallet signs each step separately/)).toBeNull();
   });
 
   it("CONTROL: stays out of the batch-phase view", () => {
@@ -157,7 +157,7 @@ describe("a degraded six-prompt launch says so", () => {
     // all, so a mutant that also rendered the line in that branch went unseen.
     renderProgress({ phase: "awaiting-signature", batchFallbackReason: LONG_REASON });
 
-    expect(screen.queryByText(/One-approval launch unavailable/)).toBeNull();
+    expect(screen.queryByText(/Your wallet signs each step separately/)).toBeNull();
   });
 });
 
@@ -191,6 +191,6 @@ describe("the reason survives the failure that makes it worth reporting", () => 
     renderProgress({ loading: false, error: STEP_ERROR });
 
     expect(screen.getByText(literal(STEP_ERROR))).toBeInTheDocument();
-    expect(screen.queryByText(/One-approval launch unavailable/)).toBeNull();
+    expect(screen.queryByText(/Your wallet signs each step separately/)).toBeNull();
   });
 });

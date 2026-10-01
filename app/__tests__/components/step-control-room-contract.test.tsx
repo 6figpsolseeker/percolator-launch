@@ -60,7 +60,8 @@ describe("StepControlRoom — creator-settable contract", () => {
 
   it("renders the trading fee as fixed text, not an editable control", () => {
     renderStep({ tradingFeeBps: 30 });
-    expect(screen.getAllByText(/30 bps/i).length).toBeGreaterThan(0);
+    // UX WP-10 (§5.1): shown as a percentage.
+    expect(screen.getAllByText(/0\.30%/i).length).toBeGreaterThan(0);
     // No slider/spinbutton is bound to the fee value.
     const dials = screen.queryAllByRole("slider").concat(screen.queryAllByRole("spinbutton"));
     for (const d of dials) {

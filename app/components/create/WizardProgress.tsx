@@ -55,6 +55,9 @@ export const WizardProgress: FC<WizardProgressProps> = ({
               {/* Step indicator */}
               <button
                 type="button"
+                data-testid="wizard-step"
+                data-step={stepNum}
+                data-state={isCompleted ? "completed" : isActive ? "active" : "upcoming"}
                 onClick={() => {
                   // Only allow clicking completed steps (go back)
                   if (isCompleted && onStepClick) onStepClick(stepNum);

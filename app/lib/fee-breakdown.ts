@@ -54,30 +54,30 @@ export interface FeeLeg {
 export const FEE_LEGS: readonly FeeLeg[] = [
   {
     id: "lp",
-    label: "Liquidity providers",
+    label: "Earn deposits",
     bps: FEE_SPLIT.DEFAULT_LP_SHARE_BPS,
-    note: "Paid to the market's LP vault — this is the yield behind Earn.",
+    note: "Paid into the market's Earn vault: this is the yield behind Earn.",
     fixed: true,
   },
   {
     id: "protocol",
     label: "Protocol",
     bps: FEE_SPLIT.PROTOCOL_FEE_BPS,
-    note: "Taken before anything else. Compile-time in the program: not stored on-chain and not settable by anyone.",
+    note: "Taken before anything else, and fixed: nobody can change it.",
     fixed: true,
   },
   {
     id: "creator",
     label: "Market creator",
     bps: FEE_SPLIT.DEFAULT_CREATOR_SHARE_BPS,
-    note: "Accrues to the market's creator and is claimed with its own instruction.",
+    note: "Goes to the market's creator, who claims it from My Markets.",
     fixed: true,
   },
   {
     id: "insurance",
     label: "Insurance fund",
     bps: FEE_SPLIT.DEFAULT_INSURANCE_SHARE_BPS,
-    note: "Backs losses a liquidation cannot cover. Stakers provide this fund's first-loss capital — they do NOT receive this share as yield.",
+    note: "Backs losses a liquidation cannot cover. Stakers provide this fund and receive this share, moved into the stake pool automatically.",
     fixed: true,
   },
 ];
@@ -88,16 +88,13 @@ export function legPercent(leg: FeeLeg): number {
 }
 
 /**
- * What a staker earns from trading fees: nothing, by design.
- *
- * Not an omission and not a missing crank. The wizard creates the stake pool
- * with StakeInitPool, which sets `pool_mode = 0`, and percolator-stake's
- * `process_accrue_fees` rejects anything but `pool_mode == 1` with
- * InvalidPoolMode. Verified on a freshly created market — `pool_mode` reads 0
- * at offset 280. The Stake page already states this; the constant exists so
- * that page and any fee breakdown cannot drift apart.
+ * What stakers receive of a trade fee: the INSURANCE leg. It accrues to the wrapper's
+ * insurance reserve (`insurance_reserve_accrued_atoms`) and the keeper pushes it to the market's
+ * bound stake pool (wrapper tag 87 WithdrawInsuranceReserveToStake -> stake tag 12 AccrueFees;
+ * keeper b004a0c, lib/pre-resolve.ts). E2E 2026-09-30: stakers C3 +5.86 USDC and U3 +7.01 USDC.
+ * (The old 0 assumed AccrueFees rejected insurance pools; that is no longer the program's rule.)
  */
-export const STAKER_FEE_SHARE_BPS = 0;
+export const STAKER_FEE_SHARE_BPS = FEE_SPLIT.DEFAULT_INSURANCE_SHARE_BPS;
 
 /**
  * The fee a trade pays, in collateral atoms.

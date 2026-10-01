@@ -20,7 +20,7 @@ export interface OrderTicketClosePanelProps {
   maxFillAbs: bigint | null;
   /** The market's LP has no capital: a close cannot fill (mirrors PositionsDock). */
   lpUnderfunded: boolean;
-  /** Engine accrue-staleness: every close reverts until a re-seed (mirrors PositionsDock). */
+  /** Engine lag beyond the app's own catch-up (UX WP-2 SH-3; mirrors PositionsDock); clears itself. */
   engineStale: boolean;
   /** Oracle unavailable/stale (already mock-mode aware) — blocks the close. */
   oracleBlocked: boolean;
@@ -105,14 +105,14 @@ export const OrderTicketClosePanel: FC<OrderTicketClosePanelProps> = ({
   }
 
   // Gates that block the close beyond the form's own loading/oracleStale: no
-  // live mark (can't preview or fill), engine crank behind, or an LP with no
+  // live mark (can't preview or fill), engine catching up past the app's own repair, or an LP with no
   // capital. Mirrors the labels/tooltips the old button used.
   const submitDisabled = !hasValidMark || engineStale || lpUnderfunded;
-  const submitDisabledLabel = !hasValidMark ? "Awaiting Price…" : engineStale ? "Crank Behind" : undefined;
+  const submitDisabledLabel = !hasValidMark ? "Awaiting Price…" : engineStale ? "Waiting for prices…" : undefined;
   const submitTitle = !hasValidMark
     ? "Waiting for price data…"
     : engineStale
-      ? "Market crank behind — trading paused. This market needs a re-seed before closing works."
+      ? "Prices are catching up. Closing resumes automatically, usually within a minute."
       : lpUnderfunded
         ? "The LP has no capital, so a close cannot fill."
         : undefined;

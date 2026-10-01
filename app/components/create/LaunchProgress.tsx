@@ -60,7 +60,7 @@ const BatchFallbackNote: FC<{ reason: string }> = ({ reason }) => (
     title={reason}
     role="status"
   >
-    One-approval launch unavailable, so each step is signed separately — {reason}
+    Your wallet signs each step separately. <span className="sr-only">Why: </span>{reason}
   </p>
 );
 
@@ -216,7 +216,7 @@ export const LaunchProgress: FC<LaunchProgressProps> = ({ state, onReset, onRetr
           else if (state.step === i && state.error) status = "error";
 
           return (
-            <div key={i} className="flex items-start gap-3">
+            <div key={i} data-testid="wizard-launch-step" data-step={i} data-status={status} className="flex items-start gap-3">
               {/* Status icon */}
               <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center mt-0.5">
                 {status === "done" && (
@@ -311,7 +311,7 @@ export const LaunchProgress: FC<LaunchProgressProps> = ({ state, onReset, onRetr
 
       {/* Error state */}
       {state.error && (
-        <div className="mt-5 border border-[var(--short)]/20 bg-[var(--short)]/[0.04] p-4">
+        <div data-testid="wizard-error" className="mt-5 border border-[var(--short)]/20 bg-[var(--short)]/[0.04] p-4">
           <p className="text-[11px] text-[var(--short)]">{state.error}</p>
           {/* The degraded-path reason survives into the error panel. A launch
               that fell back AND then failed is the exact report worth filing,
@@ -325,14 +325,16 @@ export const LaunchProgress: FC<LaunchProgressProps> = ({ state, onReset, onRetr
               <button
                 type="button"
                 onClick={onRetry}
+                data-testid="wizard-retry"
                 className="border border-[var(--short)]/30 bg-[var(--short)]/[0.08] px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--short)] hover:bg-[var(--short)]/[0.15] transition-colors min-h-[44px]"
               >
-                Retry Step {state.step + 1}
+                Continue
               </button>
             )}
             <button
               type="button"
               onClick={onReset}
+              data-testid="wizard-reset"
               className="border border-[var(--border)] bg-transparent px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-secondary)] transition-all hover:border-[var(--accent)]/30 hover:text-[var(--text)] min-h-[44px]"
             >
               Start Over
@@ -351,7 +353,7 @@ export const LaunchProgress: FC<LaunchProgressProps> = ({ state, onReset, onRetr
             Recovery
           </p>
           <p className="text-[11px] text-[var(--text-secondary)] mb-3">
-            The slab is on chain. If anything stalls, you can recover via the
+            The market account is on chain. If anything stalls, you can recover via the
             in-UI banner on the next /create visit, or download this JSON to
             run the close-market script offline.
           </p>

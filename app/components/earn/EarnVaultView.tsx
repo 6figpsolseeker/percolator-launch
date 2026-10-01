@@ -6,7 +6,10 @@ import { useEarnStats } from '@/hooks/useEarnStats';
 import { ShimmerSkeleton } from '@/components/ui/ShimmerSkeleton';
 import { VaultGrid } from '@/components/earn/VaultGrid';
 import { VaultDepositRail } from '@/components/earn/VaultDepositRail';
+import { useEarnPositions } from '@/hooks/useEarnPositions';
 import { formatCompact } from '@/lib/formatters';
+import { limitsFlags } from '@/lib/limits/flags';
+import { COPY } from '@/lib/limits/copy';
 
 const EarnHeader = dynamic(
   () => import('@/components/earn/EarnHeader').then((m) => m.EarnHeader),
@@ -57,6 +60,11 @@ export function EarnVaultView() {
     setUserDeposits((prev) => (prev[slab] === usd ? prev : { ...prev, [slab]: usd }));
   }, []);
 
+  // Every row's deposit from chain (wallet LP ATA + pending escrow, incl. a creator's wizard seed),
+  // not only the row bound to the rail; the rail's own resolved value wins for the selected row.
+  const chainDeposits = useEarnPositions(stats.markets);
+  const tableDeposits = useMemo(() => ({ ...chainDeposits, ...userDeposits }), [chainDeposits, userDeposits]);
+
   return (
     <div className="animate-fade-in">
       {/* Compact header + stats strip */}
@@ -81,7 +89,7 @@ export function EarnVaultView() {
               error={error}
               selectedSlab={selectedSlab}
               onSelect={setSelectedSlab}
-              userDeposits={userDeposits}
+              userDeposits={tableDeposits}
             />
           </div>
 
@@ -104,6 +112,8 @@ export function EarnVaultView() {
       {showError && (
         <div
           role="alert"
+          data-testid="earn-error"
+          data-kind="stats"
           className="fixed bottom-4 right-4 z-50 flex items-start gap-3 rounded-sm border border-[var(--short)]/30 bg-[var(--short)]/10 px-4 py-3 text-[12px] text-[var(--short)]"
         >
           <span>{error}</span>
@@ -132,8 +142,8 @@ function EarnInfoStrip({ totalInsurance }: { totalInsurance: number }) {
         </h3>
         <ol className="space-y-2">
           <MiniStep num={1} title="Deposit" desc="Provide sim-USDC as counterparty backing" />
-          <MiniStep num={2} title="Earn fees" desc="Every trade on that market generates LP fees" />
-          <MiniStep num={3} title="Withdraw" desc="Redeem LP tokens for your share after cooldown" />
+          <MiniStep num={2} title="Earn fees" desc="Every trade on that market pays a fee share into the vault" />
+          <MiniStep num={3} title="Withdraw" desc="Request a withdrawal; it pays out after a short wait" />
         </ol>
       </div>
 
@@ -150,7 +160,7 @@ function EarnInfoStrip({ totalInsurance }: { totalInsurance: number }) {
         </div>
         <ul className="space-y-1 text-[11px] text-[var(--text-secondary)]">
           <li>· Absorbs liquidation shortfalls</li>
-          <li>· Buffers socialized losses before LPs</li>
+          <li>· Covers losses before they reach Earn deposits</li>
           <li>· Backstops protocol solvency</li>
         </ul>
       </div>
@@ -159,8 +169,9 @@ function EarnInfoStrip({ totalInsurance }: { totalInsurance: number }) {
       <div className="border border-[var(--border)] bg-[var(--panel-bg)] p-4 hud-corners">
         <div className="mb-2 text-[10px] uppercase tracking-[0.15em] text-[var(--warning)]">⚠ Risk Notice</div>
         <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
-          LP deposits are exposed to trader PnL — when traders win, LPs may see drawdowns. The
-          insurance fund provides a buffer. Only deposit what you can afford to lose.
+          {limitsFlags().p3
+            ? COPY.howLossesWork
+            : "Earn deposits are exposed to trader profit and loss: when traders win, the vault can go down. The insurance fund provides a buffer. Only deposit what you can afford to lose."}
         </p>
       </div>
     </div>

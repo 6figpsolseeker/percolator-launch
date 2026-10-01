@@ -46,7 +46,7 @@ export const FundingExplainerModal: FC<FundingExplainerModalProps> = ({ onClose 
             <h3 className="mb-2 text-sm font-bold text-[var(--text)]">Why do they exist?</h3>
             <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
               Unlike traditional futures, perpetual contracts have no expiration date. Without funding rates,
-              traders could hold unbalanced positions indefinitely, creating risk for the exchange and liquidity providers.
+              traders could hold unbalanced positions indefinitely, creating risk for the exchange and the market's liquidity.
             </p>
             <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
               Funding rates create an economic incentive to balance the market:
@@ -69,23 +69,23 @@ export const FundingExplainerModal: FC<FundingExplainerModalProps> = ({ onClose 
               Percolator's Inventory-Based Funding
             </h3>
             <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
-              Percolator uses a unique <strong>inventory-based funding mechanism</strong> to protect liquidity providers (LPs).
+              Percolator uses a unique <strong>inventory-based funding mechanism</strong> to protect the market's liquidity.
             </p>
             <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
-              When traders open positions, LPs take the opposite side. If too many traders go long, LPs are forced short
-              and exposed to price risk. Funding rates compensate LPs for this inventory risk.
+              When traders open positions, the market takes the opposite side. If too many traders go long, the market is
+              short and exposed to price risk. Funding rates compensate it for this risk.
             </p>
             <div className="mt-3 space-y-2">
               <div className="flex items-start gap-2 text-sm">
                 <span className="font-mono text-[var(--text-dim)]">1.</span>
                 <span className="text-[var(--text-secondary)]">
-                  <strong>LP net long</strong> (traders net short) → negative funding → shorts pay longs
+                  <strong>Traders net short</strong> → negative funding → shorts pay longs
                 </span>
               </div>
               <div className="flex items-start gap-2 text-sm">
                 <span className="font-mono text-[var(--text-dim)]">2.</span>
                 <span className="text-[var(--text-secondary)]">
-                  <strong>LP net short</strong> (traders net long) → positive funding → longs pay shorts
+                  <strong>Traders net long</strong> → positive funding → longs pay shorts
                 </span>
               </div>
               <div className="flex items-start gap-2 text-sm">
@@ -131,7 +131,7 @@ export const FundingExplainerModal: FC<FundingExplainerModalProps> = ({ onClose 
             <ul className="mt-2 space-y-1 text-sm text-[var(--text-secondary)]">
               <li className="flex items-start gap-2">
                 <span className="text-[var(--accent)]">•</span>
-                <span><strong>LP net position</strong> (inventory imbalance)</span>
+                <span><strong>Market net position</strong> (the imbalance)</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-[var(--accent)]">•</span>
@@ -143,7 +143,7 @@ export const FundingExplainerModal: FC<FundingExplainerModalProps> = ({ onClose 
               </li>
             </ul>
             <p className="mt-3 text-xs text-[var(--text-dim)] font-mono">
-              Rate = (notional / scale) × k × sign(LP position)
+              Rate = (notional / scale) × k × sign(market position)
             </p>
             <p className="mt-1 text-xs text-[var(--text-dim)]">
               Capped at maximum rates to prevent extreme scenarios.

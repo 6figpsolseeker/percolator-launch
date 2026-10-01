@@ -4,6 +4,7 @@ import { Redis } from "@upstash/redis";
 import { Ratelimit } from "@upstash/ratelimit";
 import { BLOCKED_SLAB_ADDRESSES } from "@/lib/blocklist";
 import { getClientIp } from "@/lib/get-client-ip";
+import { isPlaygroundGateHost } from "@/lib/playground-hosts";
 
 // ── Rate limiter configuration ───────────────────────────────────────────────
 // Two tiers: RPC proxy gets a higher limit since Solana web3.js generates many calls per page load.
@@ -284,6 +285,15 @@ function isAllowedOnWaitlistHost(pathname: string): boolean {
   return false;
 }
 
+function isPlaygroundSurface(pathname: string): boolean {
+  return (
+    pathname === "/playground" ||
+    pathname.startsWith("/playground/") ||
+    pathname === "/api/playground" ||
+    pathname.startsWith("/api/playground/")
+  );
+}
+
 export async function middleware(request: NextRequest) {
   // ── Hostname routing ───────────────────────────────────────────────────────
   const host = (request.headers.get("host") ?? "").toLowerCase().split(":")[0];
@@ -312,6 +322,14 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url, { status: 302 });
     }
     // Allowed path on waitlist host — fall through to existing middleware logic
+  }
+
+  // ── Playground gate surfaces exist only where the waitlist lives ──────────
+  // The mainnet app (percolator-mainnet) builds from this same branch; it must
+  // not grow a /playground page or /api/playground/* endpoints. 404 exactly as
+  // if they had never been added.
+  if (isPlaygroundSurface(request.nextUrl.pathname) && !isPlaygroundGateHost(host)) {
+    return new NextResponse("Not Found", { status: 404 });
   }
 
   // ── Mainnet beta: block pages not available yet ────────────────────────────

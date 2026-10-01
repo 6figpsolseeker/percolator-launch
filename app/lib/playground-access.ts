@@ -165,3 +165,60 @@ export function accessSecret(env: NodeJS.ProcessEnv = process.env): string | nul
   const s = env.PLAYGROUND_ACCESS_SECRET;
   return typeof s === "string" && s.length >= 32 ? s : null;
 }
+
+// ── Launch switch + where the app lives ─────────────────────────────────────
+//
+// Both are SERVER-ONLY environment variables (never NEXT_PUBLIC_). The
+// playground's address is emitted by exactly one place — the Location header of
+// /api/playground/enter, after a fresh server-side grant — so it never appears
+// in a client bundle or in markup served to someone who has not been admitted.
+
+/** Default deployment of the devnet v2 app (Vercel project percolator-playground). */
+const DEFAULT_PLAYGROUND_APP_URL = "https://percolator-playground.vercel.app";
+
+/** Path on the playground app that exchanges a handoff token for a session. */
+export const ENTER_PATH = "/enter";
+
+/** Query parameter that carries the handoff token to ENTER_PATH. */
+export const HANDOFF_PARAM = "t";
+
+/**
+ * Whether entry is open. Only the exact string "true" opens it: "1", "yes",
+ * " true", an empty value and an unset variable all keep the door shut, so a
+ * typo fails closed rather than open.
+ */
+export function playgroundOpen(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PLAYGROUND_OPEN === "true";
+}
+
+/**
+ * Origin of the playground app, or null when PLAYGROUND_APP_URL is set to
+ * something unusable. Unset means the default deployment. Anything that is not
+ * an https origin (http is tolerated for localhost only, for local testing) is
+ * refused rather than "fixed": redirecting a freshly minted token to a mistyped
+ * host would hand it to whoever owns that host.
+ */
+export function playgroundAppUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.PLAYGROUND_APP_URL?.trim();
+  if (!raw) return DEFAULT_PLAYGROUND_APP_URL;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  const local = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) return null;
+  if (u.username || u.password) return null;
+  // Origin only: a path, query or fragment in the variable is a configuration
+  // mistake, and silently keeping it would put the token somewhere unexpected.
+  if ((u.pathname !== "/" && u.pathname !== "") || u.search || u.hash) return null;
+  return u.origin;
+}
+
+/** `${origin}/enter?t=<token>` — the only URL a handoff token is ever sent to. */
+export function playgroundEntryUrl(origin: string, token: string): string {
+  const u = new URL(ENTER_PATH, origin);
+  u.searchParams.set(HANDOFF_PARAM, token);
+  return u.toString();
+}

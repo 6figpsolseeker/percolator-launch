@@ -386,21 +386,10 @@ function TradePageInner({ slab }: { slab: string }) {
                 <p className="mt-2 text-[11px] text-[var(--text-secondary)] leading-relaxed">
                   This market hasn&apos;t been deployed to mainnet yet. It may be in devnet testing or pending launch.
                 </p>
-                <p className="mt-3 text-[10px] text-[var(--text-dim)]">
-                  Try switching to <span className="text-[var(--accent)] font-medium">Devnet</span> to trade this market now.
-                </p>
                 <div className="mt-4 flex flex-col gap-2">
-                  <button
-                    onClick={() => {
-                      if (typeof window !== "undefined") {
-                        localStorage.setItem("percolator-network", "devnet");
-                        window.location.reload();
-                      }
-                    }}
-                    className="w-full border border-[var(--accent)]/40 bg-[var(--accent)]/5 px-4 py-2 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent)]/10 transition-colors duration-150"
-                  >
-                    Switch to Devnet &amp; Retry
-                  </button>
+                  {/* GH#2704: no "Switch to Devnet" here either. getNetwork() returns "mainnet" on a
+                      mainnet build before it reads the override, so the button only reloaded
+                      this same screen. */}
                   <a
                     href="/markets"
                     className="w-full border border-[var(--border)] px-4 py-2 text-[11px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--text)] transition-colors duration-150"

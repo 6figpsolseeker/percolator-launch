@@ -5,6 +5,8 @@
  * via the placeholder allowlist, and assertCanonicalMatcher refuses every trade.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
 import { getNetwork, getConfig } from "@/lib/config";
 import { assertCanonicalMatcher } from "@/lib/programAllowlist";
 
@@ -43,5 +45,19 @@ describe("GH#2704: deployment network pins getNetwork()", () => {
   it("unset deployment with no override fails closed to mainnet", () => {
     vi.stubEnv("NEXT_PUBLIC_DEFAULT_NETWORK", undefined as unknown as string);
     expect(getNetwork()).toBe("mainnet");
+  });
+});
+
+// Both deployments pin the network, so a button that writes the override and reloads only lands on
+// the same screen: "Switch to Mainnet" on devnet, and "Switch to Devnet & Retry" on mainnet.
+describe("GH#2704: the trade page offers no network switch the build would ignore", () => {
+  const src = fs.readFileSync(path.resolve(__dirname, "../../app/trade/[slab]/page.tsx"), "utf8");
+
+  it("never writes the network override", () => {
+    expect(src).not.toMatch(/localStorage\.setItem\(\s*"percolator-network"/);
+  });
+
+  it("has no Switch to Mainnet / Switch to Devnet button", () => {
+    expect(src).not.toMatch(/>\s*Switch to (Mainnet|Devnet)/);
   });
 });

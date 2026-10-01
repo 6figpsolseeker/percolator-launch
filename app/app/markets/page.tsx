@@ -954,7 +954,7 @@ function MarketsPageInner() {
                   <div className="text-right">price</div>
                   <div className="hidden sm:block text-right">OI</div>
                   <div className="hidden sm:block text-right">vol</div>
-                  <div className="hidden sm:block text-right">liquidity</div>
+                  <div className="hidden sm:block text-right" title="All collateral this market holds: LP capital, trader margin and insurance. Market LP on the trade page is the LP's part.">vault</div>
                   <div className="text-right"><span className="sm:hidden">lev</span><span className="hidden sm:inline">max lev</span></div>
                   <div className="text-right">health</div>
                 </div>
@@ -1050,17 +1050,15 @@ function MarketsPageInner() {
                         const v = m.supabase?.total_open_interest ?? ((m.supabase?.open_interest_long ?? 0) + (m.supabase?.open_interest_short ?? 0));
                         return isSentinelNum(v) ? 0n : numericToBigInt(v);
                       })();
-                  // "Market LP" — the LP-vault collateral that actually backs trades on this
-                  // market, NOT the (separately admin-managed) insurance fund. Same
-                  // "prefer vault_balance, fall back to c_tot" precedent already used for the
-                  // oracle-down guard above (m.supabase?.vault_balance / c_tot, ~line 945) —
-                  // vault_balance is the external LP-vault account's balance; c_tot (total
-                  // on-chain collateral across all accounts) is the best available proxy for
-                  // markets that store collateral in-slab instead (e.g. FF7K keeper markets,
-                  // see lib/activeMarketFilter.ts). On-chain v12 path uses engine.vault, the
-                  // same field SystemCapitalCard.tsx labels "Total collateral deposited in
-                  // this market's vault".
-                  const marketLpTokensRaw = m.onChain && !m.onChain.configV17
+                  // "vault" — ALL collateral the market holds (LP capital, trader margin and
+                  // insurance together), NOT the LP's depth. /api/markets fills vault_balance
+                  // from the engine vault in the market-group header; the LP-only figure the
+                  // trade page shows as "Market LP" needs a program-wide portfolio scan, which
+                  // the list route deliberately does not run. Same "prefer vault_balance, fall
+                  // back to c_tot" precedent as the oracle-down guard above. On-chain v12 path
+                  // uses engine.vault, which SystemCapitalCard.tsx labels "Total collateral
+                  // deposited in this market's vault".
+                  const vaultTokensRaw = m.onChain && !m.onChain.configV17
                     ? sanitizeOnChainValue(m.onChain.engine.vault || m.onChain.engine.cTot)
                     : (() => {
                         const v = m.supabase?.vault_balance ?? m.supabase?.c_tot ?? 0;
@@ -1081,9 +1079,9 @@ function MarketsPageInner() {
                   // already a USD amount, so it is NEVER multiplied by the token price (unlike
                   // OI, which is a base-token quantity). Divide by the collateral decimals,
                   // independent of the market's base-token decimals or the USD/token toggle.
-                  const marketLpVal = Math.round((Number(marketLpTokensRaw) / 1e6) * 100) / 100;
-                  const marketLpDisplay = marketLpTokensRaw === 0n ? "—"
-                    : marketLpVal > 0 ? formatNum(marketLpVal) : "—";
+                  const vaultVal = Math.round((Number(vaultTokensRaw) / 1e6) * 100) / 100;
+                  const vaultDisplay = vaultTokensRaw === 0n ? "—"
+                    : vaultVal > 0 ? formatNum(vaultVal) : "—";
                   const volumeDisplay = volume24hRaw != null && volume24hRaw > 0n
                     ? (showUsd && lastPrice != null
                         ? (() => {
@@ -1195,7 +1193,7 @@ function MarketsPageInner() {
                       <div className="hidden sm:block text-right text-sm text-[var(--text-secondary)] truncate tabular-nums" style={{ fontFamily: "var(--font-jetbrains-mono)", fontVariantNumeric: "tabular-nums" }}>
                         {volumeDisplay ?? "\u2014"}
                       </div>
-                      <div className="hidden sm:block text-right text-sm text-[var(--text)] truncate tabular-nums" style={{ fontFamily: "var(--font-jetbrains-mono)", fontVariantNumeric: "tabular-nums" }}>{marketLpDisplay}</div>
+                      <div className="hidden sm:block text-right text-sm text-[var(--text)] truncate tabular-nums" style={{ fontFamily: "var(--font-jetbrains-mono)", fontVariantNumeric: "tabular-nums" }} title="All collateral this market holds: LP capital, trader margin and insurance. Market LP on the trade page is the LP's part.">{vaultDisplay}</div>
                       <div className="text-right text-sm text-[var(--text-secondary)] tabular-nums" style={{ fontVariantNumeric: "tabular-nums" }}>{m.maxLeverage}x</div>
                       <div className="text-right"><HealthBadge level={effectiveHealth.level} /></div>
                       </div>

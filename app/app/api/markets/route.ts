@@ -1211,10 +1211,10 @@ export async function GET(request: NextRequest) {
     // batched getMultipleAccountsInfo as price and OI. That scan existed only
     // because the Supabase view had NULL vault_balance for every v17 market
     // (GH#2334) — it walked the entire program on every list request to
-    // reconstruct one number per market. In this route vault_balance is only a
-    // liveness / phantom-OI guard, never a rendered column, and the engine vault
-    // from the market-group header is the value those guards were written
-    // against. The trade-page detail view (/api/markets/[slab]) keeps its own
+    // reconstruct one number per market. In this route vault_balance is a
+    // liveness / phantom-OI guard, and the engine vault from the market-group
+    // header is the value those guards were written against. /markets renders it
+    // as the "vault" column (all collateral the market holds), not as LP depth. The trade-page detail view (/api/markets/[slab]) keeps its own
     // single-market LP-portfolio lookup, which is a different figure.
 
     return NextResponse.json({ total: sorted.length, activeTotal, marketsWithPrice, zombieCount, markets: limited }, {

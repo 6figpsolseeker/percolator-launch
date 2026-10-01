@@ -42,7 +42,7 @@ import { computeNotionalNative } from "@/lib/notional";
 import { availableLeverage as availableLeverageFor, nextLeverageInputState, clampSliderLeverage, LEVERAGE_STEP } from "@/lib/leverage-control";
 import { useTrade, prewarmTradeSubmission } from "@/hooks/useTrade";
 import { useFirstTrade } from "@/hooks/useFirstTrade";
-import { FIRST_TRADE_COPY, FirstTradeDepositError, firstTradeDepositAtoms } from "@/lib/first-trade";
+import { FIRST_TRADE_COPY, FirstTradeDepositError, firstTradeDepositAtoms, tradableMarginAtoms } from "@/lib/first-trade";
 import { useMarketFillCap } from "@/hooks/useMarketFillCap";
 import { remainingSideCapacityQ, UNLIMITED_CAPACITY } from "@/lib/marketCapacity";
 import { isBlockedSlab } from "@/lib/blocklist";
@@ -453,13 +453,25 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
   const lockedMargin = computePositionInitialMargin(existingPositionSize, existingEntryPriceE6, initialMarginBps);
   const availableBalance = userAccount ? (capital > lockedMargin ? capital - lockedMargin : 0n) : 0n;
   const effectiveBalance = userAccount ? availableBalance : (walletAtaBalance ?? 0n);
+  // What the ticket can OFFER: in-market available plus what the wallet can deposit in the same
+  // approval (fund-and-trade), net of the deposit buffer and fee. `effectiveBalance` stays the
+  // in-market figure that decides whether a deposit is bundled at all.
+  const tradableBalance = mockMode
+    ? effectiveBalance
+    : tradableMarginAtoms({
+        inMarketAvailable: userAccount ? availableBalance : 0n,
+        walletAtoms: walletAtaBalance ?? 0n,
+        leverage100: leverage * 100,
+        feeBps: tradingFeeBps,
+        decimals,
+      });
   // Buying power: how large a position (in collateral notional) the user could
   // open at the current max leverage with their full AVAILABLE (not total)
   // balance — capital already locked by an open position can't back a
   // second one too.
   // Fractional-safe: maxLeverage can be 6.66, so scale by 100 rather than
   // Math.round (which would overshoot to 7x and make "Max" size a rejected order).
-  const buyingPower = (effectiveBalance * BigInt(Math.max(100, Math.round(maxLeverage * 100)))) / 100n;
+  const buyingPower = (tradableBalance * BigInt(Math.max(100, Math.round(maxLeverage * 100)))) / 100n;
 
   useEffect(() => {
     if (!publicKey || !mktConfig?.collateralMint || mockMode) {
@@ -590,8 +602,8 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
 
   const setSizePercent = useCallback(
     (pct: number) => {
-      if (effectiveBalance <= 0n) return;
-      let marginAmount = (effectiveBalance * BigInt(pct)) / 100n;
+      if (tradableBalance <= 0n) return;
+      let marginAmount = (tradableBalance * BigInt(pct)) / 100n;
       if (marginAmount === 0n && pct > 0) marginAmount = 1n;
       const marginStr = formatTokenAmount(marginAmount, decimals);
       setMarginInput(marginStr);
@@ -602,7 +614,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
         setSizeInput(truncateToDecimals(nextSize, sizeUnit === "token" ? 6 : 2));
       }
     },
-    [effectiveBalance, decimals, leverage, priceUsd, sizeUnit],
+    [tradableBalance, decimals, leverage, priceUsd, sizeUnit],
   );
 
   const marginNative = marginInput ? parsePercToNative(marginInput, decimals) : 0n;
@@ -775,7 +787,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
   };
   // The Max the trader sees (and the Max chip fills): the market's cap or what the balance can
   // margin at this leverage, whichever is smaller, in the input's unit.
-  const displayMaxQ = oneMaxQ([marketMaxQ, balanceMaxQ(effectiveBalance, leverage, livePriceE6)]);
+  const displayMaxQ = oneMaxQ([marketMaxQ, balanceMaxQ(tradableBalance, leverage, livePriceE6)]);
 
   // Row 9 (AUTO): over the max, the size is reduced to it and the helper says so for 4 s.
   const clampTarget = marketMaxQ !== null && marketMaxQ > 0n && positionSize > marketMaxQ ? marketMaxQ : null;
@@ -1349,7 +1361,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
           >
             <span data-testid="ticket-available">
               <span className="text-[var(--text-secondary)]">Available </span>
-              <span className="text-[var(--text)]">{formatTokenAmount(effectiveBalance, decimals, 2)}</span>
+              <span className="text-[var(--text)]">{formatTokenAmount(tradableBalance, decimals, 2)}</span>
               <span className="text-[var(--text-secondary)]"> {collateralSymbol}</span>
             </span>
             {maxLabel && (

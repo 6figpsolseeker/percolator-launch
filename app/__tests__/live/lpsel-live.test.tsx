@@ -115,7 +115,8 @@ describe.skipIf(!RPC)("LIVE: app hooks trade from a fresh non-creator wallet", (
           try {
             await act(async () => {
               const r = await result.current.cl.closePosition(100);
-              LOG(`[${name}] CLOSE ok sig=${r.signature}`);
+              await new Promise((r) => setTimeout(r, 12_000)); // sweep (close -> wallet) runs in the background
+      LOG(`[${name}] CLOSE ok sig=${r.signature}`);
             });
             done = true;
           } catch (e) {

@@ -54,6 +54,36 @@ export function firstTradeDepositAtoms(marginAtoms: bigint, feeAtoms: bigint, de
   return ((buffered + cent - 1n) / cent) * cent;
 }
 
+/**
+ * The largest margin a ticket can offer when the wallet can top the account up in the same
+ * approval (UX WP-6 fund-and-trade). Live report 2026-10-01 (Squid): with an account on the
+ * market, "Available" and 25/50/75/Max counted ONLY the in-market capital, so a trader with
+ * plenty of sim-USDC in the wallet looked capped at their old deposit.
+ *
+ * Max M satisfies firstTradeDepositAtoms(M - A, fee(M)) <= W, with fee(M) = M * lev * feeBps:
+ *   1.1 * (M - A + M*k) <= W - cent   =>   M <= ((W - cent) / 1.1 + A) / (1 + k),
+ * k = leverage100 * feeBps / 1e6. Never less than A (in-market capital alone needs no deposit).
+ */
+export function tradableMarginAtoms(p: {
+  inMarketAvailable: bigint;
+  walletAtoms: bigint;
+  leverage100: number;
+  feeBps: bigint;
+  decimals?: number;
+}): bigint {
+  const A = p.inMarketAvailable > 0n ? p.inMarketAvailable : 0n;
+  const decimals = p.decimals ?? 6;
+  const cent = decimals >= 2 ? 10n ** BigInt(decimals - 2) : 1n;
+  const W = p.walletAtoms - cent;
+  if (W <= 0n) return A;
+  const lev100 = BigInt(Math.max(100, Math.round(p.leverage100)));
+  const fee = p.feeBps > 0n ? p.feeBps : 0n;
+  const num = ((W * 100n) / 110n + A) * 1_000_000n;
+  const den = 1_000_000n + lev100 * fee;
+  const m = num / den;
+  return m > A ? m : A;
+}
+
 /** B landed against a portfolio id someone else took first (the race: rebuild B, one more prompt). */
 export function isPortfolioIdRace(err: unknown): boolean {
   const r = err as { code?: unknown; message?: unknown } | null;

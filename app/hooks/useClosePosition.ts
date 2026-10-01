@@ -33,6 +33,10 @@ import { closeViaRebalanceReduce } from "@/lib/limits/rebalance-close";
 import { isReduceOnlyLock21 } from "@/lib/limits/reduce-only-fallback";
 import { pythCrankAccount } from "@/lib/limits/oracle-tail";
 import { findV17Portfolio } from "@/hooks/useTrade";
+import { useWithdraw } from "@/hooks/useWithdraw";
+import { readSweepableCapital, SWEEP_COPY } from "@/lib/close-sweep";
+import { useOptionalToast } from "@/hooks/useToast";
+import { formatTokenAmount } from "@/lib/format";
 
 /** M-3: the leg is a prior-reset obligation (owns 0 effective quantity). */
 export const COPY_RESET_LEG =
@@ -141,6 +145,8 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
   const { publicKey } = wallet;
   const userAccount = useUserAccount();
   const { trade } = useTrade(slabAddress);
+  const { withdraw } = useWithdraw(slabAddress);
+  const toast = useOptionalToast();
   const { accounts, raw, programId, config: slabConfig, wrapperConfigV17 } = useSlabState();
   const mockMode = isMockMode() && isMockSlab(slabAddress);
   // P0b: live v18 health refines 19/21 on a failed close (lib/market-error.ts).
@@ -495,6 +501,28 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
         // all and can't drift. usePortfolio subscribes and runs its reconcile
         // burst (PORTFOLIO_RECONCILE_MS). See lib/portfolio-invalidation.ts.
         invalidatePortfolio();
+        // Full close: hand the freed collateral back to the wallet (one more approval), in the
+        // BACKGROUND so the close resolves now. Never turns a landed close into a failure.
+        if (closePercent === 100 && outcome === "closed" && isV17Market && programId && publicKey) {
+          const owner = publicKey;
+          const decimals = 6; // playground collateral is sim-USDC (6 decimals) on every market
+          void (async () => {
+            const amount = await readSweepableCapital({
+              owner,
+              read: () => readFreshPortfolioData(connection, programId, slabAddress, owner),
+            }).catch(() => null);
+            if (amount === null) return;
+            const label = `${formatTokenAmount(amount, decimals, 2)} USDC`;
+            toast(SWEEP_COPY.prompt(label), "info");
+            try {
+              await withdraw({ userIdx: userAccount.idx, amount });
+              toast(SWEEP_COPY.done(label), "success");
+            } catch {
+              toast(SWEEP_COPY.kept(label), "info");
+            }
+            invalidatePortfolio();
+          })();
+        }
         return { signature: sig ?? null, fill };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -540,7 +568,7 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
         setLoading(false);
       }
     },
-    [connection, publicKey, wallet, userAccount, trade, lpIdx, slabAddress, mockMode, isV17Market, programId, marketHealth, raw, slabConfig, wrapperConfigV17],
+    [connection, publicKey, wallet, userAccount, trade, withdraw, toast, lpIdx, slabAddress, mockMode, isV17Market, programId, marketHealth, raw, slabConfig, wrapperConfigV17],
   );
 
   const prewarmClose = useCallback(() => {

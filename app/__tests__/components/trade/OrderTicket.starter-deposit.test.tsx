@@ -163,6 +163,22 @@ describe("first trade, one approval", () => {
     expect(mocks.fund.mock.calls[0][0]).toMatchObject({ depositAtoms: 4_420_000n });
   });
 
+  it("Squid 2026-10-01: a returning user's Available and Max count the wallet, not just the old deposit", async () => {
+    mocks.useUserAccount.mockReturnValue({ account: { capital: 1_000_000n, positionSize: 0n, entryPrice: 0n, pnl: 0n }, idx: 3 });
+    render(<OrderTicket slabAddress={SLAB} />);
+    await waitFor(() => expect(screen.getByTestId("ticket-available").textContent).not.toMatch(/Available 1\.00 /));
+    const avail = Number(screen.getByTestId("ticket-available").textContent!.replace(/[^0-9.]/g, ""));
+    expect(avail).toBeGreaterThan(10); // 1 in-market + ~10.8 depositable from a 12 USDC wallet
+    expect(avail).toBeLessThan(12);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /^max$/i })));
+    expect(submit().textContent).toMatch(/^Deposit [0-9.]+ USDC & Long$/);
+    expect(submit().disabled).toBe(false);
+    await place();
+    const dep = mocks.fund.mock.calls[0][0].depositAtoms as bigint;
+    expect(dep).toBeGreaterThan(9_000_000n);
+    expect(dep).toBeLessThanOrEqual(12_000_000n);
+  });
+
   it("CONTROL: nothing in the wallet — the ticket stays locked behind 'Get Tokens to Trade'", async () => {
     wallet("0");
     render(<OrderTicket slabAddress={SLAB} />);

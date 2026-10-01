@@ -59,3 +59,10 @@ export function useToastContext() {
   if (!ctx) throw new Error("useToastContext must be used within ToastProvider");
   return ctx;
 }
+
+/** The toast function, or a no-op outside a ToastProvider (hooks used in tests / isolated trees). */
+export function useOptionalToast(): ToastContextValue["toast"] {
+  const ctx = useContext(ToastContext);
+  return ctx?.toast ?? noopToast;
+}
+const noopToast: ToastContextValue["toast"] = () => {};

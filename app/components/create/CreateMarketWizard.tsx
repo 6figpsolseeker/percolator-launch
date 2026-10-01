@@ -8,6 +8,7 @@ import { FC, useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { PublicKey } from "@solana/web3.js";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
+import { useSolBalance } from "@/hooks/useSolBalance";
 import {
   useCreateMarket,
   DEFAULT_SLAB_SIZE,
@@ -264,20 +265,9 @@ export const CreateMarketWizard: FC<{ initialMint?: string }> = ({ initialMint }
     return false;
   });
 
-  // SOL balance for the Control Room's launch gate.
-  // In mock mode (?mock=1), force a funded-looking value (8.5 SOL) so
-  // captures don't show "Insufficient SOL" regardless of the connected
-  // wallet's real balance.
-  const [solBalance, setSolBalance] = useState<number | null>(null);
-  useEffect(() => {
-    if (isMockMode()) { setSolBalance(8.5); return; }
-    if (!publicKey || !connection) { setSolBalance(null); return; }
-    let cancelled = false;
-    connection.getBalance(publicKey).then((lamports) => {
-      if (!cancelled) setSolBalance(lamports / 1_000_000_000);
-    }).catch(() => { if (!cancelled) setSolBalance(null); });
-    return () => { cancelled = true; };
-  }, [publicKey, connection]);
+  // SOL balance for the Control Room's launch gate, kept current while the wizard is open (a
+  // faucet airdrop used to leave the gate at "Need ~N SOL" until a reload). Mock mode: 8.5 SOL.
+  const solBalance = useSolBalance(publicKey, connection);
 
   // Once a launch has started (or failed, with Retry pending), Retry resumes the
   // same market: InitMarket already fixed margin, fee and price on chain, and

@@ -30,6 +30,8 @@ vi.mock("@/lib/tx", () => ({
 }));
 
 vi.mock("@/lib/errorMessages", () => ({
+  UserFacingError: class UserFacingError extends Error {},
+  userFacingMessage: () => null,
   humanizeError: vi.fn((msg) => msg),
 }));
 

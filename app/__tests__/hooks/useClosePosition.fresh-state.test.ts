@@ -60,6 +60,8 @@ vi.mock("@/lib/portfolio-invalidation", () => ({
 }));
 
 vi.mock("@/lib/errorMessages", () => ({
+  UserFacingError: class UserFacingError extends Error {},
+  userFacingMessage: () => null,
   humanizeError: (message: string) => message,
   withTransientRetry: async (
     operation: () => Promise<unknown>,

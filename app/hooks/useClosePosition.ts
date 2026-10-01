@@ -14,7 +14,7 @@ import { effectiveLeg } from "@/lib/limits/effective-quantity";
 import { isPartialLegSendError } from "@/lib/trade-leg-groups";
 import { getLivePriceSnapshot } from "@/lib/priceStore/priceStore";
 import { useSlabState } from "@/components/providers/SlabProvider";
-import { humanizeError, withTransientRetry } from "@/lib/errorMessages";
+import { humanizeError, UserFacingError, userFacingMessage, withTransientRetry } from "@/lib/errorMessages";
 import { getMatcherCaps, getMatcherInventory } from "@/lib/matcherCaps";
 import { remainingSideCapacityQ, wouldExceedInventoryCap } from "@/lib/marketCapacity";
 import { chunkCloseSize } from "@/lib/closeChunks";
@@ -265,7 +265,7 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
           cause,
         );
 
-        throw new Error(
+        throw new UserFacingError(
           "Could not verify current on-chain position. Please try again.",
         );
       }
@@ -292,14 +292,14 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
           cause,
         );
 
-        throw new Error(
+        throw new UserFacingError(
           "Could not verify current on-chain position. Please try again.",
         );
       }
     }
 
     if (freshPositionSize === null) {
-      throw new Error(
+      throw new UserFacingError(
         "Could not verify current on-chain position. Please try again.",
       );
     }
@@ -358,7 +358,7 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
         // short-circuit here so the user sees the real reason immediately.
         const { priceE6: livePriceE6 } = getLivePriceSnapshot(slabAddress);
         if (livePriceE6 == null) {
-          throw new Error(
+          throw new UserFacingError(
             "Live mark price unavailable — wait for the price feed to reconnect, then try again.",
           );
         }
@@ -393,7 +393,7 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
                 if (wouldExceedInventoryCap(inv, caps.maxInventoryAbs, side, sizeAbs)) {
                   const capacity = remainingSideCapacityQ(inv, caps.maxInventoryAbs, side);
                   const pct = sizeAbs > 0n ? Number((capacity * 100n) / sizeAbs) : 0;
-                  throw new Error(
+                  throw new UserFacingError(
                     `The market can only absorb ${pct}% of this close right now — its liquidity ` +
                       `provider is at its exposure cap on your side. Close up to ${Math.max(pct, 0)}% ` +
                       `now, or wait for other trades to free capacity.`,
@@ -512,7 +512,7 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
           throw e;
         }
         console.error("[useClosePosition] error:", msg);
-        setError(safeExplainMarketTxError(msg, "close", marketHealth) ?? humanizeError(msg, "trade"));
+        setError(userFacingMessage(e) ?? safeExplainMarketTxError(msg, "close", marketHealth) ?? humanizeError(msg, "trade"));
         // #2643: refine an ambiguous Custom(9) from pre-trade state (no-op for
         // any other error). The generic text above shows immediately.
         if (programId) {

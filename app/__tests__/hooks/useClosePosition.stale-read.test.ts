@@ -64,6 +64,8 @@ vi.mock("@/lib/priceStore/priceStore", () => ({
 vi.mock("@/lib/mock-mode", () => ({ isMockMode: () => false }));
 vi.mock("@/lib/mock-trade-data", () => ({ isMockSlab: () => false }));
 vi.mock("@/lib/errorMessages", () => ({
+  UserFacingError: class UserFacingError extends Error {},
+  userFacingMessage: () => null,
   humanizeError: (m: string) => m,
   withTransientRetry: async (fn: () => Promise<unknown>) => fn(),
 }));

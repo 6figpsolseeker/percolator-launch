@@ -28,7 +28,7 @@ import { getPortfolioRawSnapshot, makePortfolioScanKey } from "@/lib/userAccount
 import { findOwnerPortfolio } from "@/lib/owner-portfolio";
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { assertKnownProgram } from "@/lib/programAllowlist";
-import { humanizeError } from "@/lib/errorMessages";
+import { humanizeError, UserFacingError, userFacingMessage } from "@/lib/errorMessages";
 import { fetchPortfolioIdentity } from "@/lib/v18-wire";
 import { assertDepositWithinBalance, readTokenBalance } from "@/lib/deposit-guard";
 
@@ -79,7 +79,7 @@ export function useDeposit(slabAddress: string) {
         // died). Withdrawals stay ungated — money must always be able to
         // leave — but no new money gets in.
         if (isBlockedSlab(slabAddress)) {
-          throw new Error(
+          throw new UserFacingError(
             "This market has been retired — deposits are disabled. Existing funds can still be withdrawn where the market allows it.",
           );
         }
@@ -123,7 +123,7 @@ export function useDeposit(slabAddress: string) {
           try {
             const slabInfo = await connection.getAccountInfo(slabPk);
             if (slabInfo === null) {
-              throw new Error(
+              throw new UserFacingError(
                 "Market not found on current network. Please switch networks in your wallet and refresh.",
               );
             }
@@ -351,7 +351,7 @@ export function useDeposit(slabAddress: string) {
         pendingTimersRef.current.push(setTimeout(() => refreshSlab?.(), 2000));
         return sig;
       } catch (e) {
-        setError(humanizeError(e instanceof Error ? e.message : String(e)));
+        setError(userFacingMessage(e) ?? humanizeError(e instanceof Error ? e.message : String(e)));
         throw e;
       } finally {
         inflightRef.current = false;

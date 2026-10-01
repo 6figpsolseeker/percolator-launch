@@ -517,6 +517,24 @@ export function humanizeError(rawMsg: string, context?: "trade"): string {
 
 /** §5.3 "unmapped": the one line for anything the maps do not know. */
 export const UNMAPPED_MESSAGE = "Something went wrong and nothing was sent.";
+
+/**
+ * An error whose message was written for the user: plain, actionable, no raw codes. Hooks throw
+ * it for their own explanations (an open position blocks a withdrawal, the market can only absorb
+ * N% of a close); `userFacingMessage` passes it through where humanizeError would show the
+ * unmapped line. Runtime / RPC / wallet text is never one of these, so it stays unmapped (18f85ba9).
+ */
+export class UserFacingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserFacingError";
+  }
+}
+
+/** The message of a UserFacingError, else null (the caller then humanizes as before). */
+export function userFacingMessage(e: unknown): string | null {
+  return e instanceof UserFacingError ? e.message : null;
+}
 /** §5.3 "confirmation timeout" (never "check your wallet"). */
 export const CONFIRMING_MESSAGE = "Still confirming. We'll update this when it lands.";
 

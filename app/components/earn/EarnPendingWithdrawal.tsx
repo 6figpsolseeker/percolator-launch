@@ -59,6 +59,14 @@ export const EarnPendingWithdrawal: FC<EarnPendingWithdrawalProps> = ({
     }
   };
 
+  // A new ticket ("Withdraw max available now" re-requests a smaller one) gets its own automatic
+  // payout. The card stays mounted across the re-request, so without this the first ticket's
+  // attempt left autoFired set and the armed payout never opened. Declared before the effect below
+  // so a same-render change resets first.
+  useEffect(() => {
+    autoFired.current = false;
+  }, [ticketKey]);
+
   // Ready + requested in this session: open the payout prompt by itself, once.
   useEffect(() => {
     if (!cooldownElapsed || !armed || autoFired.current || disabled) return;

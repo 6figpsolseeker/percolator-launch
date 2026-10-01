@@ -127,6 +127,7 @@ describe("the aggregate SQL actually truncates per row", () => {
   it("rounds price and fee with floor(x + 0.5), matching Math.round", () => {
     const sql = aggregateSql();
     expect(sql).toMatch(/floor\(price::numeric \* 1000000 \+ 0\.5\)/);
-    expect(sql).toMatch(/floor\(fee::numeric \+ 0\.5\)/);
+    // `fee` is USD; the JS reducer sums Math.round(fee * 1_000_000) (micro-USD), so the SQL scales first.
+    expect(sql).toMatch(/floor\(fee::numeric \* 1000000 \+ 0\.5\)/);
   });
 });

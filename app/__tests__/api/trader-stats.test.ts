@@ -135,7 +135,7 @@ describe("GET /api/trader/:wallet/stats", () => {
         side: "long",
         size: "1000000",      // 1 token (e6)
         price: 100.0,         // $100 per token
-        fee: 500,             // 0.0005 token fee
+        fee: 0.05,            // USD: 5 bps of $100 (the indexer records fee in USD)
         slab_address: "MarketAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         created_at: "2026-01-01T00:00:00Z",
       },
@@ -143,7 +143,7 @@ describe("GET /api/trader/:wallet/stats", () => {
         side: "short",
         size: "-2000000",     // 2 tokens short (negative)
         price: 200.0,         // $200 per token
-        fee: 1000,            // 0.001 token fee
+        fee: 0.2,             // USD: 5 bps of $400
         slab_address: "MarketBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         created_at: "2026-01-02T00:00:00Z",
       },
@@ -151,7 +151,7 @@ describe("GET /api/trader/:wallet/stats", () => {
         side: "long",
         size: "3000000",      // 3 tokens
         price: 150.0,
-        fee: 750,
+        fee: 0.225,           // USD: 5 bps of $450
         slab_address: "MarketAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         created_at: "2026-01-03T00:00:00Z",
       },
@@ -166,8 +166,8 @@ describe("GET /api/trader/:wallet/stats", () => {
     // STATS-004: Long/short breakdown
     expect(body.longTrades).toBe(2);
     expect(body.shortTrades).toBe(1);
-    // STATS-005: Fees sum = 500 + 1000 + 750 = 2250
-    expect(body.totalFees).toBe("2250");
+    // STATS-005: Fees sum in micro-USD = (0.05 + 0.2 + 0.225) × 1e6
+    expect(body.totalFees).toBe("475000");
     // STATS-005: Volume
     // Trade1: 1_000_000 × 100_000_000 / 1_000_000 = 100_000_000
     // Trade2: 2_000_000 × 200_000_000 / 1_000_000 = 400_000_000

@@ -1,7 +1,7 @@
 "use client";
 
 import { useTradeHistory } from "@/hooks/useTradeHistory";
-import { formatTokenAmount, formatUsdFromNumber } from "@/lib/format";
+import { formatStatValue, formatTokenAmount, formatUsdFromNumber } from "@/lib/format";
 import { useEffect, useState } from "react";
 import { ShimmerSkeleton } from "@/components/ui/ShimmerSkeleton";
 import type { MarketWithStats } from "@/hooks/useAllMarketStats";
@@ -33,14 +33,10 @@ function formatPrice(priceNum: number): string {
   return formatUsdFromNumber(priceNum);
 }
 
-function formatFee(feeNum: number, decimals = 6): string {
+function formatFee(feeNum: number): string {
   if (!feeNum) return "—";
-  // fee is stored in token base units — formatTokenAmount expects bigint
-  try {
-    return formatTokenAmount(BigInt(Math.round(feeNum)), decimals);
-  } catch {
-    return (feeNum / Math.pow(10, decimals)).toFixed(decimals > 4 ? 6 : 4);
-  }
+  // The indexer records `fee` in USD (0.25 on a $500 fill at 5 bps), not token base units.
+  return formatStatValue(feeNum, "currency");
 }
 
 function formatSize(sizeStr: string, decimals = 6): string {
@@ -238,7 +234,7 @@ export function TradeHistoryTable({
                   className="text-[11px] text-[var(--text-secondary)]"
                   style={{ fontFamily: "var(--font-jetbrains-mono)", fontVariantNumeric: "tabular-nums" }}
                 >
-                  {formatFee(trade.fee, tradeDecimals)}
+                  {formatFee(trade.fee)}
                 </p>
               </div>
 

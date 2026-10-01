@@ -460,6 +460,7 @@ export interface TraderStatsAggregate {
   longTrades: number;
   shortTrades: number;
   totalVolume: string;
+  /** Sum of `trades.fee` in micro-USD (6 decimals). The indexer records `fee` in USD. */
   totalFees: string;
   /**
    * How many of this trader's fills carry a recorded fee.
@@ -508,7 +509,7 @@ export async function queryTraderStatsAggregate(
       COALESCE(sum(trunc(
         abs(trunc(size::numeric)) * floor(price::numeric * 1000000 + 0.5) / 1000000
       )), 0)::bigint::text                                      AS total_volume,
-      COALESCE(sum(floor(fee::numeric + 0.5)), 0)::bigint::text AS total_fees,
+      COALESCE(sum(floor(fee::numeric * 1000000 + 0.5)), 0)::bigint::text AS total_fees,
       count(*) FILTER (WHERE fee > 0)::text                     AS fees_recorded,
       count(*) FILTER (WHERE price IS NULL OR price <= 0)::text AS trades_missing_price,
       count(DISTINCT slab_address)::text                        AS unique_markets,

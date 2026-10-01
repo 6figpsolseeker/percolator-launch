@@ -2,7 +2,7 @@
 
 import { FC } from "react";
 import { ShimmerSkeleton } from "@/components/ui/ShimmerSkeleton";
-import { formatTokenAmount } from "@/lib/format";
+import { formatStatValue, formatTokenAmount } from "@/lib/format";
 import type { TraderStatsResponse } from "@/hooks/useTraderStats";
 import {
   FEES_UNRECORDED_NOTE,
@@ -65,8 +65,8 @@ function formatVolume(rawStr: string): string {
 
 function formatFees(rawStr: string): string {
   try {
-    const raw = BigInt(rawStr);
-    return formatTokenAmount(raw, 6);
+    // totalFees is micro-USD (the indexer records `fee` in USD).
+    return formatStatValue(BigInt(rawStr), "currency");
   } catch {
     return "—";
   }

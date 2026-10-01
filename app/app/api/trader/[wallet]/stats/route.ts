@@ -27,6 +27,7 @@ export interface TraderStatsResponse {
   longTrades: number;
   shortTrades: number;
   totalVolume: string;
+  /** Sum of `trades.fee` in micro-USD (6 decimals). The indexer records `fee` in USD. */
   totalFees: string;
   /**
    * Fills carrying a recorded fee. `trades.fee` is 0 on every row today
@@ -84,7 +85,8 @@ function aggregateRows(rows: { side: string; size: string; price: string; fee: s
     try {
       const feeNum = Number(row.fee);
       if (Number.isFinite(feeNum) && feeNum > 0) feesRecorded += 1;
-      totalFees += BigInt(Math.round(feeNum));
+      // `fee` is USD (e.g. 0.25 on a $500 fill at 5 bps); totalFees is micro-USD.
+      totalFees += BigInt(Math.round(feeNum * 1_000_000));
     } catch { /* skip */ }
 
     if (row.slab_address) markets.add(String(row.slab_address));

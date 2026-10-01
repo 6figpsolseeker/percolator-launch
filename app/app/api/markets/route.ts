@@ -1115,6 +1115,7 @@ export async function GET(request: NextRequest) {
       }
       const h = computeMarketHealthFromStats({
         total_open_interest: m.total_open_interest as number | null,
+        total_open_interest_usd: m.total_open_interest_usd as number | null,
         open_interest_long: m.open_interest_long as number | null,
         open_interest_short: m.open_interest_short as number | null,
         insurance_balance: m.insurance_balance as number | null,

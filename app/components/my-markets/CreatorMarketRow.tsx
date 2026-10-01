@@ -250,19 +250,8 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
   // diverges from the live number — otherwise it's redundant noise.
   const lpCollateralDiverges = lpCollateralMateriallyDiverges(liquidityAtoms, storedLpCollateralAtoms);
 
-  // Health — same computeMarketHealthFromStats /markets uses, fed with the
-  // real numbers above (not fabricated) so health semantics match the public
-  // markets list exactly.
-  const health = computeMarketHealthFromStats({
-    total_open_interest: oiAtoms != null ? Number(oiAtoms) : (detail?.total_open_interest ?? null),
-    insurance_balance: insuranceAtoms != null ? Number(insuranceAtoms) : (detail?.insurance_balance ?? null),
-    c_tot: null,
-    vault_balance: liquidityAtoms != null ? Number(liquidityAtoms) : null,
-    total_accounts: detail?.total_accounts ?? null,
-  });
-
   // Secondary crank-freshness dot — the accrue-cliff signal (asset slot_last
-  // vs current slot), DISTINCT from `health` above (which is a liquidity
+  // vs current slot), DISTINCT from `health` (which is a liquidity
   // ratio). A market can be liquidity-healthy and still crank-stale.
   const v17StalenessSlots =
     isV17 && v17Stats?.assetSlotLast != null && chainCurrentSlot != null
@@ -298,6 +287,18 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
     // v17 OI is engine Q (1e6), not the collateral mint's decimals
     ? (Number(oiAtoms) / (isV17 ? Q_SCALE : 10 ** decimals)) * priceUsdForOi
     : null;
+
+  // Health — same computeMarketHealthFromStats /markets uses, fed with the
+  // real numbers above (not fabricated) so health semantics match the public
+  // markets list exactly.
+  const health = computeMarketHealthFromStats({
+    total_open_interest: oiAtoms != null ? Number(oiAtoms) : (detail?.total_open_interest ?? null),
+    total_open_interest_usd: oiUsd,
+    insurance_balance: insuranceAtoms != null ? Number(insuranceAtoms) : (detail?.insurance_balance ?? null),
+    c_tot: null,
+    vault_balance: liquidityAtoms != null ? Number(liquidityAtoms) : null,
+    total_accounts: detail?.total_accounts ?? null,
+  });
 
   // Field-level merge, detail first. Merging per SOURCE instead would let the
   // slow per-market detail blank a ticker the fast path already resolved: the

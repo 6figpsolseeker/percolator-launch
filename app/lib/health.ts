@@ -138,6 +138,10 @@ export function computeMarketHealth(engine: EngineState): MarketHealth {
  */
 export function computeMarketHealthFromStats(stats: {
   total_open_interest?: number | null;
+  /** OI in USD. When present, OI is compared to capital in collateral atoms (USD x 1e6, the
+   *  6-decimal sim-USDC/USDC collateral); `total_open_interest` is a base-token quantity (engine
+   *  Q on v17), so dividing collateral atoms by it graded every market with OI "Low Liquidity". */
+  total_open_interest_usd?: number | null;
   open_interest_long?: number | null;
   open_interest_short?: number | null;
   insurance_balance?: number | null;
@@ -146,8 +150,11 @@ export function computeMarketHealthFromStats(stats: {
   vault_balance?: number | null;
   total_accounts?: number | null;
 }): MarketHealth {
-  const oiRaw = stats.total_open_interest
-    ?? ((stats.open_interest_long ?? 0) + (stats.open_interest_short ?? 0));
+  const oiUsd = stats.total_open_interest_usd;
+  const oiRaw = oiUsd != null && Number.isFinite(oiUsd)
+    ? oiUsd * 1_000_000
+    : stats.total_open_interest
+      ?? ((stats.open_interest_long ?? 0) + (stats.open_interest_short ?? 0));
   const insuranceRaw = stats.insurance_balance ?? stats.insurance_fund ?? 0;
   const capitalRaw = stats.c_tot ?? stats.vault_balance ?? 0;
   // v17 markets don't surface engine/LP capital (both c_tot and vault_balance are

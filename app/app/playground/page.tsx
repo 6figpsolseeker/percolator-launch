@@ -24,6 +24,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePrivy, useLoginWithEmail } from "@privy-io/react-auth";
 import { usePrivyAvailable } from "@/hooks/usePrivySafe";
 import { usePlaygroundAccess } from "@/hooks/usePlaygroundAccess";
+import { EnterPlaygroundButton } from "@/components/playground/EnterPlaygroundButton";
 
 /** Slow drifting field behind the card — the "something is running in there" layer. */
 function Starfield() {
@@ -201,12 +202,22 @@ export default function PlaygroundGatePage() {
           Waitlist position <PositionReveal position={state.position} />. You are in the opening
           group for devnet&nbsp;v2.
         </p>
-        <div className="mt-6 border border-[var(--accent)]/25 bg-[var(--accent)]/[0.06] p-3">
-          <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
-            The doors open at launch. Come back here then — you will not need to verify again on
-            this device.
-          </p>
-        </div>
+        {state.open ? (
+          // Launch is open. The button posts to this site; the server
+          // re-verifies and only its redirect names the playground.
+          <div className="mt-6">
+            <EnterPlaygroundButton className="w-full border border-[var(--accent)]/50 bg-[var(--accent)]/[0.10] px-4 py-2.5 text-[12px] uppercase tracking-[0.14em] text-[var(--text)] transition-all hover:border-[var(--accent)]/80 hover:bg-[var(--accent)]/[0.16] disabled:opacity-60">
+              Enter Playground →
+            </EnterPlaygroundButton>
+          </div>
+        ) : (
+          <div className="mt-6 border border-[var(--accent)]/25 bg-[var(--accent)]/[0.06] p-3">
+            <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
+              You&apos;re in. Opens at launch — come back here, or use the Playground tab, and it
+              will let you straight through.
+            </p>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => logout()}

@@ -30,7 +30,14 @@ vi.mock("next/link", () => ({
   default: ({ children, href }: { children: React.ReactNode; href: string }) => <a href={href}>{children}</a>,
 }));
 vi.mock("@privy-io/react-auth", () => ({
-  usePrivy: () => ({ ready: h.ready, authenticated: h.authenticated, login: h.login, logout: h.logout }),
+  usePrivy: () => ({
+    ready: h.ready,
+    authenticated: h.authenticated,
+    login: h.login,
+    logout: h.logout,
+    getAccessToken: async () => "privy-access",
+  }),
+  useIdentityToken: () => ({ identityToken: "privy-id" }),
   useLoginWithEmail: () => ({ sendCode: h.sendCode, loginWithCode: h.loginWithCode }),
 }));
 vi.mock("@/hooks/usePrivySafe", () => ({ usePrivyAvailable: () => h.privyAvailable }));
@@ -144,5 +151,44 @@ describe("the page never leaks an identifier it was not given", () => {
     // text legitimately contains "@keyframes". The naive check flagged that,
     // which is the test being wrong rather than the page leaking.
     expect(container.textContent).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
+  });
+});
+
+describe("launch switch (PLAYGROUND_OPEN, reported by the server)", () => {
+  it("granted + closed: \"You're in. Opens at launch.\" and no door", () => {
+    h.authenticated = true;
+    h.access = { status: "granted", position: 412, cutoff: 1000, open: false };
+    const { container } = render(<PlaygroundGatePage />);
+    expect(container.textContent).toMatch(/You're in\. Opens at launch/);
+    expect(container.querySelector("form")).toBeNull();
+    expect(screen.queryByRole("button", { name: /enter playground/i })).toBeNull();
+  });
+
+  it("granted + open: 'Enter Playground' posts to this site's door — no playground address in markup", () => {
+    h.authenticated = true;
+    h.access = { status: "granted", position: 412, cutoff: 1000, open: true };
+    const { container } = render(<PlaygroundGatePage />);
+    const btn = screen.getByRole("button", { name: /enter playground/i });
+    expect(btn).toHaveAttribute("type", "submit");
+    const form = container.querySelector("form")!;
+    expect(form.getAttribute("action")).toBe("/api/playground/enter");
+    expect(form.getAttribute("method")).toBe("post");
+    expect(container.innerHTML).not.toMatch(/percolator-playground/i);
+    for (const href of hrefs(container)) {
+      expect(href).not.toMatch(/playground-|percolator-playground|\/enter/i);
+    }
+  });
+
+  it.each([
+    ["queued", { status: "queued", position: 1412, cutoff: 1000 }],
+    ["not-member", { status: "not-member" }],
+    ["error", { status: "error", reason: "http-503" }],
+    ["checking", { status: "checking" }],
+  ])("%s: never renders the door", (_l, state) => {
+    h.authenticated = true;
+    h.access = state as Record<string, unknown>;
+    const { container } = render(<PlaygroundGatePage />);
+    expect(container.querySelector("form")).toBeNull();
+    expect(container.innerHTML).not.toMatch(/\/api\/playground\/enter|percolator-playground/i);
   });
 });

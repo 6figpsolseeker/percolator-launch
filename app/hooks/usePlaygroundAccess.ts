@@ -8,30 +8,88 @@ export type PlaygroundAccessState =
   /** Not signed in yet — the gate shows its two sign-in paths. */
   | { status: "idle" }
   | { status: "checking" }
-  /** Verified, inside the opening cohort. */
-  | { status: "granted"; position: number }
+  /**
+   * Verified, inside the opening cohort. `open` is the server's launch switch
+   * (PLAYGROUND_OPEN): only when it is true is "Enter Playground" offered, and
+   * even then entry is re-decided server-side by /api/playground/enter.
+   */
+  | { status: "granted"; position: number; cutoff: number; open: boolean }
   /** On the waitlist, but further back than the cohort currently open. */
   | { status: "queued"; position: number | null; cutoff: number }
   /** Signed in, but this identity is not on the waitlist at all. */
   | { status: "not-member" }
   | { status: "error"; reason: string };
 
+type Settled = Exclude<PlaygroundAccessState, { status: "idle" } | { status: "checking" }>;
+
+/**
+ * One in-flight / recent answer per Privy user, shared by every caller.
+ *
+ * The nav tab and the /playground page both ask on the same render; without
+ * this they would each verify against the server. Errors are never cached, so
+ * "Try again" always really tries again.
+ */
+const CACHE_MS = 60_000;
+const cache = new Map<string, { at: number; answer: Promise<Settled> }>();
+
+/** Test seam: forget every cached verdict. */
+export function __resetPlaygroundAccessCache(): void {
+  cache.clear();
+}
+
+async function ask(getAccessToken: () => Promise<string | null>, identityToken: string | null): Promise<Settled> {
+  try {
+    const accessToken = await getAccessToken();
+    if (!accessToken) return { status: "error", reason: "no-session" };
+    const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
+    if (identityToken) headers["x-privy-id-token"] = identityToken;
+
+    const res = await fetch("/api/playground/authorize", { method: "POST", headers, cache: "no-store" });
+    const body = (await res.json().catch(() => null)) as
+      | { ok?: boolean; status?: string; position?: number | null; cutoff?: number; open?: boolean }
+      | null;
+
+    if (res.ok && body?.ok === true && body.status === "granted" && typeof body.position === "number") {
+      return {
+        status: "granted",
+        position: body.position,
+        cutoff: typeof body.cutoff === "number" ? body.cutoff : 0,
+        // Strictly true. Anything else — absent, "true", 1 — keeps the door shut.
+        open: body.open === true,
+      };
+    }
+    if (body?.status === "not_yet") {
+      return {
+        status: "queued",
+        position: typeof body.position === "number" ? body.position : null,
+        cutoff: typeof body.cutoff === "number" ? body.cutoff : 0,
+      };
+    }
+    if (body?.status === "not_member") return { status: "not-member" };
+    // Anything else — 401, 503, an unparseable body — is an error, NOT a
+    // refusal and certainly not a grant. A refusal is final; an error is worth
+    // retrying.
+    return { status: "error", reason: `http-${res.status}` };
+  } catch {
+    return { status: "error", reason: "network" };
+  }
+}
+
 /**
  * Asks the server whether this Privy identity may enter the playground.
  *
- * Mirrors `useWaitlistWhoami` deliberately — same auth plumbing, same
- * once-per-authentication shape — because the two answer closely related
- * questions and a second style here would be a second thing to keep in step.
+ * The decision is made ENTIRELY server-side by /api/playground/authorize. This
+ * hook only relays the answer, so nothing it returns can be made true by
+ * editing client state — and the door itself (/api/playground/enter)
+ * re-decides from scratch anyway.
  *
- * The decision is made ENTIRELY server-side by /api/playground/authorize,
- * which verifies the Privy token against Privy with the app secret. This hook
- * only relays the answer: it never decides anything itself, so nothing it
- * returns can be made true by editing client state.
- *
- * Note it does NOT fall back to a permissive state on error, which is the one
- * place it diverges from useWaitlistWhoami. That hook degrades to "not-found"
- * so a user can still sign up by hand; a gate that degraded to "granted" on a
+ * It does NOT fall back to a permissive state on error, which is where it
+ * diverges from useWaitlistWhoami: a gate that degraded to "granted" on a
  * network blip would be no gate at all.
+ *
+ * Must be called inside PrivyProvider; callers check usePrivyAvailable() first
+ * (the nav tab does this with an inner component, the gate page renders a
+ * "sign-in unavailable" state).
  */
 export function usePlaygroundAccess(): {
   state: PlaygroundAccessState;
@@ -39,77 +97,48 @@ export function usePlaygroundAccess(): {
   recheck: () => void;
 } {
   const privyAvailable = usePrivyAvailable();
-  const { ready, authenticated, getAccessToken } = usePrivy();
+  const { ready, authenticated, user, getAccessToken } = usePrivy();
   const { identityToken } = useIdentityToken();
   const [state, setState] = useState<PlaygroundAccessState>({ status: "idle" });
   const [nonce, setNonce] = useState(0);
+  const userId = user?.id ?? null;
 
-  const recheck = useCallback(() => setNonce((n) => n + 1), []);
+  const recheck = useCallback(() => {
+    for (const k of cache.keys()) if (k.startsWith(`${userId ?? "__anon__"}|`)) cache.delete(k);
+    setNonce((n) => n + 1);
+  }, [userId]);
 
   useEffect(() => {
-    if (!privyAvailable) {
+    if (!privyAvailable || (ready && !authenticated)) {
       setState({ status: "idle" });
       return;
     }
     if (!ready) return;
-    if (!authenticated) {
-      setState({ status: "idle" });
-      return;
-    }
 
     let cancelled = false;
-    (async () => {
-      setState({ status: "checking" });
-      try {
-        const accessToken = await getAccessToken();
-        if (!accessToken) {
-          if (!cancelled) setState({ status: "error", reason: "no-session" });
-          return;
-        }
-        const headers: Record<string, string> = {
-          Authorization: `Bearer ${accessToken}`,
-        };
-        if (identityToken) headers["x-privy-id-token"] = identityToken;
-
-        const res = await fetch("/api/playground/authorize", {
-          method: "POST",
-          headers,
-          cache: "no-store",
-        });
-        const body = (await res.json().catch(() => null)) as
-          | { ok?: boolean; status?: string; position?: number | null; cutoff?: number }
-          | null;
-        if (cancelled) return;
-
-        if (res.ok && body?.ok && typeof body.position === "number") {
-          setState({ status: "granted", position: body.position });
-          return;
-        }
-        if (body?.status === "not_yet") {
-          setState({
-            status: "queued",
-            position: typeof body.position === "number" ? body.position : null,
-            cutoff: typeof body.cutoff === "number" ? body.cutoff : 0,
-          });
-          return;
-        }
-        if (body?.status === "not_member") {
-          setState({ status: "not-member" });
-          return;
-        }
-        // Anything else — 401, 503, an unparseable body — is an error, NOT a
-        // refusal and certainly not a grant. The distinction matters: a refusal
-        // is final and a user should stop trying, an error is worth retrying.
-        setState({ status: "error", reason: `http-${res.status}` });
-      } catch {
-        if (!cancelled) setState({ status: "error", reason: "network" });
-      }
-    })();
-
+    // The identity token arrives a beat after sign-in, and without it the server
+    // can only match on the Privy DID. Key on its presence so the richer answer
+    // replaces the DID-only one instead of being shadowed by it.
+    const key = `${userId ?? "__anon__"}|${identityToken ? "id" : "no-id"}`;
+    const hit = cache.get(key);
+    let answer: Promise<Settled>;
+    if (hit && Date.now() - hit.at < CACHE_MS) {
+      answer = hit.answer;
+    } else {
+      answer = ask(getAccessToken, identityToken ?? null);
+      cache.set(key, { at: Date.now(), answer });
+      answer.then((a) => {
+        if (a.status === "error" && cache.get(key)?.answer === answer) cache.delete(key);
+      });
+    }
+    setState({ status: "checking" });
+    answer.then((a) => {
+      if (!cancelled) setState(a);
+    });
     return () => {
       cancelled = true;
     };
-  }, [privyAvailable, ready, authenticated, getAccessToken, identityToken, nonce]);
+  }, [privyAvailable, ready, authenticated, userId, getAccessToken, identityToken, nonce]);
 
   return { state, recheck };
 }

@@ -37,6 +37,7 @@ import { useWithdraw } from "@/hooks/useWithdraw";
 import { readSweepableCapital, SWEEP_COPY } from "@/lib/close-sweep";
 import { useOptionalToast } from "@/hooks/useToast";
 import { formatTokenAmount } from "@/lib/format";
+import { clearEntryPrice } from "@/lib/entry-price";
 
 /** M-3: the leg is a prior-reset obligation (owns 0 effective quantity). */
 export const COPY_RESET_LEG =
@@ -489,6 +490,12 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
           const f = fill.filledQ < 0n ? -fill.filledQ : fill.filledQ;
           const r = closeSize < 0n ? -closeSize : closeSize;
           setError(routedRebalance ? COPY.rebalancePartial(fmtQ(f), fmtQ(r)) : COPY.closePartial(fmtQ(f), fmtQ(r)));
+        }
+        // The saved entry (lib/entry-price.ts) goes only when the position is actually flat. Every
+        // close surface cleared it on a 100% REQUEST, so a partial fill (LP headroom clipped the
+        // close) left the rest of the position with no entry: Entry / PnL / ROE read "--".
+        if (closePercent === 100 && outcome === "closed") {
+          clearEntryPrice(slabAddress, userAccount.idx, publicKey?.toBase58());
         }
         setPhase("confirming");
         setTimeout(() => setPhase("idle"), 2000);

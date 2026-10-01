@@ -38,7 +38,7 @@ import { useOracleFreshness } from "@/hooks/useOracleFreshness";
 import { useEngineFreshness } from "@/hooks/useEngineFreshness";
 import { SlabProvider } from "@/components/providers/SlabProvider";
 import { ClosePositionModal } from "./ClosePositionModal";
-import { getEntryPrice, clearEntryPrice } from "@/lib/entry-price";
+import { getEntryPrice } from "@/lib/entry-price";
 import {
   computeMarkPnl,
   computeMarkPnlCollateral,
@@ -109,9 +109,6 @@ const CloseFlow: FC<{
       onConfirm={async (percent) => {
         try {
           await closePosition(percent);
-          if (percent === 100) {
-            clearEntryPrice(pos.slabAddress, pos.idx, pos.account?.owner?.toBase58?.() ?? "");
-          }
           onDone(true);
         } catch {
           /* keep the modal open; the tx error is surfaced by the hook */

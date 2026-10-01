@@ -83,7 +83,7 @@ import { sanitizeSymbol } from "@/lib/symbol-utils";
 import { useOracleFreshness } from "@/hooks/useOracleFreshness";
 import { useEngineFreshness } from "@/hooks/useEngineFreshness";
 import { usePriceFlash } from "@/hooks/usePriceFlash";
-import { getEntryPrice, clearEntryPrice } from "@/lib/entry-price";
+import { getEntryPrice } from "@/lib/entry-price";
 import { applyInvert, sanitizePriceE6 } from "@/lib/oraclePrice";
 import { isSentinelValue } from "@/lib/health";
 import { RenderProfiler } from "@/components/dev/RenderProfiler";
@@ -354,7 +354,6 @@ const PositionRow: FC<{ slabAddress: string }> = memo(function PositionRow({ sla
   const handleConfirmClose = async (percent: number) => {
     try {
       await closePosition(percent);
-      if (percent === 100) clearEntryPrice(slabAddress, activeInfo.idx, account.owner.toBase58());
       setShowCloseModal(false);
     } catch {
       // error surfaced via hook state below

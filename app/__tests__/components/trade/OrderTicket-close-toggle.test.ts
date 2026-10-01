@@ -37,8 +37,9 @@ describe("OrderTicket — Open/Close toggle", () => {
     expect(body).not.toMatch(/\buse[A-Z][A-Za-z]*\(/);
   });
 
-  it("a full close clears the cached entry price and refreshes the ticket", () => {
-    expect(SRC).toMatch(/percent === 100 && userAccount\) clearEntryPrice/);
+  it("a close refreshes the ticket; the entry is cleared by useClosePosition on an actual full close", () => {
+    // Clearing here on a 100% request wiped the entry after a partial fill.
+    expect(SRC).not.toMatch(/percent === 100 && userAccount\) clearEntryPrice/);
     expect(SRC).toMatch(/setTimeout\(\(\) => refreshSlab\(\), \d+\)/);
   });
 

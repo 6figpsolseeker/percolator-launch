@@ -48,7 +48,7 @@ import { sanitizeFundingRateBps, isSentinelValue } from "@/lib/health";
 import { useOracleFreshness } from "@/hooks/useOracleFreshness";
 import { useEngineFreshness } from "@/hooks/useEngineFreshness";
 import { StatusLine } from "@/components/ui/StatusLine";
-import { getEntryPrice, getEntryLeverage, clearEntryPrice } from "@/lib/entry-price";
+import { getEntryPrice, getEntryLeverage } from "@/lib/entry-price";
 import { applyInvert, sanitizePriceE6 } from "@/lib/oraclePrice";
 import { parseHumanAmount } from "@/lib/parseAmount";
 import { isOracleStaleBlocking } from "@/lib/oracle-stale-gate";
@@ -475,7 +475,6 @@ export const PositionPanel: FC<{ slabAddress: string }> = ({ slabAddress }) => {
   const handleConfirmClose = async (percent: number) => {
     try {
       await closePosition(percent);
-      if (percent === 100 && userAccount) clearEntryPrice(slabAddress, userAccount.idx, account.owner.toBase58());
       setShowCloseModal(false);
     } catch {
       // error shown via hook state

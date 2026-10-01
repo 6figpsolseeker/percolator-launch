@@ -1162,7 +1162,6 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
 
   // ── Close mode ──────────────────────────────────────────────────────────
   const handleClosed = (percent: number) => {
-    if (percent === 100 && userAccount) clearEntryPrice(slabAddress, userAccount.idx, publicKey?.toBase58());
     // Refresh this ticket's own position readout past the RPC cache window;
     // useClosePosition already fired invalidatePortfolio() for the header bar.
     setTimeout(() => refreshSlab(), 1200);

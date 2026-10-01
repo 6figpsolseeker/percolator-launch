@@ -11,7 +11,6 @@ import { SlabProvider } from "@/components/providers/SlabProvider";
 import { useClosePosition } from "@/hooks/useClosePosition";
 import { useEngineFreshness } from "@/hooks/useEngineFreshness";
 import { ClosePositionModal } from "@/components/trade/ClosePositionModal";
-import { clearEntryPrice } from "@/lib/entry-price";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
 import { usePortfolio, getLiquidationSeverity, getLiquidationSeverityForState, type PortfolioPosition } from "@/hooks/usePortfolio";
 import { classifyLiquidation } from "@/lib/liquidation-state";
@@ -153,9 +152,6 @@ function PortfolioCloseFlow({
       onConfirm={async (percent) => {
         try {
           await closePosition(percent);
-          if (percent === 100) {
-            clearEntryPrice(pos.slabAddress, pos.idx, pos.account?.owner?.toBase58?.() ?? "");
-          }
           onDone(true);
         } catch {
           /* keep the modal open; the tx error is logged by the hook */

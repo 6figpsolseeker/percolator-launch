@@ -70,7 +70,7 @@ describe("useLpPositions valuation freshness", () => {
     mocks.connection.getSlot = vi.fn(async () => 1);
     mocks.connection.getMultipleAccountsInfo = vi.fn(async (keys: PublicKey[]) => keys.map((k) => accounts.get(k.toBase58()) ?? null));
     // Cached API snapshot from BEFORE the deposit: empty pool.
-    vi.stubGlobal("fetch", vi.fn(async () => ({
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.startsWith("/api/markets") ? ({ ok: true, json: async () => ({ markets: [] }) }) : ({
       ok: true,
       json: async () => ({ pools: [{
         poolAddress: pool.toBase58(), slabAddress: slab.toBase58(), collateralMint: collateral.toBase58(),

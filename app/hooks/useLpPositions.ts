@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { DEVNET_PROGRAM_IDS } from "@/lib/program-ids";
 import { bigintToFloat } from "@/lib/formatters";
-import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { PublicKey, SystemProgram, type Connection } from '@solana/web3.js';
 import { useWalletCompat, useConnectionCompat } from '@/hooks/useWalletCompat';
 import { getAssociatedTokenAddressSync, unpackAccount, unpackMint } from '@solana/spl-token';
 import { deriveDepositPda } from '@percolatorct/sdk';
@@ -11,6 +11,9 @@ import { getConfig } from '@/lib/config';
 import { pollWhenVisible } from '@/lib/pollWhenVisible';
 import { getMultipleAccountsInfoChunked } from '@/lib/rpc-chunk';
 import { readPoolTotalLpSupply, stakeValueAtoms } from '@/lib/stake-position';
+import { readEarnPositions } from '@/lib/limits/earn-positions';
+import { isBlockedSlab } from '@/lib/blocklist';
+import { CURATED_COLLATERAL_DECIMALS } from '@/hooks/useEarnStats';
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -72,6 +75,11 @@ export interface LpPosition {
   apr: number;
   /** Pool mode: 0 = insurance LP, 1 = trading LP */
   poolMode: number;
+  /**
+   * "earn" = an Earn (LP vault) deposit: poolAddress is the market slab and only
+   * lpBalanceRaw / redeemable are read; the pool-share, TVL and cooldown fields are 0.
+   */
+  kind: 'stake' | 'earn';
 }
 
 export interface LpPositionsState {
@@ -81,6 +89,52 @@ export interface LpPositionsState {
   /** True only during background refreshes (not initial load) */
   isRefreshing: boolean;
   error: string | null;
+}
+
+/**
+ * The wallet's Earn (LP vault) deposits. They live in the wrapper's LP Vault Registry, not in a
+ * stake pool, so /api/stake/pools never lists them. Read over the markets /earn lists
+ * (GET /api/markets) and valued like the Earn table (lib/limits/earn-positions.ts).
+ */
+async function readEarnRows(connection: Connection, wallet: PublicKey): Promise<LpPosition[]> {
+  const res = await fetch('/api/markets?limit=500', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+  if (!res.ok) throw new Error(`Failed to fetch markets: ${res.status}`);
+  const rows = ((await res.json()) as { markets?: unknown }).markets;
+  if (!Array.isArray(rows)) throw new Error('Failed to fetch markets');
+  const markets = rows.flatMap((m: Record<string, unknown>) => {
+    const slab = typeof m?.slab_address === 'string' ? m.slab_address : null;
+    if (!slab || isBlockedSlab(slab)) return [];
+    const symbol = typeof m.symbol === 'string' && m.symbol ? m.symbol : slab.slice(0, 6);
+    return [{ slab, symbol, name: typeof m.name === 'string' && m.name ? m.name : symbol }];
+  });
+  if (markets.length === 0) return [];
+  const programId = new PublicKey(getConfig().programId as string);
+  const held = await readEarnPositions(connection, programId, wallet, markets.map((m) => m.slab));
+  return markets.flatMap((m) => {
+    const p = held.get(m.slab);
+    if (!p || p.shares === 0n || p.valueAtoms === null) return [];
+    return [{
+      poolAddress: m.slab,
+      slabAddress: m.slab,
+      collateralMint: '',
+      lpMint: '',
+      name: m.name,
+      symbol: m.symbol,
+      logoUrl: null,
+      lpBalanceRaw: p.shares,
+      lpBalance: 0,
+      redeemableRaw: p.valueAtoms,
+      redeemable: bigintToFloat(p.valueAtoms, CURATED_COLLATERAL_DECIMALS) ?? 0,
+      totalLpSupply: 0,
+      tvl: 0,
+      userSharePct: 0,
+      cooldownSlots: 0,
+      cooldownElapsed: true,
+      apr: 0,
+      poolMode: 1,
+      kind: 'earn' as const,
+    }];
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -138,6 +192,11 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
     }
     setError(null);
 
+    const walletPk = new PublicKey(walletKeyStr);
+    // Read alongside the stake pools; a failure lands in the catch below via the awaits.
+    const earnRows = readEarnRows(connection, walletPk);
+    earnRows.catch(() => {});
+
     try {
       // 1. Fetch all pools (Next.js API route – use relative URL for same-origin)
       const res = await fetch(`/api/stake/pools`);
@@ -146,13 +205,13 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
       if (stale()) return;
 
       if (!pools?.length) {
+        const earn = await earnRows;
         if (stale()) return;
-        setPositions([]);
-        setTotalRedeemable(0);
+        setPositions(earn);
+        setTotalRedeemable(earn.reduce((s, p) => s + p.redeemable, 0));
         return;
       }
 
-      const walletPk = new PublicKey(walletKeyStr);
       // Stake pools are owned by this deployment's vault program
       // (getConfig().vaultProgramId), NOT the SDK's default stake program id.
       const stakeProgramPk = new PublicKey(
@@ -340,10 +399,12 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
           cooldownElapsed,
           apr: pool.apr,
           poolMode: pool.poolMode,
+          kind: 'stake',
         });
         return acc;
       }, []);
 
+      resolved.push(...(await earnRows));
       if (stale()) return;
       const total = resolved.reduce((s, p) => s + p.redeemable, 0);
       setPositions(resolved);

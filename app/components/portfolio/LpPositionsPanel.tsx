@@ -76,7 +76,7 @@ function LpPositionCard({ position: pos }: LpPositionCardProps) {
 
   return (
     <Link
-      href={`/stake`}
+      href={pos.kind === "earn" ? "/earn" : "/stake"}
       className="block border border-[var(--border)] bg-[var(--panel-bg)] transition-all duration-200 hover:border-[var(--cyan)]/30 hover:bg-[var(--bg-elevated)]"
     >
       <div className="p-4">
@@ -108,11 +108,11 @@ function LpPositionCard({ position: pos }: LpPositionCardProps) {
                 {displaySymbol.replace(/-PERP$/i, "")}
               </p>
               <p className="text-[10px] text-[var(--text-secondary)] truncate">
-                {pos.poolMode === 0 ? "Insurance stake" : "Earn deposit"}
+                {pos.kind === "stake" && pos.poolMode === 0 ? "Insurance stake" : "Earn deposit"}
               </p>
             </div>
             <span className="rounded bg-[var(--cyan)]/10 px-2 py-0.5 text-[10px] font-bold text-[var(--cyan)] flex-shrink-0">
-              {pos.poolMode === 0 ? "Stake" : "Earn"}
+              {pos.kind === "stake" && pos.poolMode === 0 ? "Stake" : "Earn"}
             </span>
           </div>
 
@@ -130,7 +130,8 @@ function LpPositionCard({ position: pos }: LpPositionCardProps) {
           </div>
         </div>
 
-        {/* Details grid */}
+        {/* Details grid (stake pools only; an Earn deposit's details are on /earn) */}
+        {pos.kind === "stake" && (
         <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-4">
           <div>
             <p className="text-[9px] font-medium uppercase tracking-[0.15em] text-[var(--text)]">Shares</p>
@@ -175,6 +176,7 @@ function LpPositionCard({ position: pos }: LpPositionCardProps) {
             )}
           </div>
         </div>
+        )}
       </div>
     </Link>
   );

@@ -186,7 +186,10 @@ export const Header: FC = () => {
           </Link>
 
           {/* Desktop nav — dropdown groups */}
-          <nav className="hidden items-center gap-0.5 md:flex" aria-label="Main navigation">
+          {/* lg, not md: measured on /earn, the nav wraps ("Create a Market" on three lines) below about
+              1000px and runs into Portfolio, and at 820-900px a tap on Portfolio opens Community. Below
+              lg the hamburger menu, which has Portfolio, takes over. */}
+          <nav className="hidden items-center gap-0.5 lg:flex" aria-label="Main navigation">
             {!isWaitlistHost && (
               <>
                 {/* Trade — filled primary CTA into the markets browser (was
@@ -230,7 +233,7 @@ export const Header: FC = () => {
             <Link
               href="/portfolio"
               aria-current={pathname.startsWith("/portfolio") ? "page" : undefined}
-              className={`hidden md:flex ${navLinkCls(pathname.startsWith("/portfolio"))}`}
+              className={`hidden lg:flex ${navLinkCls(pathname.startsWith("/portfolio"))}`}
             >
               Portfolio
             </Link>
@@ -256,7 +259,7 @@ export const Header: FC = () => {
           {/* Mobile menu toggle */}
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="flex h-10 w-10 items-center justify-center rounded-sm text-[var(--text-muted)] transition-colors hover:bg-[var(--accent)]/[0.04] hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] md:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-sm text-[var(--text-muted)] transition-colors hover:bg-[var(--accent)]/[0.04] hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] lg:hidden"
             aria-label={mobileOpen ? "Close menu" : "Open menu"}
             aria-expanded={mobileOpen}
           >
@@ -274,7 +277,7 @@ export const Header: FC = () => {
       {/* Mobile nav — accordion groups */}
       <nav
         ref={mobileMenuRef}
-        className="overflow-hidden border-t border-[var(--border)] bg-[var(--bg)] md:hidden"
+        className="overflow-hidden border-t border-[var(--border)] bg-[var(--bg)] lg:hidden"
         style={{ display: "none", height: 0 }}
         aria-label="Mobile navigation"
       >

@@ -270,7 +270,7 @@ function WalletPageInner() {
                 Add funds
               </GlowButton>
               {network === "devnet" && (
-                <Link href="/devnet-mint">
+                <Link href="/faucet">
                   <GlowButton variant="secondary" size="sm">
                     Open faucet
                   </GlowButton>
@@ -279,7 +279,7 @@ function WalletPageInner() {
             </div>
             {network === "devnet" && (
               <p className="mt-3 text-[11px] text-[var(--text-muted)]">
-                On devnet, use the faucet to mint test SOL.
+                On devnet, use the faucet to get Sim-USDC and a little test SOL.
               </p>
             )}
           </GlassCard>

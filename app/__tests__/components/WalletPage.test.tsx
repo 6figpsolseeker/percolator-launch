@@ -90,6 +90,15 @@ describe("WalletPage", () => {
     expect(screen.getByRole("button", { name: /Disconnect/i })).toBeTruthy();
   });
 
+  // "Open faucet" went to the Devnet Token Factory (/devnet-mint), which has no Sim-USDC claim; the
+  // playground faucet that funds trading is /faucet.
+  it("devnet: Open faucet goes to the Sim-USDC faucet, not the token factory", () => {
+    render(<WalletPage />);
+    const link = screen.getByRole("button", { name: /Open faucet/i }).closest("a");
+    expect(link?.getAttribute("href")).toBe("/faucet");
+    expect(screen.getByText("On devnet, use the faucet to get Sim-USDC and a little test SOL.")).toBeTruthy();
+  });
+
   it("shows connect prompt when unauthenticated", () => {
     privyState = { ...privyState, authenticated: false };
     render(<WalletPage />);

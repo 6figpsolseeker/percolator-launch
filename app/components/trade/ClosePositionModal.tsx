@@ -20,7 +20,7 @@ interface ClosePositionModalProps {
   priceUsd: number | null;
   isLong: boolean;
   loading: boolean;
-  /** B-3: Trading fee basis points — subtracted from Est. Receive so the preview matches on-chain. */
+  /** B-3: Trading fee basis points — subtracted from Est. Balance After so the preview matches on-chain. */
   tradingFeeBps?: bigint;
   /** GH#1842: Block submission when oracle price is stale or unavailable */
   oracleStale?: boolean;

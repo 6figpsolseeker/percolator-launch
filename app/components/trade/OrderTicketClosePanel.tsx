@@ -30,7 +30,7 @@ export interface OrderTicketClosePanelProps {
 
 /**
  * Close mode of the order ticket (GH#2651). Renders the FULL close form inline
- * (slider, %-presets, Est. PnL / Trading Fee / Est. Receive) — the same shared
+ * (slider, %-presets, Est. PnL / Trading Fee / Est. Balance After) — the same shared
  * ClosePositionForm the modal uses — so closing the position you're looking at
  * needs no popup and matches the modal's detail.
  *

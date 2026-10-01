@@ -152,17 +152,6 @@ describe("first trade, one approval", () => {
     expect(screen.getByTestId("deposit-card")).toBeTruthy();
   });
 
-  it("a returning user short of margin: 'Deposit {x} & Long' = one tx [Deposit, Trade]", async () => {
-    mocks.useUserAccount.mockReturnValue({ account: { capital: 1_000_000n, positionSize: 0n, entryPrice: 0n, pnl: 0n }, idx: 3 });
-    render(<OrderTicket slabAddress={SLAB} />);
-    await waitFor(() => expect(screen.queryByTestId("trade-submit")).not.toBeNull());
-    size("5"); // needs 5 + fee, has 1 => deposit (4 + 0.015) * 1.1 = 4.42
-    expect(screen.queryByTestId("first-trade-line")).toBeNull();
-    expect(submit().textContent).toBe("Deposit 4.42 USDC & Long");
-    await place();
-    expect(mocks.fund.mock.calls[0][0]).toMatchObject({ depositAtoms: 4_420_000n });
-  });
-
   // The entry cache (lib/entry-price.ts) is the only source of Entry / PnL / ROE for a new position.
   // The first fund-and-trade runs with no account in handleTrade's closure, and the save was gated
   // on that account, so a new user's first position showed Entry "—" and PnL "--".
@@ -186,6 +175,17 @@ describe("first trade, one approval", () => {
     await place();
     expect(localStorage.getItem(`perc:entry:${SLAB}:3:11111111111111111111111111111111`)).not.toBeNull();
     expect(localStorage.getItem(`perc:entry:${SLAB}:0:11111111111111111111111111111111`)).toBeNull();
+  });
+
+  it("a returning user short of margin: 'Deposit {x} & Long' = one tx [Deposit, Trade]", async () => {
+    mocks.useUserAccount.mockReturnValue({ account: { capital: 1_000_000n, positionSize: 0n, entryPrice: 0n, pnl: 0n }, idx: 3 });
+    render(<OrderTicket slabAddress={SLAB} />);
+    await waitFor(() => expect(screen.queryByTestId("trade-submit")).not.toBeNull());
+    size("5"); // needs 5 + fee, has 1 => deposit (4 + 0.015) * 1.1 = 4.42
+    expect(screen.queryByTestId("first-trade-line")).toBeNull();
+    expect(submit().textContent).toBe("Deposit 4.42 USDC & Long");
+    await place();
+    expect(mocks.fund.mock.calls[0][0]).toMatchObject({ depositAtoms: 4_420_000n });
   });
 
   it("CONTROL: nothing in the wallet — the ticket stays locked behind 'Get Tokens to Trade'", async () => {

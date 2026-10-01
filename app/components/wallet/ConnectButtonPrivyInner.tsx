@@ -199,17 +199,29 @@ export const ConnectButtonPrivyInner: FC = () => {
           >
             Copy address
           </button>
-          <button
-            onClick={async () => {
-              if (!canFund || !activeWallet) return;
-              await fundWallet({ address: activeWallet.address });
-              setMenuOpen(false);
-            }}
-            disabled={!canFund}
-            className="w-full px-3 py-1.5 text-left text-[13px] text-[var(--text-secondary)] hover:bg-[var(--accent)]/[0.06] rounded-sm transition-colors disabled:opacity-40"
-          >
-            Add funds
-          </button>
+          {/* Privy funding is mainnet-only (canFund), so on devnet "Add funds" was always disabled and
+              the menu had no way to test funds. Same link as the wallet-adapter menu. */}
+          {network === "mainnet" ? (
+            <button
+              onClick={async () => {
+                if (!canFund || !activeWallet) return;
+                await fundWallet({ address: activeWallet.address });
+                setMenuOpen(false);
+              }}
+              disabled={!canFund}
+              className="w-full px-3 py-1.5 text-left text-[13px] text-[var(--text-secondary)] hover:bg-[var(--accent)]/[0.06] rounded-sm transition-colors disabled:opacity-40"
+            >
+              Add funds
+            </button>
+          ) : (
+            <Link
+              href="/faucet"
+              onClick={() => setMenuOpen(false)}
+              className="block w-full px-3 py-1.5 text-left text-[13px] text-[var(--text-secondary)] hover:bg-[var(--accent)]/[0.06] rounded-sm transition-colors"
+            >
+              Get test funds
+            </Link>
+          )}
           <button
             onClick={async () => {
               if (!canExport) return;

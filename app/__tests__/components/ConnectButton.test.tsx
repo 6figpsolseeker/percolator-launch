@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 
+const cfg = vi.hoisted(() => ({ network: "devnet" as "devnet" | "mainnet" }));
+
 vi.mock("@/lib/config", () => ({
   getConfig: () => ({
-    network: "devnet",
+    network: cfg.network,
     rpcUrl: "https://api.devnet.solana.com",
     programId: "FxfD37s1AZTeWfFQps9Zpebi2dNQ9QSSDtfMKdbsfKrD",
     matcherProgramId: "GTRgyTDfrMvBubALAqtHuQwT8tbGyXid7svXZKtWfC9k",
@@ -74,6 +76,7 @@ describe("ConnectButton", () => {
   beforeEach(() => {
     mockLogin.mockClear();
     mockSearchParams = new URLSearchParams();
+    cfg.network = "devnet";
     privyState = {
       ready: true,
       authenticated: true,
@@ -89,6 +92,23 @@ describe("ConnectButton", () => {
     fireEvent.click(getByRole("button", { name: /wallet:/i }));
     expect(getByText("Manage Wallet")).toBeTruthy();
     expect(getByText("Disconnect")).toBeTruthy();
+  });
+
+  // Privy funding is mainnet-only, so on devnet "Add funds" was always disabled and the Privy menu
+  // had no route to test funds (the wallet-adapter menu links /faucet).
+  it("devnet: the menu links Get test funds to /faucet instead of a dead Add funds", () => {
+    const { getByRole, queryByText } = render(<ConnectButton />);
+    fireEvent.click(getByRole("button", { name: /wallet:/i }));
+    expect(getByRole("link", { name: "Get test funds" }).getAttribute("href")).toBe("/faucet");
+    expect(queryByText("Add funds")).toBeNull();
+  });
+
+  it("CONTROL: mainnet keeps Add funds and shows no faucet link", () => {
+    cfg.network = "mainnet";
+    const { getByRole, getByText, queryByText } = render(<ConnectButton />);
+    fireEvent.click(getByRole("button", { name: /wallet:/i }));
+    expect(getByText("Add funds")).toBeTruthy();
+    expect(queryByText("Get test funds")).toBeNull();
   });
 
   it("uses Privy login for unauthenticated users", () => {

@@ -286,7 +286,21 @@ export const AnalyticsDock: FC<{ slab: string }> = ({ slab }) => {
       closeTimer.current = null;
     }
   }, []);
-  const open = useCallback((k: TabKey) => { cancelClose(); setActive(k); }, [cancelClose]);
+  // How the open panel was opened. A click toggles only a panel a click opened: hover and focus (and
+  // the synthetic mouseenter a touch tap fires) open it first, and the click that follows must keep it
+  // open, not close it. A second click on the same tab still closes it, on mouse and touch alike.
+  const openedByClick = useRef(false);
+  const open = useCallback((k: TabKey) => { cancelClose(); openedByClick.current = false; setActive(k); }, [cancelClose]);
+  const clickTab = useCallback((k: TabKey) => {
+    cancelClose();
+    if (active === k && openedByClick.current) {
+      openedByClick.current = false;
+      setActive(null);
+      return;
+    }
+    openedByClick.current = true;
+    setActive(k);
+  }, [active, cancelClose]);
   const scheduleClose = useCallback(() => {
     cancelClose();
     closeTimer.current = setTimeout(() => setActive(null), 140);
@@ -369,7 +383,7 @@ export const AnalyticsDock: FC<{ slab: string }> = ({ slab }) => {
                 type="button"
                 onMouseEnter={() => open(t.key)}
                 onFocus={() => open(t.key)}
-                onClick={() => (on ? setActive(null) : setActive(t.key))}
+                onClick={() => clickTab(t.key)}
                 aria-expanded={on}
                 className={[
                   "relative flex items-center px-3 text-[10px] font-medium uppercase tracking-[0.12em] transition-colors duration-150",

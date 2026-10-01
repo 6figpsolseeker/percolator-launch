@@ -126,6 +126,9 @@ describe("useInsuranceLP", () => {
     // Mock connection
     mockConnection = {
       getAccountInfo: vi.fn(),
+      // GH#419 pot read before an unbound 77 (own ledger, sibling ledger, ticket). None
+      // readable => no 91, so these tests keep asserting the plain 77.
+      getMultipleAccountsInfo: vi.fn().mockResolvedValue([null, null, null]),
     };
 
     // Mock wallet

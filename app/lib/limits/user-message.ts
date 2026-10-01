@@ -341,6 +341,12 @@ export function resolveUserMessage(err: unknown, ctx: MessageContext): UserMessa
         return m("claim-too-much", "error", "Too much", "That's more than the fees available to claim right now.");
       case W.Unauthorized:
         return m("wrong-wallet", "error", "Wrong wallet", "This wallet can't do that on this market. Switch to the wallet that can.");
+      case W.EngineCounterUnderflow:
+        // GH#419: an unbound payout bigger than its pot after the pre-sent 91 (the sibling's
+        // backing is held by open trades) - same state as the EngineLockActive line above.
+        if (ctx.surface === "earn-withdraw")
+          return m("earn-in-use", "paused", "Partly in use", "Part of this vault's money is in use by open trades right now. It becomes available as those trades close; your withdrawal stays ready to collect.");
+        break;
       default:
         break;
     }

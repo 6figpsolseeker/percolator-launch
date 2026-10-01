@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import * as ix from "@/lib/limits/p3-ix";
 import * as C from "@/lib/limits/constants";
-import { buildEarnDepositIxs, buildEarnExecuteIxs, earnTxPlan, type EarnP3Context } from "@/lib/limits/earn-ixs";
+import { buildEarnDepositIxs, buildEarnExecuteIxs, earnTxPlan, ledgerPrincipalAtoms, unboundPotShortfall, type EarnP3Context } from "@/lib/limits/earn-ixs";
 
 const k = () => Keypair.generate().publicKey;
 const PROG = k();
@@ -169,5 +169,40 @@ describe("Earn assembly (shared by useInsuranceLP and the sim bridge)", () => {
     const ixs = buildEarnExecuteIxs({ ...common, redeemer: u, redemption: k(), escrow: k(), vaultAuthority: k(), redeemerDest: k(), plan });
     expect(ixs).toHaveLength(1);
     expect(ixs[0].keys).toHaveLength(13);
+  });
+
+  // Devnet SI 2026-10-01: a 77 priced on both pots (1,600,024,005 + 1,000,000,000) but drawn from
+  // pot 0 refused Custom 25 pre-sign. 91 moving 999,998,998 first passed; 999,998,997 still refused.
+  it("unbound 77 larger than its own pot: 91 moves exactly the shortfall from the sibling first", () => {
+    expect(unboundPotShortfall({ shares: 2_599_991_798n, totalShares: 2_599_992_799n, own: 1_600_024_005n, sibling: 1_000_000_000n })).toBe(999_998_998n);
+    const plan = earnTxPlan(77, ctx({ bound: false }));
+    if (!plan.ok) throw new Error("plan");
+    const ixs = buildEarnExecuteIxs({ ...common, redeemer: u, redemption: k(), escrow: k(), vaultAuthority: k(), redeemerDest: k(), plan, rebalanceAtoms: 999_998_998n });
+    expect(ixs.map((i) => i.data[0])).toEqual([91, C.TAG_EXECUTE_REDEMPTION]);
+    const r = ixs[0];
+    expect(keys(r)).toEqual([u, MARKET, m.registry, m.siblingLedger, m.ledger, SystemProgram.programId].map((x) => x.toBase58()));
+    expect(flags(r)).toBe("sw -w -- -w -w --");
+    // [91, from u16 LE, to u16 LE, amount u128 LE]: sibling (1) -> own (0).
+    expect([...r.data.slice(0, 5)]).toEqual([91, 1, 0, 0, 0]);
+    expect(new DataView(r.data.buffer, r.data.byteOffset + 5, 8).getBigUint64(0, true)).toBe(999_998_998n);
+    expect(ixs[1].keys).toHaveLength(13);
+  });
+  it("shortfall: 0 when the own pot covers the claim; capped at what the sibling holds", () => {
+    expect(unboundPotShortfall({ shares: 100n, totalShares: 1000n, own: 900n, sibling: 100n })).toBe(0n);
+    expect(unboundPotShortfall({ shares: 1000n, totalShares: 1000n, own: 0n, sibling: 50n })).toBe(50n);
+    expect(unboundPotShortfall({ shares: 1n, totalShares: 0n, own: 0n, sibling: 50n })).toBe(0n);
+  });
+  it("ledgerPrincipalAtoms reads total_principal (u128 at 80); 0 for a missing or short account", () => {
+    const d = new Uint8Array(240);
+    new DataView(d.buffer).setBigUint64(80, 1_600_024_005n, true);
+    new DataView(d.buffer).setBigUint64(88, 1n, true);
+    expect(ledgerPrincipalAtoms(d)).toBe(1_600_024_005n + (1n << 64n));
+    expect(ledgerPrincipalAtoms(null)).toBe(0n);
+    expect(ledgerPrincipalAtoms(new Uint8Array(90))).toBe(0n);
+  });
+  it("a bound vault never takes a 91 (the program tops its pot up inside the 77)", () => {
+    const plan = earnTxPlan(77, ctx({}));
+    if (!plan.ok) throw new Error("plan");
+    expect(() => buildEarnExecuteIxs({ ...common, redeemer: u, redemption: k(), escrow: k(), vaultAuthority: k(), redeemerDest: k(), plan, rebalanceAtoms: 1n })).toThrow();
   });
 });

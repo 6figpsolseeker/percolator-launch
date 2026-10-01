@@ -33,7 +33,7 @@ import { useParams } from 'next/navigation';
 import { pythCrankAccount } from "@/lib/limits/oracle-tail";
 import { limitsFlags } from "@/lib/limits/flags";
 import { earnVaultLpRepairOption } from "@/lib/limits/vault-lp-repair";
-import { buildEarnDepositIxs, buildEarnExecuteIxs, buildRequestRedeemIx, earnTxPlan, sendWithHarvestOn84, withForcedHarvest, type EarnTxPlan } from "@/lib/limits/earn-ixs";
+import { buildEarnDepositIxs, buildEarnExecuteIxs, buildRequestRedeemIx, earnTxPlan, ledgerPrincipalAtoms, sendWithHarvestOn84, unboundPotShortfall, withForcedHarvest, type EarnTxPlan } from "@/lib/limits/earn-ixs";
 import { SimulationRefusal } from "@/lib/tx";
 import { WRAPPER_ERR } from "@/lib/wrapper-errors";
 import { resolveDevnetProgramIds } from "@/lib/program-ids";
@@ -793,8 +793,22 @@ export function useInsuranceLP() {
         // refuses 84 while LP fees are harvestable - bundle tag 78 in front (P3-K1).
         // [12] redeemerRentDest (#461 / GH#412, live in v18.2): the consumed redemption PDA's
         // rent is returned to the RECORDED redeemer - the UI only claims its own redemption.
-        const p3 = withForcedHarvest(earnTxPlan(TAG_EXECUTE_REDEMPTION, await readEarnP3Context(connection, progPk, marketPk)), forceHarvest);
+        const p3ctx = await readEarnP3Context(connection, progPk, marketPk);
+        const p3 = withForcedHarvest(earnTxPlan(TAG_EXECUTE_REDEMPTION, p3ctx), forceHarvest);
         assertEarnPlan(p3);
+        // GH#419: an UNBOUND 77 is priced on both pots but drawn from this one; move the
+        // shortfall over first (permissionless 91) or it refuses 25. A bound vault does this
+        // inside the 77. Shares: the ticket's, or lpAmount in the one-tx flow (no ticket yet).
+        let rebalanceAtoms = 0n;
+        if (!p3.tail) {
+          const [own, sibling, ticket] = await connection.getMultipleAccountsInfo([ledgerPda, siblingLedgerPda, redemptionPda]);
+          rebalanceAtoms = unboundPotShortfall({
+            shares: ticket ? parseLpRedemption(new Uint8Array(ticket.data)).shares : lpAmount,
+            totalShares: p3ctx.registryShares ?? 0n,
+            own: ledgerPrincipalAtoms(own?.data),
+            sibling: ledgerPrincipalAtoms(sibling?.data),
+          });
+        }
         return buildEarnExecuteIxs({
           programId: progPk,
           redeemer: wallet.publicKey!,
@@ -810,6 +824,7 @@ export function useInsuranceLP() {
           siblingLedger: siblingLedgerPda,
           domain,
           plan: p3,
+          rebalanceAtoms,
         });
       };
       // P3 ordering: a resolved close that ran before the vault LP settled left the viewer a

@@ -13,7 +13,7 @@
  * Pure; the hook reads the accounts and executes.
  */
 import type { PublicKey, TransactionInstruction } from "@solana/web3.js";
-import { ACCOUNTS_LP_VAULT_DEPOSIT, buildAccountMetas, buildIx, encodeDepositToLpVault, encodeExecuteRedemption, encodeRequestRedeemLpShares, WELL_KNOWN } from "@percolatorct/sdk";
+import { ACCOUNTS_LP_VAULT_DEPOSIT, ACCOUNTS_REBALANCE_LP_VAULT_BACKING, buildAccountMetas, buildIx, encodeDepositToLpVault, encodeExecuteRedemption, encodeRebalanceLpVaultBacking, encodeRequestRedeemLpShares, WELL_KNOWN } from "@percolatorct/sdk";
 import { buildLpVaultCrankFeesIx, withBoundVaultLpTail } from "./p3-ix";
 import { MARKET_MODE_LIVE, TAG_DEPOSIT_TO_LP_VAULT, TAG_EXECUTE_REDEMPTION, TAG_REQUEST_REDEEM_LP_SHARES } from "./constants";
 
@@ -108,8 +108,33 @@ export function buildEarnDepositIxs(p: {
   ];
 }
 
+/** LP backing ledger `total_principal_atoms`: u128 at 80 (16-byte header + market_group +
+ *  authority). 0 when the account is missing or too short. */
+export function ledgerPrincipalAtoms(data: Uint8Array | null | undefined): bigint {
+  if (!data || data.length < 96) return 0n;
+  const v = new DataView(data.buffer, data.byteOffset + 80, 16);
+  return v.getBigUint64(0, true) | (v.getBigUint64(8, true) << 64n);
+}
+
 /**
- * [78 if the plan says so, 77]. 77 accounts (`handle_execute_redemption`): [cranker (s,w),
+ * Atoms an UNBOUND 77 needs moved into its own pot first (GH#419). The program prices the
+ * payout on both pots but draws it from one; only a bound vault tops the pot up inside the 77
+ * (221cf006), so an unbound claim larger than its own pot refuses EngineCounterUnderflow (25).
+ * Capped at what the sibling holds; 0 when the own pot covers it.
+ * ponytail: priced on total principal, not available (total minus unrecovered loss), so with
+ * losses this over-asks; moving extra between one vault's own pots is value-neutral, but a
+ * liened sibling then refuses the 91 (21). Price on available principal if that ever bites.
+ */
+export function unboundPotShortfall(p: { shares: bigint; totalShares: bigint; own: bigint; sibling: bigint }): bigint {
+  if (p.totalShares <= 0n) return 0n;
+  const need = (p.shares * (p.own + p.sibling)) / p.totalShares - p.own;
+  if (need <= 0n) return 0n;
+  return need < p.sibling ? need : p.sibling;
+}
+
+/**
+ * [78 if the plan says so, 91 if `rebalanceAtoms` (unbound only), 77]. 91 is the permissionless
+ * RebalanceLpVaultBacking, sibling pot -> the 77's pot. 77 accounts (`handle_execute_redemption`): [cranker (s,w),
  * market (w), registry (w), redemption (w), lpMint (w), escrow (w), vaultToken (w),
  * vaultAuthority, ledger (w), redeemerDest (w), tokenProgram, siblingLedger (w),
  * redeemerRentDest (w, == the recorded redeemer; #461)] (+ bound tail [13], [14]).
@@ -129,7 +154,16 @@ export function buildEarnExecuteIxs(p: {
   siblingLedger: PublicKey;
   domain: number;
   plan: OkPlan;
+  rebalanceAtoms?: bigint;
 }): TransactionInstruction[] {
+  if (p.rebalanceAtoms && p.plan.tail) throw new Error("a bound vault tops its pot up inside the 77; no 91");
+  const rebalance = p.rebalanceAtoms
+    ? [buildIx({
+        programId: p.programId,
+        keys: buildAccountMetas(ACCOUNTS_REBALANCE_LP_VAULT_BACKING, [p.redeemer, p.market, p.registry, p.siblingLedger, p.ledger, WELL_KNOWN.systemProgram]),
+        data: encodeRebalanceLpVaultBacking({ fromDomain: p.domain ^ 1, toDomain: p.domain, amount: p.rebalanceAtoms }),
+      })]
+    : [];
   const base = [
     { pubkey: p.redeemer, isSigner: true, isWritable: true },
     { pubkey: p.market, isSigner: false, isWritable: true },
@@ -148,6 +182,7 @@ export function buildEarnExecuteIxs(p: {
   const keys = p.plan.tail ? withBoundVaultLpTail(TAG_EXECUTE_REDEMPTION, base, p.plan.tail.vaultLpState, p.plan.tail.lpPortfolio) : base;
   return [
     ...harvestIx({ programId: p.programId, cranker: p.redeemer, market: p.market, registry: p.registry, ledger: p.ledger, siblingLedger: p.siblingLedger, domain: p.domain }, p.plan),
+    ...rebalance,
     buildIx({ programId: p.programId, keys, data: encodeExecuteRedemption({ domain: p.domain }) }),
   ];
 }

@@ -149,6 +149,7 @@ describe("resolveUserMessage (§5.3): every code, both wallet shapes, plain word
     [W.VaultLpValuationStale, "earn-deposit", "earn-value-updating"],
     [W.VaultLpSeniorDrawRequired, "earn-withdraw", "earn-booking-move"],
     [W.VaultLpRedeemNeedsRecall, "earn-withdraw", "earn-in-use"],
+    [W.EngineCounterUnderflow, "earn-withdraw", "earn-in-use"],
     [W.VaultLpPausedForSeniorDraw, "creator-stake", "paused-earn-covers-loss"],
     [W.LpVaultCooldownActive, "earn-withdraw", "earn-cooldown"],
     [W.LpVaultOiReservationViolated, "earn-withdraw", "earn-partial-now"],

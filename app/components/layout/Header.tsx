@@ -2,6 +2,8 @@
 
 import { FC, useEffect, useState, useRef } from "react";
 import Link from "next/link";
+import { PlaygroundNavTab } from "@/components/layout/PlaygroundNavTab";
+import { isPlaygroundGateHost } from "@/lib/playground-hosts";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -80,6 +82,11 @@ export const Header: FC = () => {
   const [mobileExpanded, setMobileExpanded] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
   const [isWaitlistHost, setIsWaitlistHost] = useState(false);
+  // Playground tab only where the waitlist gate lives (percolator.trade, its
+  // previews, local dev). The mainnet app builds from this same branch and must
+  // not change, so it is an allow-list, resolved after hydration like the
+  // waitlist-host check above.
+  const [showPlayground, setShowPlayground] = useState(false);
   const pathname = usePathname();
   const prefersReduced = usePrefersReducedMotion();
   const headerRef = useRef<HTMLElement>(null);
@@ -95,6 +102,7 @@ export const Header: FC = () => {
     if (typeof window === "undefined") return;
     const host = window.location.host.split(":")[0].toLowerCase();
     setIsWaitlistHost(host === "percolator.trade" || host === "www.percolator.trade");
+    setShowPlayground(isPlaygroundGateHost(host));
   }, []);
 
   // Scroll detection
@@ -187,6 +195,10 @@ export const Header: FC = () => {
             )}
             <NavDropdown label="Build" items={filterForWaitlistHost(filterForNetwork(buildLinks, network), "build", isWaitlistHost)} />
             <NavDropdown label="Community" items={filterForWaitlistHost(filterForNetwork(communityLinks, network), "community", isWaitlistHost)} />
+            {/* Locked unless the server admits this member AND launch is open.
+                Locked, it is a button with no href — nothing to navigate to,
+                middle-click, copy, or crawl. */}
+            {showPlayground && <PlaygroundNavTab />}
           </nav>
         </div>
 
@@ -287,6 +299,12 @@ export const Header: FC = () => {
               )}
             </div>
           ))}
+
+          {showPlayground && (
+            <div className="px-1 py-1">
+              <PlaygroundNavTab />
+            </div>
+          )}
 
           {/* Social links */}
           <div className="mt-1 flex items-center gap-2 border-t border-[var(--border)] px-3 pt-3">

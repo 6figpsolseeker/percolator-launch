@@ -404,3 +404,46 @@ describe("middleware — /markets/:slab 308 redirect (GH#1558)", () => {
     expect(res.status).not.toBe(308);
   });
 });
+
+// ── Playground gate surfaces are waitlist-host only ────────────────────────
+describe("middleware — playground surfaces never reach the mainnet app", () => {
+  let middleware: MiddlewareFn;
+  beforeEach(async () => {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    middleware = await freshMiddleware();
+  });
+  const at = (host: string, p: string) =>
+    new NextRequest(`https://${host}${p}`, { headers: { host, "x-forwarded-for": "9.9.9.9" } });
+
+  it.each([
+    ["mainnet.percolatorlaunch.com", "/playground"],
+    ["mainnet.percolatorlaunch.com", "/playground/"],
+    ["mainnet.percolatorlaunch.com", "/api/playground/authorize"],
+    ["mainnet.percolatorlaunch.com", "/api/playground/enter"],
+    ["percolator-mainnet-abc-khubair-nasirs-projects.vercel.app", "/playground"],
+  ])("%s%s → 404", async (host, p) => {
+    const res = await middleware(at(host, p));
+    expect(res.status).toBe(404);
+  });
+
+  it.each([
+    ["percolator.trade", "/playground"],
+    ["percolator.trade", "/api/playground/authorize"],
+    ["localhost", "/playground"],
+  ])("%s%s passes through", async (host, p) => {
+    const res = await middleware(at(host, p));
+    expect(res.status).not.toBe(404);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("CONTROL: the mainnet host's own pages are untouched", async () => {
+    const res = await middleware(at("mainnet.percolatorlaunch.com", "/markets"));
+    expect(res.status).not.toBe(404);
+    const api = await middleware(at("mainnet.percolatorlaunch.com", "/api/markets"));
+    expect(api.status).not.toBe(404);
+    // A path that merely starts with the word is not a playground surface.
+    const near = await middleware(at("mainnet.percolatorlaunch.com", "/playgrounds"));
+    expect(near.status).not.toBe(404);
+  });
+});

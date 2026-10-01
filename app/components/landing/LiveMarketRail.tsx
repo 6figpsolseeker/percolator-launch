@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore, type FC } from "react";
+import { useCallback, useMemo, useSyncExternalStore, type FC } from "react";
 import Link from "next/link";
 import { MarketLogo } from "@/components/market/MarketLogo";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -8,8 +8,8 @@ import { formatMarkPrice, formatStatValue } from "@/lib/format";
 import { rowVolumeUsd } from "@/lib/q-usd";
 import { subscribeSlab, getSnapshot } from "@/lib/priceStore/priceStore";
 import { usePriceFlash } from "@/hooks/usePriceFlash";
-import { useAllMarketStats } from "@/hooks/useAllMarketStats";
-import { PLAYGROUND_SLAB_META } from "@/lib/playground-slab-meta";
+import { useAllMarketStats, type MarketWithStats } from "@/hooks/useAllMarketStats";
+import { isZombieMarket } from "@/lib/activeMarketFilter";
 
 /** Decorative right-chevron — same mark used by every other CTA on the
  *  landing page (see app/app/page.tsx's ARROW), duplicated here rather than
@@ -29,33 +29,31 @@ const ARROW = (
   </svg>
 );
 
-/**
- * Fires once, ~`delayMs` after mount. Used to defer the rail's secondary
- * (volume / max-leverage) stats fetch so it doesn't compete on the network
- * for the same tick as the hero's ScrollReveal/gsap work and the live price
- * WS handshake — those are the primary signal and should paint first. The
- * fetch itself is cheap once it fires (SWR-shared, 30s dedup), this just
- * changes *when* it's kicked off.
- */
-function useDeferredMount(delayMs = 250): boolean {
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    const id = window.setTimeout(() => setReady(true), delayMs);
-    return () => window.clearTimeout(id);
-  }, [delayMs]);
-  return ready;
-}
+/** Rows shown on the landing page; /markets has the full list. */
+const RAIL_LIMIT = 6;
 
-/** The six born-immortal curated devnet markets (lib/playground-slab-meta.ts) —
- *  a fixed, ordered set so the rail never reflows as data loads (zero layout
- *  shift). Real on-chain markets, not mock data. */
-const RAIL_SLABS = Object.keys(PLAYGROUND_SLAB_META);
+/** NUMERIC columns can arrive as strings; coerce like /markets does (GH#1536). */
+const num = (v: unknown): number | null => {
+  const n = Number(v);
+  return v == null || !Number.isFinite(n) ? null : n;
+};
+const zombieInputs = (m: MarketWithStats) => {
+  const r = m as Record<string, unknown>;
+  return {
+    vault_balance: num(r.vault_balance),
+    c_tot: num(r.c_tot),
+    last_price: num(r.last_price),
+    volume_24h: num(r.volume_24h),
+    total_open_interest: num(r.total_open_interest),
+    total_accounts: num(r.total_accounts),
+  };
+};
 
 interface RailRowProps {
   slab: string;
   symbol: string;
   name: string;
-  mainnetCa: string;
+  mainnetCa: string | null;
   fallbackPrice: number | null;
   volume24h: number | null;
   maxLeverage: number | null;
@@ -188,42 +186,66 @@ const RailHeader: FC = () => (
 
 /**
  * The landing page's live market rail — real devnet markets, real ticking
- * prices, zero decoration. Row identity/order is fixed (RAIL_SLABS) so
- * arriving stats/ticks never reflow the list; only price text + color update.
+ * prices, zero decoration.
  *
- * The secondary volume/max-leverage stats (`useAllMarketStats`, a ~500-market
- * fetch) are deferred a beat past mount so the primary signal — logo, symbol,
- * and the live price off `priceStore` — never waits on it. Each row already
- * subscribes to `priceStore` directly regardless of this gate.
+ * Rows come from /api/markets (on-chain discovery + the registration Blob), the
+ * same source as /markets. They used to come from PLAYGROUND_SLAB_META, which
+ * the 2026-10-01 relaunch emptied, so the rail rendered a header and no rows.
+ * The API already drops incomplete markets. Zombies are dropped here with the
+ * same isZombieMarket() check /markets applies, since this fetch opts into them
+ * (include_zombie=true). Busiest first, top RAIL_LIMIT. Each row subscribes to
+ * `priceStore` for its live price.
  */
 export function LiveMarketRail() {
-  const statsEnabled = useDeferredMount();
-  const { statsMap } = useAllMarketStats({ enabled: statsEnabled });
+  const { statsMap, loading, error } = useAllMarketStats();
+
+  const rows = useMemo(
+    () =>
+      [...statsMap.values()]
+        .filter((m) => m.slab_address && !isZombieMarket(zombieInputs(m)))
+        // Slab tiebreak: with no volume anywhere the API order is discovery
+        // order, which can change between the 30s refetches.
+        .sort(
+          (a, b) =>
+            (rowVolumeUsd(b) ?? 0) - (rowVolumeUsd(a) ?? 0) ||
+            (a.slab_address as string).localeCompare(b.slab_address as string),
+        )
+        .slice(0, RAIL_LIMIT),
+    [statsMap],
+  );
 
   return (
     <GlassCard padding="none" elevation="md" className="overflow-hidden" hover={false}>
       <RailHeader />
-      {RAIL_SLABS.map((slab, i) => {
-        const meta = PLAYGROUND_SLAB_META[slab];
-        const stats = statsMap.get(slab);
+      {rows.map((m, i) => {
+        const slab = m.slab_address as string;
         return (
           <RailRow
             key={slab}
             slab={slab}
-            symbol={meta.symbol}
-            name={meta.name}
-            mainnetCa={meta.mainnet_ca}
-            fallbackPrice={stats?.last_price ?? null}
+            symbol={m.symbol || `${slab.slice(0, 4)}…${slab.slice(-4)}`}
+            name={m.name ?? ""}
+            mainnetCa={m.mainnet_ca}
+            fallbackPrice={m.last_price ?? null}
             // `|| null` (not `?? null`): a literal 0 here means "trade-tape
             // indexer has no data", not "zero volume" — /markets renders the
             // same state as "—", and this rail showed "$0.00" for it. Map 0
             // to null so formatStatValue renders the same "—" convention.
-            volume24h={rowVolumeUsd(stats) || null}
-            maxLeverage={stats?.max_leverage ?? null}
-            isLast={i === RAIL_SLABS.length - 1}
+            volume24h={rowVolumeUsd(m) || null}
+            maxLeverage={m.max_leverage ?? null}
+            isLast={i === rows.length - 1}
           />
         );
       })}
+      {rows.length === 0 && !loading && (
+        <div className="px-4 py-6 text-center text-[11px] text-[var(--text-secondary)]">
+          {error ? (
+            <Link href="/markets" className="hover:text-[var(--accent)]">Couldn&apos;t load markets. Open the market list</Link>
+          ) : (
+            <Link href="/create" className="hover:text-[var(--accent)]">No markets yet. Create the first one</Link>
+          )}
+        </div>
+      )}
     </GlassCard>
   );
 }

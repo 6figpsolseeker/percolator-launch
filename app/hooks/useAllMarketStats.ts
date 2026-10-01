@@ -47,10 +47,10 @@ export interface UseAllMarketStatsOptions {
   /**
    * When `false`, skips firing the request entirely (SWR's conditional-key
    * pattern — passing `null` as the key). Defaults to `true`. Lets a caller
-   * whose stats are secondary/below-the-fold (e.g. the landing page's live
-   * rail, which only needs this for two decorative columns) defer the
-   * ~500-market fetch until after its primary content — the live price feed
-   * — has had a chance to paint, instead of competing for bandwidth on mount.
+   * whose stats are secondary/below-the-fold defer the ~500-market fetch until
+   * its primary content has had a chance to paint, instead of competing for
+   * bandwidth on mount. (The landing rail no longer defers: its rows come
+   * from this fetch.)
    */
   enabled?: boolean;
 }

@@ -71,6 +71,12 @@ describe("LiveMarketRail rows", () => {
     expect(screen.getByRole("link", { name: /Couldn.t load markets/ }).getAttribute("href")).toBe("/markets");
   });
 
+  it("keeps the error while SWR retries a failed first load", () => {
+    setStats([], { loading: true, error: "Markets API returned 500" });
+    render(<LiveMarketRail />);
+    expect(screen.getByRole("link", { name: /Couldn.t load markets/ })).toBeTruthy();
+  });
+
   it("shows no message while loading", () => {
     setStats([], { loading: true });
     render(<LiveMarketRail />);

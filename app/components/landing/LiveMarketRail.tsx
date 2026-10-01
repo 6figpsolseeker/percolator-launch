@@ -237,7 +237,9 @@ export function LiveMarketRail() {
           />
         );
       })}
-      {rows.length === 0 && !loading && (
+      {/* `error ||`: SWR flips loading back on while it retries a failed
+          first load, which would blank the error message every 30s. */}
+      {rows.length === 0 && (error || !loading) && (
         <div className="px-4 py-6 text-center text-[11px] text-[var(--text-secondary)]">
           {error ? (
             <Link href="/markets" className="hover:text-[var(--accent)]">Couldn&apos;t load markets. Open the market list</Link>

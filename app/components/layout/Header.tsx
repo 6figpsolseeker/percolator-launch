@@ -89,6 +89,7 @@ export const Header: FC = () => {
   const prefersReduced = usePrefersReducedMotion();
   const headerRef = useRef<HTMLElement>(null);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const menuToggleRef = useRef<HTMLButtonElement>(null);
   const badgeRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => { setNet(getConfig().network); }, []);
@@ -140,6 +141,18 @@ export const Header: FC = () => {
       });
     }
   }, [mobileOpen, prefersReduced]);
+
+  // Escape closes the mobile menu and hands focus back to its toggle, like the app's other sheets.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMobileOpen(false);
+      menuToggleRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileOpen]);
 
   // Close mobile on route change
   useEffect(() => {
@@ -259,6 +272,7 @@ export const Header: FC = () => {
             className="flex h-10 w-10 items-center justify-center rounded-sm text-[var(--text-muted)] transition-colors hover:bg-[var(--accent)]/[0.04] hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] md:hidden"
             aria-label={mobileOpen ? "Close menu" : "Open menu"}
             aria-expanded={mobileOpen}
+            ref={menuToggleRef}
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               {mobileOpen ? (

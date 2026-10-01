@@ -30,6 +30,7 @@ import { MarketLogo } from "@/components/market/MarketLogo";
 import { PLAYGROUND_SLAB_META } from "@/lib/playground-slab-meta";
 import Link from "next/link";
 import { FeeBreakdown } from "@/components/FeeBreakdown";
+import { ConnectWalletCta } from "@/components/wallet/ConnectWalletCta";
 
 /* ── Types ── */
 
@@ -920,9 +921,7 @@ function DepositWidget({
 
             {/* CTA */}
             {!connected ? (
-              <button className="w-full rounded-sm py-3 border border-[var(--border)] bg-[var(--bg)] text-[12px] font-semibold uppercase tracking-[0.1em] text-[var(--text-secondary)] cursor-not-allowed">
-                Connect Wallet to Deposit
-              </button>
+              <ConnectWalletCta label="Connect Wallet to Deposit" testId="stake-connect-deposit" />
             ) : (
               <button
                 data-testid="stake-deposit-submit"
@@ -1029,9 +1028,7 @@ function DepositWidget({
 
             {/* CTA */}
             {!connected ? (
-              <button className="w-full rounded-sm py-3 border border-[var(--border)] bg-[var(--bg)] text-[12px] font-semibold uppercase tracking-[0.1em] text-[var(--text-secondary)] cursor-not-allowed">
-                Connect Wallet to Withdraw
-              </button>
+              <ConnectWalletCta label="Connect Wallet to Withdraw" testId="stake-connect-withdraw" />
             ) : (
               <button
                 data-testid="stake-withdraw-submit"

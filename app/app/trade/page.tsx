@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ShimmerSkeleton } from "@/components/ui/ShimmerSkeleton";
+import { qToUsd, rowVolumeUsd } from "@/lib/q-usd";
 
 /**
  * /trade (no slab parameter)
@@ -20,7 +21,9 @@ interface MarketRow {
   slab_address: string;
   symbol: string | null;
   volume_24h: number | null;
+  volume_24h_usd?: number | null;
   total_open_interest: number | null;
+  total_open_interest_usd?: number | null;
   last_price: number | null;
 }
 
@@ -76,15 +79,17 @@ export default function TradeRedirectPage() {
           return;
         }
 
-        // Fallback: sort by activity — treat vol=0 and null as dead (-1) so stale
-        // slabs don't win over fresh ones. Tiebreaker: OI DESC.
+        // Fallback: sort by activity in USD — treat 0 and null as dead (-1) so stale slabs don't
+        // win over fresh ones. Tiebreaker: OI DESC. volume_24h / total_open_interest are base-token
+        // quantities, so a sub-cent token always won on them; this is the USD volume /markets sorts
+        // by (rowVolumeUsd).
+        const live = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : -1);
+        const oiUsd = (m: MarketRow) => m.total_open_interest_usd ?? qToUsd(m.total_open_interest, m.last_price);
         const sorted = [...pool].sort((a, b) => {
-          const va = typeof a.volume_24h === "number" && a.volume_24h > 0 ? a.volume_24h : -1;
-          const vb = typeof b.volume_24h === "number" && b.volume_24h > 0 ? b.volume_24h : -1;
+          const va = live(rowVolumeUsd(a));
+          const vb = live(rowVolumeUsd(b));
           if (vb !== va) return vb - va;
-          const oa = typeof a.total_open_interest === "number" && a.total_open_interest > 0 ? a.total_open_interest : -1;
-          const ob = typeof b.total_open_interest === "number" && b.total_open_interest > 0 ? b.total_open_interest : -1;
-          return ob - oa;
+          return live(oiUsd(b)) - live(oiUsd(a));
         });
 
         const target = sorted[0];
@@ -215,7 +220,7 @@ export default function TradeRedirectPage() {
         <div className="flex items-center gap-2 rounded-sm border border-[var(--border)] bg-[var(--bg)]/95 px-3 py-1.5 backdrop-blur-sm">
           <div className="h-3 w-3 animate-spin rounded-full border border-[var(--accent)] border-t-transparent" />
           <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-[0.15em]">
-            Loading SOL…
+            Loading market…
           </span>
         </div>
       </div>

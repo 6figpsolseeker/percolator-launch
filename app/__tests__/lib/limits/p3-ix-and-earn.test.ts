@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import * as ix from "@/lib/limits/p3-ix";
 import * as C from "@/lib/limits/constants";
-import { buildEarnDepositIxs, buildEarnExecuteIxs, earnTxPlan, ledgerPrincipalAtoms, unboundPotShortfall, type EarnP3Context } from "@/lib/limits/earn-ixs";
+import { buildEarnDepositIxs, buildEarnExecuteIxs, earnTxPlan, ledgerPrincipalAtoms, rebalanceLadder, sendWithRebalanceOn25, unboundPotShortfall, type EarnP3Context } from "@/lib/limits/earn-ixs";
 
 const k = () => Keypair.generate().publicKey;
 const PROG = k();
@@ -199,6 +199,65 @@ describe("Earn assembly (shared by useInsuranceLP and the sim bridge)", () => {
     expect(ledgerPrincipalAtoms(d)).toBe(1_600_024_005n + (1n << 64n));
     expect(ledgerPrincipalAtoms(null)).toBe(0n);
     expect(ledgerPrincipalAtoms(new Uint8Array(90))).toBe(0n);
+  });
+  describe("sendWithRebalanceOn25: a 91 only after the bare 77 refused 25", () => {
+    const refusal25 = new Error("25"), refusal21 = new Error("21"), walletNo = new Error("user rejected");
+    const run = (o: { fail?: (atoms: bigint) => Error | null; read?: () => Promise<bigint[]> }) => {
+      const sent: bigint[] = [];
+      let reads = 0;
+      const p = sendWithRebalanceOn25({
+        send: async (atoms) => { sent.push(atoms); const e = o.fail?.(atoms); if (e) throw e; return "sig"; },
+        readAmounts: async () => { reads++; return o.read ? o.read() : [902_581_528n, 926_011_522n, 899_978_196n]; },
+        isPotShortfallRefusal: (e) => e === refusal25,
+        isPreSignRefusal: (e) => e === refusal25 || e === refusal21,
+      });
+      return { p, sent, reads: () => reads };
+    };
+    it("passes alone: no read, no 91", async () => {
+      const r = run({});
+      await expect(r.p).resolves.toBe("sig");
+      expect(r.sent).toEqual([0n]);
+      expect(r.reads()).toBe(0);
+    });
+    it("25 alone: the first amount that passes the pre-sign check is sent", async () => {
+      const r = run({ fail: (a) => (a === 0n ? refusal25 : null) });
+      await expect(r.p).resolves.toBe("sig");
+      expect(r.sent).toEqual([0n, 902_581_528n]);
+    });
+    it("walks down the ladder past refusals (the 91 refused 21, or the 77 still 25)", async () => {
+      const r = run({ fail: (a) => (a === 0n || a === 902_581_528n ? refusal25 : a === 926_011_522n ? refusal21 : null) });
+      await expect(r.p).resolves.toBe("sig");
+      expect(r.sent).toEqual([0n, 902_581_528n, 926_011_522n, 899_978_196n]);
+    });
+    it("a non-refusal (wallet declined) stops the ladder", async () => {
+      const r = run({ fail: (a) => (a === 0n ? refusal25 : walletNo) });
+      await expect(r.p).rejects.toBe(walletNo);
+      expect(r.sent).toEqual([0n, 902_581_528n]);
+    });
+    it("any other first refusal: thrown, no read", async () => {
+      const r = run({ fail: () => refusal21 });
+      await expect(r.p).rejects.toBe(refusal21);
+      expect(r.reads()).toBe(0);
+    });
+    it("25 with a failed read, no amounts, or none passing: the original 25", async () => {
+      const a = run({ fail: () => refusal25, read: () => Promise.reject(new Error("rpc")) });
+      await expect(a.p).rejects.toBe(refusal25);
+      expect(a.sent).toEqual([0n]);
+      const b = run({ fail: () => refusal25, read: async () => [] });
+      await expect(b.p).rejects.toBe(refusal25);
+      const c = run({ fail: (x) => (x === 0n ? refusal25 : refusal21) });
+      await expect(c.p).rejects.toBe(refusal25);
+      expect(c.sent).toHaveLength(4);
+    });
+  });
+  // Devnet SI 2026-10-01 11:20Z: need 899,978,196 on pots 1,703,354,433 + 1,000,000,000; the real
+  // boundary was 900,001,994, so the bare estimate refused 25 and the first rung must clear it.
+  it("rebalanceLadder: need + 0.1% / + 1% of the payout, then need; capped at the sibling", () => {
+    const l = rebalanceLadder(899_978_196n, 1_703_354_433n, 1_000_000_000n);
+    expect(l).toEqual([902_581_528n, 926_011_522n, 899_978_196n]);
+    expect(l[0]).toBeGreaterThanOrEqual(900_001_994n);
+    expect(rebalanceLadder(990_000_000n, 1_600_000_000n, 1_000_000_000n)).toEqual([992_590_000n, 1_000_000_000n, 990_000_000n]);
+    expect(rebalanceLadder(0n, 1n, 1n)).toEqual([]);
   });
   it("a bound vault never takes a 91 (the program tops its pot up inside the 77)", () => {
     const plan = earnTxPlan(77, ctx({}));

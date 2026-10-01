@@ -33,7 +33,7 @@ import { useParams } from 'next/navigation';
 import { pythCrankAccount } from "@/lib/limits/oracle-tail";
 import { limitsFlags } from "@/lib/limits/flags";
 import { earnVaultLpRepairOption } from "@/lib/limits/vault-lp-repair";
-import { buildEarnDepositIxs, buildEarnExecuteIxs, buildRequestRedeemIx, earnTxPlan, ledgerPrincipalAtoms, sendWithHarvestOn84, unboundPotShortfall, withForcedHarvest, type EarnTxPlan } from "@/lib/limits/earn-ixs";
+import { buildEarnDepositIxs, buildEarnExecuteIxs, buildRequestRedeemIx, earnTxPlan, ledgerPrincipalAtoms, rebalanceLadder, sendWithHarvestOn84, sendWithRebalanceOn25, unboundPotShortfall, withForcedHarvest, type EarnTxPlan } from "@/lib/limits/earn-ixs";
 import { SimulationRefusal } from "@/lib/tx";
 import { WRAPPER_ERR } from "@/lib/wrapper-errors";
 import { resolveDevnetProgramIds } from "@/lib/program-ids";
@@ -775,17 +775,17 @@ export function useInsuranceLP() {
       // tokenProgram, siblingLedger(w), redeemerRentDest(w)]. `cranker` is permissionless (anyone may execute post-cooldown,
       // and is directly credited the redemption PDA's reclaimed rent) — the UI always
       // calls it as the redeemer themselves.
-      const buildExecuteIxs = async (forceHarvest = false) => {
+      // v17 DUAL-DOMAIN: [11] is the sibling pot's ledger. NAV and
+      // available-principal are summed across both pots, so it is required
+      // even when uninitialised, or the redeemer is underpaid by whatever sits
+      // in the sibling. The `domain` argument says which pot the payout is
+      // DRAWN from — the vault's own. (221cf006: on a BOUND vault both pot ledgers are
+      // writable — buildEarnExecuteIxs; a senior larger than one pot redeems across both.)
+      const domain = state.lpVaultDomain;
+      const [ledgerPda] = deriveLpBackingLedger(progPk, marketPk, domain);
+      const [siblingLedgerPda] = deriveLpBackingLedger(progPk, marketPk, domain ^ 1);
+      const buildExecuteIxs = async (forceHarvest = false, rebalanceAtoms = 0n) => {
         const [vaultPda] = deriveVaultAuthority(progPk, marketPk);
-        // v17 DUAL-DOMAIN: [11] is the sibling pot's ledger. NAV and
-        // available-principal are summed across both pots, so it is required
-        // even when uninitialised, or the redeemer is underpaid by whatever sits
-        // in the sibling. The `domain` argument says which pot the payout is
-        // DRAWN from — the vault's own. (221cf006: on a BOUND vault both pot ledgers are
-        // writable — buildEarnExecuteIxs; a senior larger than one pot redeems across both.)
-        const domain = state.lpVaultDomain;
-        const [ledgerPda] = deriveLpBackingLedger(progPk, marketPk, domain);
-        const [siblingLedgerPda] = deriveLpBackingLedger(progPk, marketPk, domain ^ 1);
         const collateralMint = slabState.config!.collateralMint;
         const vaultTokenAta = await getAssociatedTokenAddress(collateralMint, vaultPda, true);
         const redeemerAta = await getAssociatedTokenAddress(collateralMint, wallet.publicKey!);
@@ -793,22 +793,8 @@ export function useInsuranceLP() {
         // refuses 84 while LP fees are harvestable - bundle tag 78 in front (P3-K1).
         // [12] redeemerRentDest (#461 / GH#412, live in v18.2): the consumed redemption PDA's
         // rent is returned to the RECORDED redeemer - the UI only claims its own redemption.
-        const p3ctx = await readEarnP3Context(connection, progPk, marketPk);
-        const p3 = withForcedHarvest(earnTxPlan(TAG_EXECUTE_REDEMPTION, p3ctx), forceHarvest);
+        const p3 = withForcedHarvest(earnTxPlan(TAG_EXECUTE_REDEMPTION, await readEarnP3Context(connection, progPk, marketPk)), forceHarvest);
         assertEarnPlan(p3);
-        // GH#419: an UNBOUND 77 is priced on both pots but drawn from this one; move the
-        // shortfall over first (permissionless 91) or it refuses 25. A bound vault does this
-        // inside the 77. Shares: the ticket's, or lpAmount in the one-tx flow (no ticket yet).
-        let rebalanceAtoms = 0n;
-        if (!p3.tail) {
-          const [own, sibling, ticket] = await connection.getMultipleAccountsInfo([ledgerPda, siblingLedgerPda, redemptionPda]);
-          rebalanceAtoms = unboundPotShortfall({
-            shares: ticket ? parseLpRedemption(new Uint8Array(ticket.data)).shares : lpAmount,
-            totalShares: p3ctx.registryShares ?? 0n,
-            own: ledgerPrincipalAtoms(own?.data),
-            sibling: ledgerPrincipalAtoms(sibling?.data),
-          });
-        }
         return buildEarnExecuteIxs({
           programId: progPk,
           redeemer: wallet.publicKey!,
@@ -824,8 +810,27 @@ export function useInsuranceLP() {
           siblingLedger: siblingLedgerPda,
           domain,
           plan: p3,
-          rebalanceAtoms,
+          rebalanceAtoms: p3.tail ? 0n : rebalanceAtoms,
         });
+      };
+      // GH#419: an UNBOUND 77 is priced on both pots but drawn from this one, so a claim larger
+      // than this pot refuses 25; the permissionless 91 moves the shortfall over first. A bound
+      // vault does that inside the 77 (0 here). Shares: the ticket's, or lpAmount in the one-tx
+      // flow (no ticket yet; 76 does not change the total). Read only after a 25 (sendWithRebalanceOn25).
+      const readRebalanceAmounts = async (): Promise<bigint[]> => {
+        const ctx = await readEarnP3Context(connection, progPk, marketPk);
+        const plan = earnTxPlan(TAG_EXECUTE_REDEMPTION, ctx);
+        if (!plan.ok || plan.tail) return [];
+        const [ownInfo, siblingInfo, ticket] = await connection.getMultipleAccountsInfo([ledgerPda, siblingLedgerPda, redemptionPda]);
+        const own = ledgerPrincipalAtoms(ownInfo?.data);
+        const sibling = ledgerPrincipalAtoms(siblingInfo?.data);
+        const need = unboundPotShortfall({
+          shares: ticket ? parseLpRedemption(new Uint8Array(ticket.data)).shares : lpAmount,
+          totalShares: ctx.registryShares ?? 0n,
+          own,
+          sibling,
+        });
+        return rebalanceLadder(need, own, sibling);
       };
       // P3 ordering: a resolved close that ran before the vault LP settled left the viewer a
       // PARTIAL payout receipt. Once 101 has closed, its tag-46 top-up rides in front of this tx
@@ -877,15 +882,25 @@ export function useInsuranceLP() {
         // 85/87 crank, 88 recall / other pot) before the wallet opens.
         // 5544302a: a Resolved terminal-flat 77 can need 78 first (stray pot backing); a pre-sign 84
         // rebuilds the same payout with 78 in front (lib/limits/earn-ixs.ts sendWithHarvestOn84).
-        signature = await sendWithHarvestOn84({ build: buildExecuteIxs, send, isHarvestPendingRefusal });
+        signature = await sendWithRebalanceOn25({
+          send: (atoms) => sendWithHarvestOn84({ build: (force) => buildExecuteIxs(force, atoms), send, isHarvestPendingRefusal }),
+          readAmounts: readRebalanceAmounts,
+          isPreSignRefusal: (e) => e instanceof SimulationRefusal,
+          isPotShortfallRefusal,
+        });
         step = 'executed';
         void readTxDrawSummary(connection, signature).then(setLastDrawSummary);
       } else if (state.registryExists && withdrawFlow(state.redemptionCooldownSlots) === 'one-tx') {
         // UX WP-4: only a vault whose cooldown is 0 requests AND pays out in one tx.
-        signature = await sendWithHarvestOn84({
-          build: async (force) => [await buildRequestIx(), ...(await buildExecuteIxs(force))],
-          send,
-          isHarvestPendingRefusal,
+        signature = await sendWithRebalanceOn25({
+          send: (atoms) => sendWithHarvestOn84({
+            build: async (force) => [await buildRequestIx(), ...(await buildExecuteIxs(force, atoms))],
+            send,
+            isHarvestPendingRefusal,
+          }),
+          readAmounts: readRebalanceAmounts,
+          isPreSignRefusal: (e) => e instanceof SimulationRefusal,
+          isPotShortfallRefusal,
         });
         step = 'executed';
         void readTxDrawSummary(connection, signature).then(setLastDrawSummary);
@@ -923,6 +938,12 @@ export function useInsuranceLP() {
 export const TOPUP_SIM_CU = 400_000;
 /** A bundled top-up + Earn payout is sized from its own simulation, up to this cap. */
 export const TOPUP_BUNDLE_CU_CAP = 1_200_000;
+
+/** A pre-sign refusal with 25 EngineCounterUnderflow raised by the wrapper: on a 77, a claim
+ *  larger than the payout pot (GH#419). Same attribution rule as the 84 check below. */
+export function isPotShortfallRefusal(e: unknown): boolean {
+  return e instanceof SimulationRefusal && e.code === WRAPPER_ERR.EngineCounterUnderflow && (e.programId === null || e.programId === resolveDevnetProgramIds().wrapper);
+}
 
 /** A pre-sign refusal with 84 VaultLpHarvestPending raised by the wrapper (the wallet was not opened). */
 export function isHarvestPendingRefusal(e: unknown): boolean {

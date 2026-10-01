@@ -120,10 +120,9 @@ export function ledgerPrincipalAtoms(data: Uint8Array | null | undefined): bigin
  * Atoms an UNBOUND 77 needs moved into its own pot first (GH#419). The program prices the
  * payout on both pots but draws it from one; only a bound vault tops the pot up inside the 77
  * (221cf006), so an unbound claim larger than its own pot refuses EngineCounterUnderflow (25).
- * Capped at what the sibling holds; 0 when the own pot covers it.
- * ponytail: priced on total principal, not available (total minus unrecovered loss), so with
- * losses this over-asks; moving extra between one vault's own pots is value-neutral, but a
- * liened sibling then refuses the 91 (21). Price on available principal if that ever bites.
+ * Capped at what the sibling holds; 0 when the own pot covers it. An estimate on the ledgers'
+ * total principal: the program prices after a bucket sync the client does not replicate, so
+ * the caller tries a small ladder around it (rebalanceLadder) under the pre-sign simulation.
  */
 export function unboundPotShortfall(p: { shares: bigint; totalShares: bigint; own: bigint; sibling: bigint }): bigint {
   if (p.totalShares <= 0n) return 0n;
@@ -235,6 +234,48 @@ export async function sendWithHarvestOn84<T>(p: {
   } catch (e) {
     if (!p.isHarvestPendingRefusal(e)) throw e;
     return p.send(await p.build(true));
+  }
+}
+
+/**
+ * The 91 amounts to try, in order, for a shortfall estimate `need` against an own pot of `own`
+ * and a sibling of `sibling`: need + 0.1% and + 1% of the payout, then need alone, each capped at
+ * the sibling. The estimate leaves out the bucket sync (pending loss, consumed backing a 91
+ * repays on arrival), which put devnet SI's real boundary 23,798 atoms above it on 2026-10-01;
+ * moving extra between one vault's own pots is value-neutral, so the margins cost nothing.
+ */
+export function rebalanceLadder(need: bigint, own: bigint, sibling: bigint): bigint[] {
+  if (need <= 0n || sibling <= 0n) return [];
+  const payout = need + own;
+  const cap = (x: bigint) => (x < sibling ? x : sibling);
+  return [...new Set([cap(need + payout / 1000n), cap(need + payout / 100n), cap(need)])];
+}
+
+/**
+ * GH#419: send the payout as-is; only on a pre-sign 25 (an unbound claim larger than its own
+ * pot) read the 91 amounts and resend with each in front until one passes the pre-sign
+ * simulation (the wallet opens only for that one). Gating on the 25 means a 91 is never added
+ * to a payout that passes alone. A failed read, or no amount that passes, rethrows the 25.
+ */
+export async function sendWithRebalanceOn25<T>(p: {
+  send: (rebalanceAtoms: bigint) => Promise<T>;
+  readAmounts: () => Promise<bigint[]>;
+  isPotShortfallRefusal: (e: unknown) => boolean;
+  isPreSignRefusal: (e: unknown) => boolean;
+}): Promise<T> {
+  try {
+    return await p.send(0n);
+  } catch (e) {
+    if (!p.isPotShortfallRefusal(e)) throw e;
+    const amounts = await p.readAmounts().catch(() => [] as bigint[]);
+    for (const atoms of amounts) {
+      try {
+        return await p.send(atoms);
+      } catch (next) {
+        if (!p.isPreSignRefusal(next)) throw next;
+      }
+    }
+    throw e;
   }
 }
 

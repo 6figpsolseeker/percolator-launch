@@ -122,6 +122,8 @@ export function useDevnetFaucet(): DevnetFaucetState {
   // synchronously (unlike `error` state, which is only visible on the NEXT
   // render). fundAll reads this instead of the stale `error` closure.
   const lastOpFailedRef = useRef(false);
+  // The SOL step's message: fundAll's USDC step clears the shared error, which erased it.
+  const solErrorRef = useRef<string | null>(null);
 
   // Check if previously dismissed for this wallet
   useEffect(() => {
@@ -269,16 +271,20 @@ export function useDevnetFaucet(): DevnetFaucetState {
           const heliusConn = new Connection(HELIUS_DEVNET_RPC, "confirmed");
           sig = await heliusConn.requestAirdrop(publicKey, 2 * LAMPORTS_PER_SOL);
           // Confirm via Helius
+          let confirmed = false;
           const start = Date.now();
           while (Date.now() - start < 60_000) {
             const { value } = await heliusConn.getSignatureStatuses([sig]);
             const s = value?.[0];
             if (s?.confirmationStatus === "confirmed" || s?.confirmationStatus === "finalized") {
               if (s.err) throw new Error("SOL airdrop transaction failed");
+              confirmed = true;
               break;
             }
             await new Promise((r) => setTimeout(r, 2000));
           }
+          // Not confirmed in a minute: not done (it used to fall through to setSolDone).
+          if (!confirmed) throw new Error("SOL airdrop not confirmed");
         } catch {
           sig = null; // Fall through to Solana faucet
         }
@@ -291,23 +297,30 @@ export function useDevnetFaucet(): DevnetFaucetState {
           publicKey,
           2 * LAMPORTS_PER_SOL,
         );
+        let confirmed = false;
         const start = Date.now();
         while (Date.now() - start < 60_000) {
           const { value } = await fallbackConn.getSignatureStatuses([sig]);
           const s = value?.[0];
           if (s?.confirmationStatus === "confirmed" || s?.confirmationStatus === "finalized") {
             if (s.err) throw new Error("SOL airdrop transaction failed");
+            confirmed = true;
             break;
           }
           await new Promise((r) => setTimeout(r, 2000));
         }
+        // Not confirmed in a minute: report it rather than showing the step done. If it lands
+        // later, refreshBalances marks SOL done from the balance.
+        if (!confirmed) throw new Error("SOL airdrop not confirmed");
       }
 
       setSolDone(true);
       await refreshBalances();
     } catch (e) {
       lastOpFailedRef.current = true;
-      setError(plainMessage(e, { surface: "faucet" }, (raw) => keepAppMessage(raw) === raw ? raw : "SOL airdrop failed — devnet may be rate-limiting. Try the Solana Faucet."));
+      const msg = plainMessage(e, { surface: "faucet" }, (raw) => keepAppMessage(raw) === raw ? raw : "SOL airdrop failed — devnet may be rate-limiting. Try the Solana Faucet.");
+      solErrorRef.current = msg;
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -361,14 +374,21 @@ export function useDevnetFaucet(): DevnetFaucetState {
     // to "done". lastOpFailedRef is set synchronously by each call instead.
     let anyFailed = false;
 
+    let solFailed = false;
     if (!solDone && (solBalance === null || solBalance < 0.05)) {
       await airdropSol();
-      if (lastOpFailedRef.current) anyFailed = true;
+      if (lastOpFailedRef.current) anyFailed = solFailed = true;
     }
 
     if (!usdcDone && (usdcBalance === null || usdcBalance < 1000)) {
       await airdropUsdc();
       if (lastOpFailedRef.current) anyFailed = true;
+      // airdropUsdc cleared the shared error and moved step to "usdc". If only SOL failed, put
+      // its message back on the SOL step so the modal shows it (and its faucet.solana.com link).
+      else if (solFailed) {
+        setStep("sol");
+        setError(solErrorRef.current);
+      }
     }
 
     if (!anyFailed) {

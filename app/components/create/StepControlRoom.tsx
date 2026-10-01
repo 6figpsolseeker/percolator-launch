@@ -71,6 +71,11 @@ export interface StepControlRoomProps {
   lpCollateral: string;
   insuranceAmount: string;
   collateralSymbol: string;
+  /** What the launch takes from the wallet: LP + insurance + both backing-domain seeds, the wizard's
+   *  own totalTokensRequired (the number its launch gate enforces), in display units. */
+  seedTotal: number;
+  /** The two backing-domain seeds inside seedTotal (2 x backingSeedPerDomain(LP)). */
+  seedBacking: number;
 
   onMarginBpsChange: (bps: number) => void;
   onLpCollateralChange: (v: string) => void;
@@ -118,6 +123,8 @@ export const StepControlRoom: FC<StepControlRoomProps> = ({
   lpCollateral,
   insuranceAmount,
   collateralSymbol,
+  seedTotal,
+  seedBacking,
   onMarginBpsChange,
   onLpCollateralChange,
   onInsuranceChange,
@@ -243,7 +250,9 @@ export const StepControlRoom: FC<StepControlRoomProps> = ({
           <div className="col-span-full pt-1">
             <FeeBreakdown highlight="creator" feeBps={tradingFeeBps} />
           </div>
-          <Readout k="You seed" v={`${(lp + ins).toLocaleString()} ${collateralSymbol}`} />
+          {/* LP + insurance alone understated it ~3x: both backing domains are seeded at 100% of LP. */}
+          <Readout k="You seed" v={`${seedTotal.toLocaleString()} ${collateralSymbol}`} />
+          <Readout k="Incl. counterparty backing" v={`${seedBacking.toLocaleString()} ${collateralSymbol}`} />
           <Readout k="Approvals" v="1" />
         </div>
 

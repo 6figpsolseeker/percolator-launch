@@ -40,6 +40,9 @@ function renderStep(over: Record<string, unknown> = {}) {
     lpCollateral: "1000",
     insuranceAmount: "100",
     collateralSymbol: "USDC",
+    // 1,000 LP + 100 insurance + 2 x 1,000 backing (the wizard passes its launch-gate total).
+    seedTotal: 3100,
+    seedBacking: 2000,
     onMarginBpsChange: vi.fn(),
     onLpCollateralChange: vi.fn(),
     onInsuranceChange: vi.fn(),

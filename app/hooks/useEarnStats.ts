@@ -13,6 +13,7 @@ import { leverageFromMarginBps } from '@/lib/market-params';
 import { qToUsd, rowVolumeUsd } from '@/lib/q-usd';
 import { pollWhenVisible } from '@/lib/pollWhenVisible';
 import { getMultipleAccountsInfoChunked } from '@/lib/rpc-chunk';
+import { combinedVault, splitPotLedgerKeys, splitPotStateFromAccounts } from '@/lib/limits/earn-split-pot';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -190,7 +191,7 @@ export const CURATED_COLLATERAL_DECIMALS = 6;
 export const MAX_VAULT_USD = 10_000_000;
 
 export interface CuratedVaultOnChain {
-  /** Total atoms backing the LP vault (shares outstanding + distributed fee atoms). */
+  /** The LP vault's value in atoms: the combined NAV on a two-pot vault, else shares outstanding + distributed fee atoms. */
   tvlAtoms: bigint;
   /** Redemption cooldown period from the registry, in slots. */
   cooldownSlots: bigint;
@@ -338,7 +339,7 @@ async function fetchLiveMarketsMeta(): Promise<{ data: LiveMarketMeta[]; ok: boo
  * blank the whole Earn page to $0 TVL / vanished markets until the next good
  * poll).
  */
-async function fetchCuratedVaultsOnChain(
+export async function fetchCuratedVaultsOnChain(
   slabs: string[],
 ): Promise<{ data: Record<string, CuratedVaultOnChain>; ok: boolean }> {
   const result: Record<string, CuratedVaultOnChain> = {};
@@ -371,6 +372,29 @@ async function fetchCuratedVaultsOnChain(
         // Malformed/unrecognized account for this slab — leave the not-found default.
       }
     });
+
+    // Two-pot (unbound) vaults: shares + fees is not what they are worth. Use the program's
+    // combined NAV over both pots, as the vault page (useInsuranceLP) and instruction 77 do.
+    // One batched read of market + both ledgers for every such vault.
+    const splitPot = slabs.flatMap((slab, i) => {
+      const info = infos[i];
+      if (!result[slab].found || !info) return [];
+      const market = new PublicKey(slab);
+      const keys = splitPotLedgerKeys(programId, market, info.data);
+      return keys ? [{ slab, market, registryData: info.data, ...keys }] : [];
+    });
+    if (splitPot.length > 0) {
+      const spInfos = await getMultipleAccountsInfoChunked(
+        connection,
+        splitPot.flatMap((s) => [s.market, s.ownLedger, s.sibLedger]),
+      );
+      splitPot.forEach((s, j) => {
+        const [m, lo, ls] = spInfos.slice(3 * j, 3 * j + 3);
+        const sp = splitPotStateFromAccounts(programId, s.market, s.registryData, m?.data ?? null, lo?.data ?? null, ls?.data ?? null);
+        const v = sp ? combinedVault(sp.own, sp.sib, sp.feeShareBps) : null;
+        if (sp && v && sp.totalShares > 0n) result[s.slab] = { ...result[s.slab], tvlAtoms: v.nav };
+      });
+    }
   } catch (err) {
     console.error('[useEarnStats] Failed to fetch LP vault registries on-chain:', err);
     return { data: result, ok: false };

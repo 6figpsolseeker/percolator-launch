@@ -368,24 +368,61 @@ export async function readSplitPotState(
     const [registry] = deriveLpVaultRegistry(programId, market);
     const r = await connection.getAccountInfo(registry, "confirmed");
     if (!r || !r.owner.equals(programId)) return null;
-    const rd = new Uint8Array(r.data);
+    const keys = splitPotLedgerKeys(programId, market, r.data);
+    if (!keys) return null;
+    const [m, lo, ls] = await connection.getMultipleAccountsInfo([market, keys.ownLedger, keys.sibLedger], "confirmed");
+    return splitPotStateFromAccounts(programId, market, r.data, m?.data ?? null, lo?.data ?? null, ls?.data ?? null);
+  } catch {
+    return null;
+  }
+}
+
+/** The two pot ledgers a two-pot vault's state needs; null = BOUND vault or unreadable registry. */
+export function splitPotLedgerKeys(
+  programId: PublicKey,
+  market: PublicKey,
+  registryData: Uint8Array | Buffer,
+): { ownLedger: PublicKey; sibLedger: PublicKey } | null {
+  try {
+    const rd = new Uint8Array(registryData);
     if (decodeLpVaultRegistryBound(rd) !== false) return null;
-    const reg = parseLpVaultRegistry(rd);
+    const ownDomain = Number(parseLpVaultRegistry(rd).domain);
+    return {
+      ownLedger: deriveLpBackingLedger(programId, market, ownDomain)[0],
+      sibLedger: deriveLpBackingLedger(programId, market, ownDomain ^ 1)[0],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * readSplitPotState from accounts the caller already fetched (registry, market, both ledgers), for
+ * batching many vaults into one read. Same null cases.
+ */
+export function splitPotStateFromAccounts(
+  programId: PublicKey,
+  market: PublicKey,
+  registryData: Uint8Array | Buffer,
+  marketData: Uint8Array | Buffer | null,
+  ownLedgerData: Uint8Array | Buffer | null,
+  sibLedgerData: Uint8Array | Buffer | null,
+): SplitPotState | null {
+  try {
+    const keys = splitPotLedgerKeys(programId, market, registryData);
+    if (!keys || !marketData) return null;
+    const reg = parseLpVaultRegistry(new Uint8Array(registryData));
     const ownDomain = Number(reg.domain);
-    const [ownLedger] = deriveLpBackingLedger(programId, market, ownDomain);
-    const [sibLedger] = deriveLpBackingLedger(programId, market, ownDomain ^ 1);
-    const [m, lo, ls] = await connection.getMultipleAccountsInfo([market, ownLedger, sibLedger], "confirmed");
-    if (!m) return null;
-    const md = new Uint8Array(m.data);
-    const dom = (i: number, a: { data: Uint8Array | Buffer } | null): DomainState | null => {
+    const md = new Uint8Array(marketData);
+    const dom = (i: number, a: Uint8Array | Buffer | null): DomainState | null => {
       const bucket = decodeBackingBucket(md, i);
       const source = decodeSourceCredit(md, i);
-      return bucket && source ? { bucket, source, ledger: decodeDomainLedger(a ? new Uint8Array(a.data) : null) } : null;
+      return bucket && source ? { bucket, source, ledger: decodeDomainLedger(a ? new Uint8Array(a) : null) } : null;
     };
-    const own = dom(ownDomain, lo);
-    const sib = dom(ownDomain ^ 1, ls);
+    const own = dom(ownDomain, ownLedgerData);
+    const sib = dom(ownDomain ^ 1, sibLedgerData);
     if (!own || !sib) return null;
-    return { own, sib, ownDomain, totalShares: BigInt(reg.totalLpSharesOutstanding), feeShareBps: Number(reg.feeShareBps), ownLedger, sibLedger };
+    return { own, sib, ownDomain, totalShares: BigInt(reg.totalLpSharesOutstanding), feeShareBps: Number(reg.feeShareBps), ...keys };
   } catch {
     return null;
   }

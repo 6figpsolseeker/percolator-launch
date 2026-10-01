@@ -14,7 +14,7 @@ import {
 import { STAKE_POOL_SIZE_V1, decodeStakePoolV1 } from "@/hooks/useStakePool";
 import { getConfig } from "@/lib/config";
 import { unpackAccount, getMint } from "@solana/spl-token";
-import { readPoolTotalLpSupply, valueStakePosition } from "@/lib/stake-position";
+import { exceedsStakedBalance, readPoolTotalLpSupply, stakeWithdrawChipAmount, valueStakePosition } from "@/lib/stake-position";
 import { useStakeDepositByPool } from "@/hooks/useStakeDepositByPool";
 import { useStakeWithdrawByPool } from "@/hooks/useStakeWithdrawByPool";
 import { parseHumanAmount, formatHumanAmount } from "@/lib/parseAmount";
@@ -605,6 +605,8 @@ function DepositWidget({
   const depositStatus = depositRaw === null ? "empty" : checkDepositAmount(depositRaw, walletBalanceRaw);
   const depositAmountError = depositAmountMessage(depositStatus, walletBalanceRaw, balanceDecimals, "USDC");
   const withdrawAmountNum = parseFloat(withdrawAmount) || 0;
+  // handleWithdraw refuses more than the staked balance; say so here instead of a button that does nothing.
+  const withdrawExceeds = !!withdrawPosition && exceedsStakedBalance(withdrawAmount, withdrawPosition.lpBalanceRaw, withdrawPosition.lpDecimals);
 
   // Bug #12: the Junior (first-loss) tranche selector was removed — DepositJunior
   // (tag 16, PERC-303) belongs to the v2 StakePool program. The fresh devnet
@@ -987,8 +989,7 @@ function DepositWidget({
                       key={pct}
                       type="button"
                       onClick={() => {
-                        const val = (withdrawPosition.lpBalance * pct) / 100;
-                        setWithdrawAmount(val.toFixed(4));
+                        setWithdrawAmount(stakeWithdrawChipAmount(withdrawPosition.lpBalanceRaw, pct, withdrawPosition.lpDecimals));
                         setWithdrawTxStatus(null);
                       }}
                       className="flex-1 rounded-sm border border-[var(--border)] bg-[var(--bg)] py-1 text-[10px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--cyan)]/30 hover:text-[var(--cyan)]"
@@ -1006,6 +1007,12 @@ function DepositWidget({
             )}
             {!withdrawPositionLoading && connected && !withdrawPosition && (
               <p className="text-[11px] text-[var(--text-muted)]">No staked balance in this pool.</p>
+            )}
+
+            {withdrawExceeds && (
+              <p role="alert" data-testid="stake-withdraw-amount-error" className="text-[11px] text-[var(--short)]">
+                Exceeds your staked balance.
+              </p>
             )}
 
             {/* Cooldown status */}
@@ -1035,10 +1042,10 @@ function DepositWidget({
             ) : (
               <button
                 data-testid="stake-withdraw-submit"
-                disabled={!withdrawPosition || !withdrawPosition.cooldownElapsed || withdrawAmountNum <= 0 || withdrawLoading}
+                disabled={!withdrawPosition || !withdrawPosition.cooldownElapsed || withdrawAmountNum <= 0 || withdrawExceeds || withdrawLoading}
                 onClick={handleWithdraw}
                 className={`w-full rounded-sm py-3 text-[12px] font-semibold uppercase tracking-[0.1em] transition-all duration-200 ${
-                  withdrawPosition && withdrawPosition.cooldownElapsed && withdrawAmountNum > 0 && !withdrawLoading
+                  withdrawPosition && withdrawPosition.cooldownElapsed && withdrawAmountNum > 0 && !withdrawExceeds && !withdrawLoading
                     ? "border border-[var(--cyan)]/50 bg-[var(--cyan)]/[0.10] text-[var(--cyan)] hover:border-[var(--cyan)] hover:bg-[var(--cyan)]/[0.18]"
                     : "border border-[var(--border)] bg-[var(--bg)] text-[var(--text-secondary)] cursor-not-allowed"
                 }`}

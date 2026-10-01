@@ -11,6 +11,9 @@
  * vault token account (collateral held) are read on-chain in the same pass as the LP balance, so
  * the value is consistent with it; the API snapshot is only a fallback if the chain read fails.
  */
+import { formatTokenAmount } from "@/lib/format";
+import { parseHumanAmount } from "@/lib/parseAmount";
+
 
 /** Stake pools hold USDC-style 6-decimal collateral (same convention as /api/stake/pools `tvl`). */
 export const STAKE_COLLATERAL_DECIMALS = 6;
@@ -50,4 +53,18 @@ export function valueStakePosition(i: StakeValuationInput): number {
   const lpHuman = Number(i.lpRaw) / 10 ** i.lpDecimals;
   const supplyHuman = i.apiTotalLpSupply / 10 ** i.lpDecimals;
   return supplyHuman > 0 ? (lpHuman / supplyHuman) * i.apiTvlUsd : 0;
+}
+
+/**
+ * The withdraw chips' amount: pct% of the staked LP balance, floored to the LP mint's decimals.
+ * toFixed(4) on the float balance rounded to nearest, so 100% of 10.123456 read 10.1235: more than
+ * the user holds, which handleWithdraw then refused without a word.
+ */
+export function stakeWithdrawChipAmount(lpBalanceRaw: bigint, pct: number, lpDecimals: number): string {
+  return formatTokenAmount((lpBalanceRaw * BigInt(pct)) / 100n, lpDecimals);
+}
+
+/** True when the typed withdraw amount is more than the staked LP balance. */
+export function exceedsStakedBalance(amount: string, lpBalanceRaw: bigint, lpDecimals: number): boolean {
+  return parseHumanAmount(amount, lpDecimals) > lpBalanceRaw;
 }

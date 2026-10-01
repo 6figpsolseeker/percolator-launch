@@ -46,6 +46,10 @@ async function callRoute(wallet: string, trades: unknown[]) {
 describe("GET /api/trader/:wallet/stats", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // A configured deployment: with no data source configured the route returns empty stats
+    // before reading Supabase (the contributor setup).
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role");
     mockSupabase.from.mockReturnThis();
     mockSupabase.select.mockReturnThis();
     mockSupabase.eq.mockReturnThis();

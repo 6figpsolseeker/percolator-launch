@@ -151,9 +151,9 @@ export function TradeHistoryTable({
   if (!loading && trades.length === 0) {
     return (
       <div className="border border-dashed border-[var(--border)] bg-[var(--panel-bg)]/50 p-8 text-center">
-        <p className="text-[13px] text-[var(--text)]">Trade history requires the indexer (currently unavailable)</p>
+        <p className="text-[13px] text-[var(--text)]">No trades yet</p>
         <p className="mt-1 text-[10px] text-[var(--text-secondary)]">
-          Your executed trades will appear here once the indexer has processed them.
+          Your executed trades will appear here.
         </p>
       </div>
     );

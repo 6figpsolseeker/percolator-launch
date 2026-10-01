@@ -79,6 +79,12 @@ export async function GET(
   const slabFilter = url.searchParams.get("slab");
   const safeSlab = slabFilter && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(slabFilter) ? slabFilter : undefined;
 
+  // No data source configured (the contributor setup in PLAYGROUND.md): an empty list is the true
+  // answer, not an outage. Same env check as getServiceClient().
+  if (!hasIndexerDb() && !(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)) {
+    return NextResponse.json({ trades: [], total: 0, limit, offset });
+  }
+
   // P0: prefer local indexer
   if (hasIndexerDb()) {
     try {
@@ -168,13 +174,15 @@ export async function GET(
       },
     );
   } catch (err) {
-    // Supabase unavailable — return empty list, never 500
+    // A configured source failed. A cached 200 [] here reads as "no trades" and hides the outage,
+    // so say so (503, not cached); the client's !res.ok branch shows the failure. Same shape as #2711.
     console.warn("[trader-trades] supabase unavailable:", err instanceof Error ? err.message : String(err));
     return NextResponse.json(
-      { trades: [], total: 0, limit, offset },
+      { error: "Trade history temporarily unavailable", unavailable: true, trades: [], total: 0, limit, offset },
       {
+        status: 503,
         headers: {
-          "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30",
+          "Cache-Control": "no-store",
           "X-RateLimit-Limit": String(RATE_LIMIT),
           "X-RateLimit-Remaining": String(rl.remaining),
           "X-RateLimit-Window": "60s",

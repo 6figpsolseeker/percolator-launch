@@ -131,6 +131,12 @@ export async function GET(
     return NextResponse.json({ error: "Invalid wallet address" }, { status: 400 });
   }
 
+  // No data source configured (the contributor setup in PLAYGROUND.md): empty stats are the true
+  // answer, not an outage. Same env check as getServiceClient().
+  if (!hasIndexerDb() && !(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)) {
+    return NextResponse.json(EMPTY_STATS);
+  }
+
   // P0: prefer local indexer
   if (hasIndexerDb()) {
     try {
@@ -192,23 +198,27 @@ export async function GET(
       headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" },
     });
   } catch (err) {
-    // Supabase unavailable — return empty stats, never 500
+    // A configured source failed: 503, not cached, so the panel shows the failure instead of
+    // a wallet with no history. Same shape as #2711.
     console.warn("[trader-stats] supabase unavailable:", err instanceof Error ? err.message : String(err));
-    return NextResponse.json({
-      totalTrades: 0,
-      longTrades: 0,
-      shortTrades: 0,
-      totalVolume: "0",
-      totalFees: "0",
-      // No trades at all, so nothing is unrecorded and nothing is missing a
-      // price — the display maps totalTrades === 0 to "—" regardless.
-      feesRecorded: 0,
-      tradesMissingPrice: 0,
-      uniqueMarkets: 0,
-      firstTradeAt: null,
-      lastTradeAt: null,
-    } satisfies TraderStatsResponse, {
-      headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" },
-    });
+    return NextResponse.json(
+      { ...EMPTY_STATS, error: "Trade stats temporarily unavailable", unavailable: true },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
   }
 }
+
+/** No trades at all, so nothing is unrecorded and nothing is missing a price — the display maps
+ *  totalTrades === 0 to "—" regardless. */
+const EMPTY_STATS = {
+  totalTrades: 0,
+  longTrades: 0,
+  shortTrades: 0,
+  totalVolume: "0",
+  totalFees: "0",
+  feesRecorded: 0,
+  tradesMissingPrice: 0,
+  uniqueMarkets: 0,
+  firstTradeAt: null,
+  lastTradeAt: null,
+} satisfies TraderStatsResponse;

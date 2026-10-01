@@ -945,7 +945,10 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
       setEngineLockError(null);
       setMarginInput("");
       setSizeInput("");
-      if (livePriceE6 && livePriceE6 > 0n && userAccount) {
+      // A first fund-and-trade runs with no account in this closure (fundingMode allows it), and the
+      // portfolio it just created is a v17 one: idx 0, like every v17 account (lib/userAccountScan.ts).
+      const entryIdx = userAccount?.idx ?? (fundingMode ? 0 : null);
+      if (livePriceE6 && livePriceE6 > 0n && entryIdx !== null) {
         const wallet = publicKey?.toBase58();
         // BUG 9 fix: this fired unconditionally on every successful open, so
         // scaling INTO (or reducing/flipping through) an EXISTING position
@@ -959,9 +962,9 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
         // on-chain size/pnl (accurate once refreshSlab() below lands)
         // instead of showing this trade's fill price mislabeled as "Entry".
         if (existingPositionSize === 0n) {
-          saveEntryPrice(slabAddress, userAccount.idx, livePriceE6, leverage, wallet);
+          saveEntryPrice(slabAddress, entryIdx, livePriceE6, leverage, wallet);
         } else {
-          clearEntryPrice(slabAddress, userAccount.idx, wallet);
+          clearEntryPrice(slabAddress, entryIdx, wallet);
         }
       }
       // The site-wide PositionsBar reads usePortfolio, which refreshes its

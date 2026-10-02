@@ -1,11 +1,8 @@
 /**
- * The Playground tab: a locked door for everyone the server has not admitted,
- * and "Enter Playground" only for a granted member while launch is open.
- *
- * The guarantee from #2725 is kept and widened: while locked there is no href
- * on the tab, no anchor in the closed markup, and — in EVERY non-admitted
- * state, popover open or shut — no playground address and no route to the
- * door anywhere in the DOM.
+ * The Playground tab: a plain link to the gate page (/playground) for everyone the
+ * server has not admitted, and "Enter Playground" only for a granted member while
+ * launch is open. In EVERY non-admitted state the playground app's address and the
+ * door (/api/playground/enter) are absent from the DOM.
  */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
@@ -54,99 +51,34 @@ const LOCKED_STATES: [string, Record<string, unknown>][] = [
 
 const DOOR = /percolator-playground|\/enter|\/api\/playground/i;
 
-describe("locked", () => {
-  it("renders, so the assertions below are not vacuous", () => {
+describe("open tab (no lock) — 2026-10-02 product change", () => {
+  it("everyone not admitted sees a plain 'Playground' link to the gate page", () => {
     render(<PlaygroundNavTab />);
-    expect(screen.getByRole("button", { name: /playground/i })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /^playground$/i });
+    expect(link).toHaveAttribute("href", "/playground");
+    expect(link.getAttribute("aria-disabled")).toBeNull();
   });
 
-  it("is a button with NO href, and the closed markup holds no anchor at all", () => {
+  it("no padlock or 'locked' label", () => {
     const { container } = render(<PlaygroundNavTab />);
-    const btn = screen.getByRole("button", { name: /playground/i });
-    expect(btn.tagName).toBe("BUTTON");
-    expect(btn).not.toHaveAttribute("href");
-    expect(container.querySelector("a")).toBeNull();
-    expect(container.innerHTML).not.toMatch(/\/playground/i);
+    expect(container.innerHTML).not.toMatch(/locked|padlock/i);
+    expect(container.querySelector("svg")).toBeNull();
   });
 
-  it("aria-disabled, not disabled — reachable and announced as unavailable", () => {
-    render(<PlaygroundNavTab />);
-    const btn = screen.getByRole("button", { name: /playground/i });
-    expect(btn.getAttribute("aria-disabled")).toBe("true");
-    expect(btn.hasAttribute("disabled")).toBe(false);
-    expect(btn.getAttribute("title")).toMatch(/locked/i);
-  });
-
-  it("click opens a calm popover with the cohort and the two next steps", async () => {
-    const user = userEvent.setup();
-    render(<PlaygroundNavTab />);
-    const btn = screen.getByRole("button", { name: /playground/i });
-    expect(btn).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(btn);
-
-    expect(btn).toHaveAttribute("aria-expanded", "true");
-    const dialog = screen.getByRole("dialog", { name: /playground access/i });
-    expect(btn.getAttribute("aria-controls")).toBe(dialog.id);
-    expect(dialog).toHaveTextContent("Devnet v2 opens to the first 1,000 on the waitlist.");
-    expect(screen.getByRole("link", { name: /check my spot/i })).toHaveAttribute("href", "/playground");
-    expect(screen.getByRole("link", { name: /join the waitlist/i })).toHaveAttribute("href", "/waitlist");
-    // The tab itself still goes nowhere.
-    expect(btn).not.toHaveAttribute("href");
-  });
-
-  it("Escape and an outside click dismiss it", async () => {
-    const user = userEvent.setup();
-    render(<PlaygroundNavTab />);
-    const btn = screen.getByRole("button", { name: /playground/i });
-    await user.click(btn);
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog")).toBeNull();
-    await user.click(btn);
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("queued: shows their own number and the cohort the server reported", async () => {
-    h.access = { status: "queued", position: 1412, cutoff: 1500 };
-    const user = userEvent.setup();
-    render(<PlaygroundNavTab />);
-    await user.click(screen.getByRole("button", { name: /playground/i }));
-    expect(screen.getByRole("dialog")).toHaveTextContent(/first 1,500/);
-    expect(screen.getByRole("dialog")).toHaveTextContent(/#1,412/);
-  });
-
-  it("granted but launch closed: \"You're in. Opens at launch.\" — and no link at all", async () => {
-    h.access = { status: "granted", position: 12, cutoff: 1000, open: false };
-    const user = userEvent.setup();
-    const { container } = render(<PlaygroundNavTab />);
-    const btn = screen.getByRole("button", { name: /playground/i });
-    expect(btn.getAttribute("aria-disabled")).toBe("true");
-    await user.click(btn);
-    expect(screen.getByRole("dialog")).toHaveTextContent("You're in. Opens at launch.");
-    expect(container.querySelector("a")).toBeNull();
-    expect(container.querySelector("form")).toBeNull();
-    expect(screen.queryByText(/enter playground/i)).toBeNull();
-  });
-
-  it("without Privy it is simply locked (and never calls a Privy hook)", async () => {
+  it("without Privy it is the same plain link (and never calls a Privy hook)", () => {
     h.privyAvailable = false;
-    h.access = { status: "granted", position: 1, cutoff: 1000, open: true }; // must be ignored
     render(<PlaygroundNavTab />);
-    expect(screen.getByRole("button", { name: /playground/i })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.queryByText(/enter playground/i)).toBeNull();
+    expect(screen.getByRole("link", { name: /^playground$/i })).toHaveAttribute("href", "/playground");
   });
 
-  it.each(LOCKED_STATES)("%s: no door anywhere in the DOM, popover shut or open", async (_l, state) => {
-    h.access = state;
-    const user = userEvent.setup();
-    const { container } = render(<PlaygroundNavTab />);
-    expect(container.innerHTML).not.toMatch(DOOR);
-    expect(container.querySelector("form")).toBeNull();
-    await user.click(screen.getByRole("button", { name: /playground/i }));
-    expect(container.innerHTML).not.toMatch(DOOR);
-    expect(container.querySelector("form")).toBeNull();
-  });
+  for (const [label, state] of LOCKED_STATES) {
+    it(`${label}: the only route is the gate page — never the app address or the door`, () => {
+      h.access = state;
+      const { container } = render(<PlaygroundNavTab />);
+      expect(screen.getByRole("link", { name: /^playground$/i })).toHaveAttribute("href", "/playground");
+      expect(container.innerHTML).not.toMatch(DOOR);
+    });
+  }
 });
 
 describe("granted and launch open", () => {

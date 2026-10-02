@@ -11,6 +11,14 @@ import { useEffect, useState } from "react";
  */
 export const RECONNECT_GRACE_MS = 1500;
 
+/**
+ * Fallback when Privy never reports `walletsReady`. Seen live on the playground (2026-10-02): after
+ * an idle session the header kept showing the linked address while every Connect gate (which needs
+ * an active wallet) said "connect". Only `walletsReady` was holding the stale check back, so a
+ * session that is authenticated with no usable wallet for this long is treated as stale anyway.
+ */
+export const RECONNECT_FALLBACK_MS = 5000;
+
 export interface WalletSessionSignals {
   /** `usePrivy().ready` */
   privyReady: boolean;
@@ -37,22 +45,29 @@ export function isStaleWalletSession(s: WalletSessionSignals): boolean {
   return s.privyReady && s.authenticated && s.walletsReady && !s.hasActiveWallet;
 }
 
-/** `isStaleWalletSession`, debounced by `graceMs` so it never flickers on load. */
+/**
+ * `isStaleWalletSession`, debounced by `graceMs` so it never flickers on load; or, if Privy never
+ * reports `walletsReady`, the same unusable session after `fallbackMs`.
+ */
 export function useWalletNeedsReconnect(
   signals: WalletSessionSignals,
   graceMs: number = RECONNECT_GRACE_MS,
+  fallbackMs: number = RECONNECT_FALLBACK_MS,
 ): boolean {
-  const stale = isStaleWalletSession(signals);
+  // Authenticated, but nothing can sign. `walletsReady` only decides how long to wait before
+  // calling it stale (it keeps a normal load from flashing); it can no longer block it for good.
+  const unusable = signals.privyReady && signals.authenticated && !signals.hasActiveWallet;
+  const waitMs = isStaleWalletSession(signals) ? graceMs : fallbackMs;
   const [confirmed, setConfirmed] = useState(false);
 
   useEffect(() => {
-    if (!stale) {
+    if (!unusable) {
       setConfirmed(false);
       return;
     }
-    const id = setTimeout(() => setConfirmed(true), graceMs);
+    const id = setTimeout(() => setConfirmed(true), waitMs);
     return () => clearTimeout(id);
-  }, [stale, graceMs]);
+  }, [unusable, waitMs]);
 
-  return stale && confirmed;
+  return unusable && confirmed;
 }

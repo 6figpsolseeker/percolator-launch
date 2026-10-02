@@ -49,6 +49,7 @@ import { ConnectButtonPrivyInner } from "@/components/wallet/ConnectButtonPrivyI
 import { PrivyLoginContext } from "@/hooks/usePrivySafe";
 import {
   RECONNECT_GRACE_MS,
+  RECONNECT_FALLBACK_MS,
   isStaleWalletSession,
 } from "@/hooks/useWalletNeedsReconnect";
 
@@ -145,6 +146,42 @@ describe("ConnectButtonPrivyInner — stale Privy session", () => {
     renderHeader();
     passGrace();
     expect(screen.queryByRole("button", { name: "Reconnect wallet" })).toBeNull();
+  });
+
+  // Live on the playground (2026-10-02): after an idle session the header kept the linked address
+  // while every Connect gate said "connect". Privy never reported walletsReady, which was the only
+  // thing holding the stale check back.
+  it("wallets never report ready: Reconnect shows after the fallback, not the stale address", () => {
+    mockUseWallets.mockReturnValue({ ready: false, wallets: [] });
+    renderHeader();
+    act(() => {
+      vi.advanceTimersByTime(RECONNECT_FALLBACK_MS - 1);
+    });
+    expect(screen.queryByRole("button", { name: "Reconnect wallet" })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.getByRole("button", { name: "Reconnect wallet" })).toBeTruthy();
+    expect(screen.queryByText("PHAN...RESS")).toBeNull();
+  });
+
+  it("CONTROL: a wallet that turns up during the fallback wait never shows Reconnect", () => {
+    mockUseWallets.mockReturnValue({ ready: false, wallets: [] });
+    const { rerender } = renderHeader();
+    act(() => {
+      vi.advanceTimersByTime(RECONNECT_FALLBACK_MS - 1000);
+    });
+    mockUseWallets.mockReturnValue({ ready: false, wallets: [PHANTOM] });
+    rerender(
+      <PrivyLoginContext.Provider value={vi.fn()}>
+        <ConnectButtonPrivyInner />
+      </PrivyLoginContext.Provider>,
+    );
+    act(() => {
+      vi.advanceTimersByTime(RECONNECT_FALLBACK_MS);
+    });
+    expect(screen.queryByRole("button", { name: "Reconnect wallet" })).toBeNull();
+    expect(screen.getByText("PHAN...RESS")).toBeTruthy();
   });
 
   it("with no session it is the plain Connect button", () => {

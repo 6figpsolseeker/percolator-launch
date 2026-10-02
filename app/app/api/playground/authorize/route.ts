@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     return refuse("unavailable", 503);
   }
 
-  const auth = await verifyPrivyAuth(req);
+  const auth = await verifyPrivyAuth(req, { fetchUserIfNoIdToken: true });
   if (!auth.ok) return auth.status === 503 ? refuse("unavailable", 503) : refuse("unauthenticated", 401);
 
   const verdict = await decidePlaygroundAccess(auth, getWaitlistServiceSupabase);

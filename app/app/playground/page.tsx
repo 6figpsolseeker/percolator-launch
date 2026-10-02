@@ -161,6 +161,19 @@ export default function PlaygroundGatePage() {
     setEmailError(null);
     setEmailStage("sending");
     try {
+      // Only send a code to an address that is on the waitlist (checked against the waitlist DB).
+      const pre = await fetch("/api/playground/precheck", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<{ onList?: boolean }>) : { onList: true }))
+        .catch(() => ({ onList: true }));
+      if (!pre.onList) {
+        setEmailError("We don't see that email on the waitlist. Join the waitlist first, or try the email you signed up with.");
+        setEmailStage("email");
+        return;
+      }
       await sendCode({ email: email.trim() });
       setEmailStage("code");
     } catch {

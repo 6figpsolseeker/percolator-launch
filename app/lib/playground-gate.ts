@@ -31,7 +31,7 @@ type WaitlistRow = {
   email: string | null;
   referral_code: string | null;
 };
-const SELECT = "id, pubkey, email, referral_code";
+const SELECT = "id, pubkey, email, referral_code, privy_did";
 
 /** Thrown internally so every Supabase error collapses into `unavailable`. */
 class LookupError extends Error {}
@@ -55,6 +55,25 @@ async function findBy(
   return row?.referral_code ? row : null;
 }
 
+/** Case-insensitive exact email match (stored casing varies); LIKE wildcards escaped. */
+async function findByEmail(supabase: SupabaseClient, email: string): Promise<WaitlistRow | null> {
+  const escaped = email.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const { data, error } = await supabase.from("waitlist").select(SELECT).ilike("email", escaped).limit(1).maybeSingle();
+  if (error) throw new LookupError("waitlist lookup by email failed");
+  const row = data as WaitlistRow | null;
+  return row?.referral_code ? row : null;
+}
+
+/** Like whoami: an email/wallet hit stores the Privy DID so the next sign-in matches directly. Best effort. */
+async function backfillDid(supabase: SupabaseClient, row: WaitlistRow, did: string): Promise<void> {
+  if ((row as { privy_did?: string | null }).privy_did) return;
+  try {
+    await supabase.from("waitlist").update({ privy_did: did }).eq("id", row.id).is("privy_did", null);
+  } catch {
+    /* never blocks the verdict */
+  }
+}
+
 async function resolveRow(supabase: SupabaseClient, auth: PrivyAuthOk): Promise<WaitlistRow | null> {
   const byDid = await findBy(supabase, "privy_did", auth.userId);
   if (byDid) return byDid;
@@ -65,8 +84,11 @@ async function resolveRow(supabase: SupabaseClient, auth: PrivyAuthOk): Promise<
     if (hit) return hit;
   }
   for (const email of auth.emails ?? []) {
-    const hit = await findBy(supabase, "email", email);
-    if (hit) return hit;
+    const hit = await findByEmail(supabase, email);
+    if (hit) {
+      await backfillDid(supabase, hit, auth.userId);
+      return hit;
+    }
   }
   return null;
 }

@@ -181,7 +181,7 @@ describe("POST /api/playground/enter — granted and open", () => {
     const res = await enter(enterReq());
     expect(res.status).toBe(303);
     const loc = new URL(res.headers.get("location")!);
-    expect(loc.origin).toBe("https://percolator-playground.vercel.app");
+    expect(loc.origin).toBe("https://play.percolator.trade");
     expect(loc.pathname).toBe("/enter");
     expect([...loc.searchParams.keys()]).toEqual(["t"]);
     const t = loc.searchParams.get("t")!;

@@ -188,15 +188,14 @@ describe("granted and launch open", () => {
     submit.mockRestore();
   });
 
-  it("no Privy token → does not submit, offers to sign in again", async () => {
+  it("no token in JS (Privy HttpOnly cookies) → still submits; the server reads the privy-token cookie", async () => {
     h.getAccessToken.mockResolvedValue(null);
     const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     render(<PlaygroundNavTab />);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /enter playground/i }));
     });
-    expect(submit).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /sign in again/i })).toBeInTheDocument();
+    expect(submit).toHaveBeenCalledTimes(1);
     submit.mockRestore();
   });
 });

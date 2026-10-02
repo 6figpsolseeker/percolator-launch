@@ -87,11 +87,13 @@ export async function POST(req: NextRequest) {
   }
   const accessToken = form.get("access_token");
   const idToken = form.get("id_token");
-  if (typeof accessToken !== "string" || !accessToken) return back();
-
   // lib/privy-auth reads headers; hand it the form's tokens in that shape so
-  // the verification path is byte-for-byte the one /authorize uses.
-  const headers = new Headers({ authorization: `Bearer ${accessToken}` });
+  // the verification path is byte-for-byte the one /authorize uses. With Privy HttpOnly cookies
+  // the form may carry no token — the privy-token cookie on this request is used instead.
+  const headers = new Headers();
+  if (typeof accessToken === "string" && accessToken) headers.set("authorization", `Bearer ${accessToken}`);
+  const cookie = req.headers.get("cookie");
+  if (cookie) headers.set("cookie", cookie);
   if (typeof idToken === "string" && idToken) headers.set("x-privy-id-token", idToken);
   const auth = await verifyPrivyAuth(new Request(req.url, { method: "POST", headers }), { fetchUserIfNoIdToken: true });
   if (!auth.ok) return back();

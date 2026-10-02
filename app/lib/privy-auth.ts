@@ -72,9 +72,10 @@ export async function verifyPrivyAuth(
   }
 
   const auth = req.headers.get("authorization") ?? "";
-  const accessToken = auth.startsWith("Bearer ")
-    ? auth.slice("Bearer ".length).trim()
-    : "";
+  // With Privy HttpOnly cookies (base domain percolator.trade) the client may not hold the token;
+  // it rides in the `privy-token` / `privy-id-token` cookies instead. Header wins when present.
+  const accessToken =
+    (auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : "") || readCookie(req, "privy-token");
   if (!accessToken) {
     return { ok: false, status: 401, reason: "missing-token" };
   }
@@ -93,7 +94,7 @@ export async function verifyPrivyAuth(
   // Optional id-token parse for linked accounts. If absent or invalid
   // we return DID only — the caller can still match on privy_did, just
   // not on email/pubkey backfill.
-  const idToken = req.headers.get("x-privy-id-token")?.trim() ?? "";
+  const idToken = req.headers.get("x-privy-id-token")?.trim() || readCookie(req, "privy-id-token");
   let user: User | null = null;
   if (idToken) {
     try {
@@ -166,4 +167,22 @@ function extractSolanaWallets(user: User | null): string[] {
     }
   }
   return out;
+}
+
+/** A cookie's value from the request's Cookie header, or "" (no external cookie parser). */
+function readCookie(req: Request, name: string): string {
+  const raw = req.headers.get("cookie");
+  if (!raw) return "";
+  for (const part of raw.split(";")) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    if (part.slice(0, i).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(i + 1).trim());
+      } catch {
+        return part.slice(i + 1).trim();
+      }
+    }
+  }
+  return "";
 }

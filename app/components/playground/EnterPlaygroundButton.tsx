@@ -47,12 +47,13 @@ export function EnterPlaygroundButton({
       token = null;
     }
     const form = formRef.current;
-    if (!token || !form || !accessRef.current || !idRef.current) {
+    // A null token is fine with Privy HttpOnly cookies: the form POST carries the privy-token cookie.
+    if (!form || !accessRef.current || !idRef.current) {
       setBusy(false);
       setFailed(true);
       return;
     }
-    accessRef.current.value = token;
+    accessRef.current.value = token ?? "";
     idRef.current.value = identityToken ?? "";
     // form.submit() serialises the fields synchronously and does not re-fire
     // onSubmit, so the values can be wiped straight after.

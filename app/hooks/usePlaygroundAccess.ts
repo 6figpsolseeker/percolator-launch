@@ -39,12 +39,13 @@ export function __resetPlaygroundAccessCache(): void {
 
 async function ask(getAccessToken: () => Promise<string | null>, identityToken: string | null): Promise<Settled> {
   try {
-    const accessToken = await getAccessToken();
-    if (!accessToken) return { status: "error", reason: "no-session" };
-    const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
+    // With Privy HttpOnly cookies getAccessToken() can be null while signed in: the server then
+    // reads the privy-token cookie (same-origin fetch sends it).
+    const accessToken = await getAccessToken().catch(() => null);
+    const headers: Record<string, string> = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
     if (identityToken) headers["x-privy-id-token"] = identityToken;
 
-    const res = await fetch("/api/playground/authorize", { method: "POST", headers, cache: "no-store" });
+    const res = await fetch("/api/playground/authorize", { method: "POST", headers, cache: "no-store", credentials: "same-origin" });
     const body = (await res.json().catch(() => null)) as
       | { ok?: boolean; status?: string; position?: number | null; cutoff?: number; open?: boolean }
       | null;

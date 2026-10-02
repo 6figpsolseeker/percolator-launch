@@ -35,3 +35,23 @@ describe("verifyPrivyAuth — no identity token", () => {
     expect(await verifyPrivyAuth(req(), { fetchUserIfNoIdToken: true })).toMatchObject({ ok: true, emails: [] });
   });
 });
+
+describe("verifyPrivyAuth — Privy HttpOnly cookies", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_PRIVY_APP_ID", "app"); vi.stubEnv("PRIVY_APP_SECRET", "sec");
+    m.verifyAccess.mockReset().mockResolvedValue({ user_id: "did:privy:me" });
+    m.verifyId.mockReset().mockResolvedValue({ linked_accounts: [{ type: "email", address: "a@b.io" }] });
+  });
+  it("no Authorization header: the privy-token / privy-id-token cookies are used", async () => {
+    const { verifyPrivyAuth } = await import("@/lib/privy-auth");
+    const r = await verifyPrivyAuth(new Request("https://percolator.trade/x", { headers: { cookie: "a=1; privy-token=AT; privy-id-token=IT" } }));
+    expect(r).toMatchObject({ ok: true, userId: "did:privy:me", emails: ["a@b.io"] });
+    expect(m.verifyAccess).toHaveBeenCalledWith("AT");
+    expect(m.verifyId).toHaveBeenCalledWith("IT");
+  });
+  it("CONTROL: no header and no cookie → missing-token", async () => {
+    const { verifyPrivyAuth } = await import("@/lib/privy-auth");
+    expect(await verifyPrivyAuth(new Request("https://percolator.trade/x"))).toMatchObject({ ok: false, reason: "missing-token" });
+  });
+});

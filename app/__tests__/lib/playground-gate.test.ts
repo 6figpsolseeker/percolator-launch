@@ -47,6 +47,16 @@ describe("resolution order mirrors whoami", () => {
     expect(v.kind).toBe("granted");
   });
 
+  it("2026-10-02 live: an email-only signup (no DID, no wallet) is granted on its verified email, any casing", async () => {
+    const rows = [...fillerRows(1), { id: "row-k", email: "Khubairnasir26@Gmail.com", referral_code: "K" }];
+    const { client, calls } = fakeWaitlistSupabase(rows);
+    const v = await decidePlaygroundAccess(auth({ emails: ["khubairnasir26@gmail.com"] }), () => client, 1000);
+    expect(v).toMatchObject({ kind: "granted", rowId: "row-k" });
+    // ...and the DID is stored so the next sign-in matches directly.
+    expect(calls.some((c) => c.kind === "update")).toBe(true);
+    expect(rows[1].privy_did).toBe("did:privy:me");
+  });
+
   it("a row with no referral code is not a membership (whoami's definition)", async () => {
     const { client } = fakeWaitlistSupabase([{ id: "row-half", privy_did: "did:privy:me", pubkey: "P", referral_code: null }]);
     expect(await decidePlaygroundAccess(auth(), () => client, 1000)).toEqual({ kind: "not_member" });

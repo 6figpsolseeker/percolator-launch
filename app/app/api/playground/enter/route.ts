@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
   // the verification path is byte-for-byte the one /authorize uses.
   const headers = new Headers({ authorization: `Bearer ${accessToken}` });
   if (typeof idToken === "string" && idToken) headers.set("x-privy-id-token", idToken);
-  const auth = await verifyPrivyAuth(new Request(req.url, { method: "POST", headers }));
+  const auth = await verifyPrivyAuth(new Request(req.url, { method: "POST", headers }), { fetchUserIfNoIdToken: true });
   if (!auth.ok) return back();
 
   const verdict = await decidePlaygroundAccess(auth, getWaitlistServiceSupabase);

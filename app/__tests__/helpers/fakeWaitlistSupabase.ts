@@ -26,13 +26,48 @@ export type FakeOptions = {
 };
 
 export function fakeWaitlistSupabase(rows: FakeRow[], opts: FakeOptions = {}) {
-  const calls: { kind: "eq" | "rpc"; column?: string; value?: unknown; fn?: string }[] = [];
+  const calls: { kind: "eq" | "ilike" | "rpc" | "update"; column?: string; value?: unknown; fn?: string }[] = [];
   const client = {
     from(table: string) {
       if (table !== "waitlist") throw new Error(`unexpected table ${table}`);
       return {
-        select() {
+        update(patch: Record<string, unknown>) {
           return {
+            eq(column: string, value: unknown) {
+              return {
+                async is(nullCol: string) {
+                  calls.push({ kind: "update", column: nullCol, value: patch });
+                  const r = rows.find((x) => (x as Record<string, unknown>)[column] === value);
+                  if (r && (r as Record<string, unknown>)[nullCol] == null) Object.assign(r, patch);
+                  return { data: null, error: null };
+                },
+              };
+            },
+          };
+        },
+        select() {
+          const shape = (hit: FakeRow | null) => ({
+            data: hit
+              ? { id: hit.id, pubkey: hit.pubkey ?? null, email: hit.email ?? null, referral_code: hit.referral_code ?? null, privy_did: hit.privy_did ?? null }
+              : null,
+            error: null,
+          });
+          return {
+            ilike(column: string, pattern: string) {
+              calls.push({ kind: "ilike", column, value: pattern });
+              const want = pattern.replace(/\\([\\%_])/g, "$1").toLowerCase();
+              return {
+                limit() {
+                  return {
+                    async maybeSingle() {
+                      if (opts.failColumn === column) return { data: null, error: { message: "boom", code: "XX000" } };
+                      const hit = rows.find((r) => String((r as Record<string, unknown>)[column] ?? "").toLowerCase() === want) ?? null;
+                      return shape(hit);
+                    },
+                  };
+                },
+              };
+            },
             eq(column: string, value: unknown) {
               calls.push({ kind: "eq", column, value });
               return {

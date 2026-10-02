@@ -52,8 +52,19 @@ export type PrivyAuthOk = { ok: true } & PrivyAuthResult;
  * (the new SDK doesn't offer a no-rate-limit getUser-by-id fallback;
  * the client should send the id-token whenever it wants linked data).
  */
+export interface VerifyPrivyAuthOptions {
+  /**
+   * When the request carries no (valid) identity token, fetch the user's linked accounts from
+   * Privy's server API (app secret) so email / wallet matching still works. Rate-limited on
+   * Privy's side, so only low-volume routes opt in (the devnet v2 gate). 2026-10-02 live: email
+   * sign-ins arrived with no identity token, so an email-only waitlist member was never matched.
+   */
+  fetchUserIfNoIdToken?: boolean;
+}
+
 export async function verifyPrivyAuth(
   req: Request,
+  opts: VerifyPrivyAuthOptions = {},
 ): Promise<PrivyAuthOk | PrivyAuthError> {
   const client = getClient();
   if (!client) {
@@ -92,6 +103,14 @@ export async function verifyPrivyAuth(
         "[privy-auth] verifyIdentityToken failed, returning DID only",
         err,
       );
+    }
+  }
+
+  if (!user && opts.fetchUserIfNoIdToken) {
+    try {
+      user = await client.users()._get(userId);
+    } catch (err) {
+      console.warn("[privy-auth] users._get failed, returning DID only", err instanceof Error ? err.message : "error");
     }
   }
 

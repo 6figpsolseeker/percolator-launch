@@ -30,16 +30,16 @@ beforeEach(() => {
 });
 
 describe("Header — Playground tab host gating", () => {
-  it("gate host: the locked tab is rendered (desktop + mobile menu)", () => {
+  it("gate host: the Playground tab is rendered (desktop + mobile menu)", () => {
     render(<Header />);
-    expect(screen.getAllByRole("button", { name: /playground/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("link", { name: /^playground$/i }).length).toBeGreaterThanOrEqual(1);
     expect(h.seenHost).toBe(window.location.host.split(":")[0]);
   });
 
   it("any other host (e.g. mainnet.percolatorlaunch.com): no tab at all", () => {
     h.gateHost = false;
     const { container } = render(<Header />);
-    expect(screen.queryByRole("button", { name: /playground/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /^playground$/i })).toBeNull();
     expect(container.innerHTML).not.toMatch(/playground/i);
   });
 });

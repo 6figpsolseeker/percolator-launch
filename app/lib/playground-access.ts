@@ -4,7 +4,7 @@
  * Devnet v2 opens to the waitlist in position order, and the gate has to hold
  * against someone simply typing the playground URL. That is the whole problem:
  * the gate page lives on percolator.trade (`main`) and the app lives on
- * percolator-playground.vercel.app (`playground`) — two registrable domains, so
+ * play.percolator.trade (`playground`; formerly percolator-playground.vercel.app) — two hosts, so
  * a cookie set by the gate is INVISIBLE to the app. A redirect alone gates
  * nothing.
  *
@@ -174,7 +174,7 @@ export function accessSecret(env: NodeJS.ProcessEnv = process.env): string | nul
 // in a client bundle or in markup served to someone who has not been admitted.
 
 /** Default deployment of the devnet v2 app (Vercel project percolator-playground). */
-const DEFAULT_PLAYGROUND_APP_URL = "https://percolator-playground.vercel.app";
+const DEFAULT_PLAYGROUND_APP_URL = "https://play.percolator.trade";
 
 /** Path on the playground app that exchanges a handoff token for a session. */
 export const ENTER_PATH = "/enter";

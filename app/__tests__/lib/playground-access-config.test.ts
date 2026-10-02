@@ -23,8 +23,8 @@ describe("playgroundOpen — only the exact string 'true' opens", () => {
 
 describe("playgroundAppUrl", () => {
   it("defaults to the percolator-playground deployment", () => {
-    expect(playgroundAppUrl(env({}))).toBe("https://percolator-playground.vercel.app");
-    expect(playgroundAppUrl(env({ PLAYGROUND_APP_URL: "  " }))).toBe("https://percolator-playground.vercel.app");
+    expect(playgroundAppUrl(env({}))).toBe("https://play.percolator.trade");
+    expect(playgroundAppUrl(env({ PLAYGROUND_APP_URL: "  " }))).toBe("https://play.percolator.trade");
   });
   it("accepts an https origin, trailing slash or not", () => {
     expect(playgroundAppUrl(env({ PLAYGROUND_APP_URL: "https://pg.example.com" }))).toBe("https://pg.example.com");

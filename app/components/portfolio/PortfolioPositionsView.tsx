@@ -6,7 +6,7 @@ import { subscribeSlab, getSnapshot } from "@/lib/priceStore/priceStore";
 import { computeLivePositionPnl, UNKNOWN_ENTRY_TOOLTIP } from "@/lib/trading";
 import { describeEntryPrice, displayEntryE6 } from "@/lib/entry-price-display";
 import { adlReductionTooltip } from "@/lib/v17-adl";
-import { SlabProvider } from "@/components/providers/SlabProvider";
+import { SlabProvider, useSlabState } from "@/components/providers/SlabProvider";
 import { useClosePosition } from "@/hooks/useClosePosition";
 import { PnlShareButton } from "@/components/share/PnlShareButton";
 import type { PnlCardData } from "@/lib/pnl-card";
@@ -143,6 +143,8 @@ function PortfolioCloseFlow({
   // SlabProvider (see the call site below), so useEngineFreshness() has the
   // context it needs.
   const { engineStale } = useEngineFreshness();
+  // This market's fee, so the preview matches the trade page's dock (#24).
+  const { params } = useSlabState();
   const posSize = pos.account?.positionSize ?? 0n;
   return (
     <ClosePositionModal
@@ -157,6 +159,7 @@ function PortfolioCloseFlow({
       isLong={posSize > 0n}
       loading={loading}
       error={error}
+      tradingFeeBps={params?.tradingFeeBps}
       oracleStale={engineStale}
       onConfirm={async (percent) => {
         try {

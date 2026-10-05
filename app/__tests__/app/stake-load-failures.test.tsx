@@ -214,3 +214,16 @@ describe("#2706: a per-pool RPC failure is surfaced, never rendered as 'no posit
     expect(screen.queryByTestId("stake-positions-error")).toBeNull();
   });
 });
+
+describe("#66: the deposit widget's fields are named by their labels", () => {
+  it("Select Pool and both Amount fields are found by label", async () => {
+    h.fetch.mockResolvedValue(okResponse([apiPool(SLAB_OK, "AAA")]));
+    h.getAccountInfo.mockResolvedValue(null);
+    render(<StakePage />);
+    await screen.findAllByText("AAA");
+    expect(screen.getByLabelText("Select Pool").tagName).toBe("SELECT");
+    expect(screen.getByLabelText("Amount")).toBe(screen.getByTestId("stake-deposit-input"));
+    fireEvent.click(screen.getByTestId("stake-tab-withdraw"));
+    expect(screen.getByLabelText("Amount")).toBe(screen.getByTestId("stake-withdraw-input"));
+  });
+});

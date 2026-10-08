@@ -44,6 +44,7 @@ import { applyConfirmedFill, getPortfolioRawSnapshot, makePortfolioScanKey } fro
 import { limitsFlags } from "@/lib/limits/flags";
 import { decodeMarketEngineView, signedPositionForAsset } from "@/lib/limits/decode";
 import { measureFill, recordFillResult } from "@/lib/limits/fill-check";
+import { measurePositionChange, readBeforeTrade, recordPositionChange } from "@/lib/position-change";
 import { tradeFeeBpsToSign } from "@/lib/limits/fee-channel";
 import { useSlabState } from "@/components/providers/SlabProvider";
 import { detectOracleMode, resolveMarketPriceE6 } from "@/lib/oraclePrice";
@@ -485,6 +486,12 @@ export function useTrade(slabAddress: string) {
           throw new Error("Multi-leg trades are only supported on v17 markets");
         }
 
+        // #3314: the taker's effective position before the trade, for the saved entry. Started
+        // here so it runs alongside the identity reads; awaited only after confirmation.
+        const beforeEffectiveQ: Promise<bigint | null> = isV17Market
+          ? readBeforeTrade(connection, accountA, slabPk)
+          : Promise.resolve(null);
+
         // v18 wire: live-read BOTH portfolios' identity + the asset marketId right
         // before building the trade — these anti-replay/CAS fields are rejected
         // on-chain if stale. accountA = taker, accountB = LP maker. TradeCpi reads
@@ -654,6 +661,16 @@ export function useTrade(slabAddress: string) {
                 }
               : undefined,
           });
+        }
+
+        // #3314: measure the position change for the saved entry. Not awaited: the caller that
+        // saves the entry (OrderTicket) waits for it via takePositionChange(sig); closes don't.
+        if (isV17Market) {
+          const portfolio = accountA;
+          recordPositionChange(
+            sig,
+            beforeEffectiveQ.then((beforeQ) => measurePositionChange(connection, portfolio, slabPk, sig, beforeQ)),
+          );
         }
 
         // Immediate local application of the confirmed fill: sendTx's

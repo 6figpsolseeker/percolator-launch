@@ -18,6 +18,7 @@ import {
   atomsToHuman,
   decodeInitMarketData,
   inferResumeStep,
+  readCreationFromChain,
   recoverLaunchFromChain,
   RECOVERY_COPY,
   type RecoveryDeps,
@@ -102,7 +103,11 @@ describe("InitMarket decoding agrees with the SDK encoder", () => {
   it("round-trips price, margin, fee and slot count", () => {
     const derived = deriveLaunchMarketParams({ initialMarginBps: 1000, lpCollateral: LP, initialPriceE6: PRICE });
     const data = encodeInitMarket(buildV17InitMarketArgs({ initialPriceE6: PRICE, tradingFeeBps: 5 }, derived));
-    expect(decodeInitMarketData(data)).toEqual({ maxPortfolioAssets: 14, initialPriceE6: PRICE, initialMarginBps: 1000n, maxTradingFeeBps: 5n, tradeFeeBaseBps: 5n });
+    // A launch now creates a one-slot market.
+    expect(decodeInitMarketData(data)).toEqual({ maxPortfolioAssets: 1, initialPriceE6: PRICE, initialMarginBps: 1000n, maxTradingFeeBps: 5n, tradeFeeBaseBps: 5n });
+    // A market launched before the change (14 slots) still decodes with its own count.
+    const old = encodeInitMarket(buildV17InitMarketArgs({ initialPriceE6: PRICE, tradingFeeBps: 5, assetSlots: 14 }, derived));
+    expect(decodeInitMarketData(old)).toEqual({ maxPortfolioAssets: 14, initialPriceE6: PRICE, initialMarginBps: 1000n, maxTradingFeeBps: 5n, tradeFeeBaseBps: 5n });
   });
   it("refuses anything that is not a 219-byte InitMarket", () => {
     expect(decodeInitMarketData(new Uint8Array(10))).toBeNull();
@@ -327,4 +332,112 @@ describe("registration-only recovery of a FINISHED vault-owned-LP (one-slot) mar
     // CONTROL: without the junior deposit there is nothing to prove the seed from
     expect(await recoverLaunchFromChain(deps([txs[0]], [pool(POOL)]), input())).toEqual({ ok: false, reason: "no-deposit" });
   });
+});
+
+describe("one-slot legacy launches are told apart from vault-owned-LP (P3) launches by their seed, not their slot count", () => {
+  it("a new legacy launch (1 slot, creator-LP DepositCollateral) recovers and IS resumable", async () => {
+    const { f, txs } = await standardChain();
+    expect(decodeInitMarketData(f.initData)?.maxPortfolioAssets).toBe(1);
+    const r = await recoverLaunchFromChain(deps(txs, [pool(POOL)]), input());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.launch.maxPortfolioAssets).toBe(1);
+    expect(r.launch.seedKind).toBe("creator-lp");
+    expect(canResumeLaunch(r.launch)).toEqual({ ok: true });
+    expect(chainResumeRefusal({ ...r.launch, request: { slabAddress: SLAB.toBase58() } }, SLAB.toBase58(), CREATOR.toBase58())).toBeNull();
+  });
+
+  it("NEGATIVE CONTROL: a one-slot launch seeded as a junior tranche (P3) stays refused, and so does one with no seed yet", async () => {
+    const { f, txs } = await standardChain();
+    const junior = Buffer.alloc(17);
+    junior[0] = 96;
+    junior.writeBigUInt64LE(LP, 1);
+    const p3 = [txs[0], { sig: "junior", tx: fakeTx(CREATOR, [{ programId: WRAPPER, keys: [CREATOR, SLAB], data: junior }]) }];
+    const rp3 = await recoverLaunchFromChain(deps(p3, [pool(POOL)]), input());
+    expect(rp3.ok && rp3.launch.seedKind).toBe("junior-tranche");
+    expect(rp3.ok && canResumeLaunch(rp3.launch).ok).toBe(false);
+    // Mixed evidence (both kinds) is also treated as P3.
+    const both = [...p3, txs[2]];
+    const rboth = await recoverLaunchFromChain(deps(both, [pool(POOL)]), input());
+    expect(rboth.ok && rboth.launch.seedKind).toBe("junior-tranche");
+    // No seed on chain yet: indistinguishable from P3, so refused from here.
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: "none" }).ok).toBe(false);
+    expect(canResumeLaunch({ maxPortfolioAssets: 1 }).ok).toBe(false);
+    void f;
+  });
+
+  it("a market launched before the change (14 slots) resumes as before, whatever its seed evidence", () => {
+    for (const seedKind of ["creator-lp", "junior-tranche", "none", undefined] as const) {
+      expect(canResumeLaunch({ maxPortfolioAssets: 14, seedKind })).toEqual({ ok: true });
+    }
+  });
+});
+
+describe("seed evidence must be signed by the creator; the legacy M2 makes an early one-slot launch resumable from chain", () => {
+  const STRANGER = k();
+  const wrapperIx = (signer: PublicKey, tag: number, extra: Buffer = Buffer.alloc(0)): Ix => ({
+    programId: WRAPPER, keys: [signer, SLAB], data: Buffer.concat([Buffer.from([tag]), extra]),
+  });
+  const m2 = (signer: PublicKey) => [1, 68, 83].map((t) => wrapperIx(signer, t));
+  const foreignDeposit = (): Ix => ({ ...depositIx(LP), keys: [STRANGER, SLAB] });
+  async function chain(extra: { sig: string; tx: unknown }[]) {
+    const f = await forward();
+    const txs = [{ sig: PROOF_SIG, tx: fakeTx(CREATOR, [initIx(f.initData), memoIx(f.memo)]) }, ...extra];
+    const r = await recoverLaunchFromChain(deps(txs, [pool(POOL)], {}, undefined), { ...input(), lpCandidates: [LP] } as never);
+    return r;
+  }
+  const read = async (extra: { sig: string; tx: unknown }[]) => {
+    const f = await forward();
+    const txs = [{ sig: PROOF_SIG, tx: fakeTx(CREATOR, [initIx(f.initData), memoIx(f.memo)]) }, ...extra];
+    const r = await readCreationFromChain(deps(txs, []).connection as never, SLAB.toBase58(), WRAPPER.toBase58());
+    expect(r.ok).toBe(true);
+    return r.ok ? r.facts : (null as never);
+  };
+
+  it("F1 PoC: a foreign DepositCollateral is not the creator's seed: 'none', not resumable, no deposit amount", async () => {
+    const facts = await read([{ sig: "foreign", tx: fakeTx(STRANGER, [foreignDeposit()]) }]);
+    expect(facts.seedKind).toBe("none");
+    expect(facts.depositAmounts).toEqual([]);
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: facts.seedKind }).ok).toBe(false);
+  });
+  it("F1 CONTROL: the creator's own deposit is the seed and resumable", async () => {
+    const facts = await read([{ sig: "own", tx: fakeTx(CREATOR, [depositIx(LP)]) }]);
+    expect(facts.seedKind).toBe("creator-lp");
+    expect(facts.depositAmounts).toEqual([LP]);
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: facts.seedKind })).toEqual({ ok: true });
+  });
+  it("F1: a foreign deposit next to the creator's own does not change either (amount only from the creator)", async () => {
+    const facts = await read([{ sig: "foreign", tx: fakeTx(STRANGER, [{ ...depositIx(7n), keys: [STRANGER, SLAB] }]) }, { sig: "own", tx: fakeTx(CREATOR, [depositIx(LP)]) }]);
+    expect(facts.depositAmounts).toEqual([LP]);
+  });
+
+  it("F2: M1 only -> refused", async () => {
+    const facts = await read([]);
+    expect(facts.seedKind).toBe("none");
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: facts.seedKind }).ok).toBe(false);
+  });
+  it("F2: M1 + keeper co-sign (not a wrapper 1/68/83) -> refused", async () => {
+    const facts = await read([{ sig: "cosign", tx: fakeTx(CREATOR, [wrapperIx(CREATOR, 17)]) }]);
+    expect(facts.seedKind).toBe("none");
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: facts.seedKind }).ok).toBe(false);
+  });
+  it("F2: + creator-signed M2 (1, 68, 83) -> resumable", async () => {
+    const facts = await read([{ sig: "m2", tx: fakeTx(CREATOR, m2(CREATOR)) }]);
+    expect(facts.seedKind).toBe("creator-m2");
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: facts.seedKind })).toEqual({ ok: true });
+  });
+  it("F2 NEGATIVE CONTROL: M2-shaped instructions signed by another wallet -> refused; a partial M2 (missing 83) -> refused", async () => {
+    const other = await read([{ sig: "m2x", tx: fakeTx(STRANGER, m2(STRANGER)) }]);
+    expect(other.seedKind).toBe("none");
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: other.seedKind }).ok).toBe(false);
+    const partial = await read([{ sig: "m2p", tx: fakeTx(CREATOR, [wrapperIx(CREATOR, 1), wrapperIx(CREATOR, 68)]) }]);
+    expect(partial.seedKind).toBe("none");
+  });
+  it("F2: vault-LP (junior seed) stays refused even with creator M2-shaped instructions", async () => {
+    const junior = Buffer.alloc(17); junior[0] = 96; junior.writeBigUInt64LE(LP, 1);
+    const facts = await read([{ sig: "m2", tx: fakeTx(CREATOR, m2(CREATOR)) }, { sig: "j", tx: fakeTx(CREATOR, [{ programId: WRAPPER, keys: [CREATOR, SLAB], data: junior }]) }]);
+    expect(facts.seedKind).toBe("junior-tranche");
+    expect(canResumeLaunch({ maxPortfolioAssets: 1, seedKind: facts.seedKind }).ok).toBe(false);
+  });
+  void chain;
 });

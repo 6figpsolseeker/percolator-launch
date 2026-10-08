@@ -85,6 +85,13 @@ export interface CreationFacts {
   collateralMint: string;
   /** Amounts of the wrapper DepositCollateral / DepositJuniorTranche instructions in the launch's first transactions (LP-seed candidates; the memo picks). */
   depositAmounts: bigint[];
+  /**
+   * How the launch's liquidity was seeded, as the launch's own transactions show it: a legacy launch
+   * deposits collateral for the creator's LP (DepositCollateral); a vault-owned-LP (P3) launch seeds
+   * a junior tranche instead (DepositJuniorTranche, tag 96). Both launches now create a ONE-slot
+   * market, so this, not the slot count, is what tells them apart. `creator-m2` = no deposit yet but the creator signed the legacy-only M2 instructions (1, 68, 83); `none` = neither landed yet.
+   */
+  seedKind: "creator-lp" | "creator-m2" | "junior-tranche" | "none";
 }
 
 export type CreationRead =
@@ -127,9 +134,18 @@ export async function readCreationFromChain(connection: TxConn, slab: string, wr
       txs.push({ sig: s.signature, tx });
     }
 
-    let found: Omit<CreationFacts, "depositAmounts" | "slab"> | null = null;
+    let found: Omit<CreationFacts, "depositAmounts" | "seedKind" | "slab"> | null = null;
     let memos = 0;
     const depositAmounts: bigint[] = [];
+    // A DepositCollateral counts as the creator's LP seed only when the creator signed it (accounts[0] is the
+    // signing owner in the wrapper): any wallet can deposit into a public market, and a foreign deposit must
+    // not turn a vault-owned-LP launch into a "legacy" one.
+    const collateralDeposits: { owner: string | undefined; amount: bigint }[] = [];
+    // The legacy launch's M2 instructions (1 InitPortfolio, 68 SetMatcherConfig, 83 InitMatcherCtx) and who
+    // signed each (accounts[0], a required signer in the wrapper; 68 and 83 also require it to be the LP
+    // portfolio's owner). The vault-LP path skips M2, so all three signed by the creator prove a legacy launch.
+    const m2Signers: Record<number, Set<string>> = { 1: new Set(), 68: new Set(), 83: new Set() };
+    let sawJuniorDeposit = false;
     for (const { sig, tx } of txs) {
       if (!tx?.meta || tx.meta.err !== null) continue;
       const msg = tx.transaction.message;
@@ -159,9 +175,12 @@ export async function readCreationFromChain(connection: TxConn, slab: string, wr
             // instead of a DepositCollateral: that amount IS the LP seed the memo binds (juniorAtoms = lpCollateral).
             const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
             depositAmounts.push(view.getBigUint64(1, true) | (view.getBigUint64(9, true) << 64n));
+            sawJuniorDeposit = true;
           } else if (data[0] === IX_TAG.DepositCollateral && data.length === 33 && accts.includes(slab)) {
             const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-            depositAmounts.push(view.getBigUint64(17, true) | (view.getBigUint64(25, true) << 64n));
+            collateralDeposits.push({ owner: accts[0], amount: view.getBigUint64(17, true) | (view.getBigUint64(25, true) << 64n) });
+          } else if ((data[0] === 1 || data[0] === 68 || data[0] === 83) && accts[1] === slab && accts[0]) {
+            m2Signers[data[0]].add(accts[0]);
           }
         }
       }
@@ -171,7 +190,17 @@ export async function readCreationFromChain(connection: TxConn, slab: string, wr
       }
     }
     if (!found) return { ok: false, reason: memos > 1 ? "several-memos" : memos === 0 ? "no-memo" : "no-creation-tx" };
-    return { ok: true, facts: { slab, ...found, depositAmounts: [...new Set(depositAmounts)] } };
+    const creatorDeposits = collateralDeposits.filter((d) => d.owner === found!.creator);
+    for (const d of creatorDeposits) depositAmounts.push(d.amount);
+    const creatorM2 = [1, 68, 83].every((t) => m2Signers[t].has(found!.creator));
+    const seedKind: CreationFacts["seedKind"] = sawJuniorDeposit
+      ? "junior-tranche"
+      : creatorDeposits.length > 0
+        ? "creator-lp"
+        : creatorM2
+          ? "creator-m2"
+          : "none";
+    return { ok: true, facts: { slab, ...found, depositAmounts: [...new Set(depositAmounts)], seedKind } };
   } catch {
     return { ok: false, reason: "rpc" };
   }
@@ -218,8 +247,10 @@ export interface RecoveredLaunch {
   initialMarginBps: number;
   tradingFeeBps: number;
   initialPriceE6: bigint;
-  /** InitMarket's maxPortfolioAssets: 1 marks a vault-owned-LP (P3) market. */
+  /** InitMarket's maxPortfolioAssets. Every new launch is 1 slot now, so 1 no longer means vault-owned LP by itself: see `seedKind`. */
   maxPortfolioAssets: number;
+  /** How the launch seeded its liquidity (CreationFacts.seedKind); canResumeLaunch needs it for a one-slot market. */
+  seedKind?: CreationFacts["seedKind"];
   /** The slab's own insurance balance when this launch was read (atoms), if known: pinned for a resume. */
   onChainInsuranceAtoms?: bigint | null;
   /**
@@ -327,6 +358,7 @@ export async function reconstructRegistration(i: ReconstructInput): Promise<Reco
             tradingFeeBps: fee,
             initialPriceE6: facts.init.initialPriceE6,
             maxPortfolioAssets: facts.init.maxPortfolioAssets,
+            seedKind: facts.seedKind,
           };
         }
       }
@@ -459,18 +491,26 @@ export interface ResumableParams {
 }
 
 /**
- * Whether a recovered launch can be resumed from here. A market created with ONE asset slot is a
- * vault-owned-LP (P3) market: its later steps sign a junior-tranche floor and amount that neither the
- * memo binds nor the chain yet records in a form this recovery reads. Resuming it with today's flag or
- * form default would sign values the creator never chose, so it is refused until those parameters can
- * be read or proven. (Registration-only recovery of a FINISHED market is unaffected.)
+ * Whether a recovered launch can be resumed from here. A vault-owned-LP (P3) market's later steps sign
+ * a junior-tranche floor and amount that neither the memo binds nor the chain yet records in a form
+ * this recovery reads. Resuming it with today's flag or form default would sign values the creator
+ * never chose, so it is refused until those parameters can be read or proven. (Registration-only
+ * recovery of a FINISHED market is unaffected.)
+ *
+ * A P3 market has ONE asset slot, and since the one-slot change so does every legacy launch, so the slot
+ * count alone can no longer tell them apart. A one-slot market is resumable only when its own launch shows
+ * a creator-signed LP seed (DepositCollateral) or the creator-signed legacy M2 instructions (never a junior tranche); a one-slot market whose seed has not
+ * landed, or is a junior tranche, stays refused: from chain it is indistinguishable from a P3 launch.
+ * Markets with more slots (launched before the change) were always legacy and are unaffected.
  */
-export function canResumeLaunch(r: Pick<RecoveredLaunch, "maxPortfolioAssets">): { ok: true } | { ok: false; reason: string } {
-  if (r.maxPortfolioAssets === 1) {
+export function canResumeLaunch(
+  r: Pick<RecoveredLaunch, "maxPortfolioAssets"> & { seedKind?: RecoveredLaunch["seedKind"] },
+): { ok: true } | { ok: false; reason: string } {
+  if (r.maxPortfolioAssets === 1 && r.seedKind !== "creator-lp" && r.seedKind !== "creator-m2") {
     return {
       ok: false,
       reason:
-        "This launch can't be resumed from here yet: it is a vault-owned-liquidity market, and the parameters its remaining steps would sign aren't recorded on chain. Continue it from the browser that started it.",
+        "This launch can't be resumed from here yet: the chain doesn't show how its liquidity was to be seeded, and the remaining steps would sign values you never chose. Continue it from the browser that started it.",
     };
   }
   return { ok: true };
@@ -482,8 +522,8 @@ export function canResumeLaunch(r: Pick<RecoveredLaunch, "maxPortfolioAssets">):
  * name and LP seed; the slab's own insurance balance, when above zero, is what was already funded. The
  * live wizard re-detects some of these (a different top pool, a moved price), and letting that through
  * would resume the market with different parameters, or send a registration that can no longer verify.
- * A one-slot (P3) market never reaches here (canResumeLaunch refuses it), so `p3` is always cleared:
- * it must not depend on today's flag or form.
+ * A vault-owned-LP (P3) market never reaches here (canResumeLaunch refuses a one-slot market that is
+ * not a proven creator-LP launch), so `p3` is always cleared: it must not depend on today's flag or form.
  */
 export function applyRecoveredLaunch<T extends ResumableParams>(params: T, r: RecoveredLaunch | null): T {
   if (!r) return params;
@@ -537,7 +577,7 @@ export const CHAIN_RESUME_MISMATCH_COPY = "This resume was verified for a differ
  * the slab being resumed and for the connected wallet, and be a market this recovery can resume.
  */
 export function chainResumeRefusal(
-  r: Pick<RecoveredLaunch, "creator" | "maxPortfolioAssets"> & { request: Pick<RecoveredLaunch["request"], "slabAddress"> },
+  r: Pick<RecoveredLaunch, "creator" | "maxPortfolioAssets" | "seedKind"> & { request: Pick<RecoveredLaunch["request"], "slabAddress"> },
   resumeSlab: string | null,
   walletB58: string | null,
 ): string | null {

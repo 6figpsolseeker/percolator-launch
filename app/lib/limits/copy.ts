@@ -97,6 +97,11 @@ export const COPY = {
   adlExitTrapped:
     "The other side of this market has fully closed, and your position can settle once the market catches up. Nothing was sent. Try again in a moment.",
   closePartial: (filled: string, requested: string) => `Partially closed: ${filled} of ${requested}. The rest of your position is still open.`,
+  /** useClosePosition success toast: a full close, and a partial close the user asked for (not a clipped fill). */
+  closeDone: "Position closed.",
+  /** The close tx confirmed but the resulting position could not be measured: no claim about what closed. */
+  closeConfirmedUnmeasured: "Your close went through. Your position is updating.",
+  closeDonePart: (closed: string, of: string) => `Closed ${closed} of ${of}. The rest of your position is still open.`,
   /** UX WP-8 (audit §3.9): keeper-first, a time not a slot, "Finish now" as a secondary link. */
   resolvedExit: {
     title: "Market settled",

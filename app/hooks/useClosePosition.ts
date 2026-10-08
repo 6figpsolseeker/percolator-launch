@@ -552,6 +552,17 @@ export function useClosePosition(slabAddress: string): UseClosePositionReturn {
         if (closePercent === 100 && outcome === "closed" && (!targetPk || userAccount?.pubkey?.equals(targetPk))) {
           clearEntryPrice(slabAddress, userIdx, publicKey?.toBase58());
         }
+        // The one confirmation a close gets: every close surface (dock, ticket, portfolio rows) closes
+        // its modal on resolve, so without this a partial close just vanished. A clipped fill already
+        // said what filled (setError above), so it gets no success line.
+        if (outcome !== "partial") {
+          const closedAbs = closeSize < 0n ? -closeSize : closeSize;
+          // The tx is confirmed (sendTx returns only after confirmation; a timeout throws above), but a
+          // fill the app could not measure (post-trade read failed, or the position moved the other
+          // way) does not prove the position is closed: say only what is known.
+          if (fill?.kind === "unknown") toast(COPY.closeConfirmedUnmeasured, "info");
+          else toast(closePercent >= 100 ? COPY.closeDone : COPY.closeDonePart(fmtQ(closedAbs), fmtQ(freshAbs)), "success");
+        }
         setPhase("confirming");
         setTimeout(() => setPhase("idle"), 2000);
         // The site-wide PositionsBar reads its OWN usePortfolio instance, which

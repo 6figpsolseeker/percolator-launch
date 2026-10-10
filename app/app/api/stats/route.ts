@@ -468,7 +468,7 @@ export async function GET(request: NextRequest) {
           "[/api/stats] CRITICAL: both indexer_excluded and network columns missing — " +
           "cannot serve accurate stats. Apply migrations 20260329180000 and 20260402170000."
         );
-        statsData_raw = [] as typeof statsData_raw;
+        statsData_raw = null; // degraded: answered by zeroStats() below (live: false), not as data
       } else {
         statsData_raw = fallback.data as typeof statsData_raw;
       }
@@ -500,6 +500,14 @@ export async function GET(request: NextRequest) {
       // Unknown error — log but don't crash
       console.error("[/api/stats] Unexpected error querying markets_with_stats:", statsRes.error);
     }
+  }
+
+  // No market rows read (an unexpected error, a failed fallback query, or Tier 3's degrade): this is
+  // "no data", not an empty protocol. Answer with the degraded zeroStats() (live: false) rather than
+  // building 0 / $0 / $0 from an empty list and calling it live. Supabase returns [] for no rows, so
+  // null here only ever means the read failed.
+  if (statsData_raw == null) {
+    return NextResponse.json(zeroStats(), { headers: STATS_CACHE_HEADERS });
   }
 
   if (tradersRes.error && tradersRes.error.message?.includes("network")) {

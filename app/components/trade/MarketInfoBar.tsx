@@ -14,7 +14,7 @@ import { WatchButton } from "@/components/market/WatchButton";
 import { TokenCopyMenu } from "@/components/trade/TokenCopyMenu";
 import { formatUsdFromNumber, formatMarkPrice } from "@/lib/format";
 import { formatCompactUsd } from "@/lib/formatters";
-import { rowVolumeUsd, Q_SCALE } from "@/lib/q-usd";
+import { qToUsd, rowVolumeUsd } from "@/lib/q-usd";
 import { computeMarketSpread } from "@/lib/oraclePrice";
 
 interface MarketInfoBarProps {
@@ -178,27 +178,13 @@ export const MarketInfoBar: FC<MarketInfoBarProps> = ({ slabAddress, symbol, log
     market ? { ...(market as { volume_24h_usd?: number | null }), last_price: priceUsd } : null,
   );
 
-  // Open interest: prefer the authoritative on-chain figure (bigint atoms, quote
-  // units e6) from the engine/market-group — it's present locally even when the
-  // indexer isn't, so we never show a misleading "$0" from a null indexer row.
-  // Fall back to the indexer's total_open_interest (base-token atoms → USD via
-  // price, GH#1626) only when on-chain OI is unavailable, then to a quiet "—".
+  // Open interest: prefer the authoritative on-chain figure from the engine/market-group (present
+  // locally even when the indexer isn't), else the indexer's total_open_interest (GH#1626). Both are
+  // a base-token Q quantity (1e6, lib/q-usd.ts), not USD: qToUsd converts at the live price, returns
+  // a real 0 for zero OI, and null (shown "—") when there is no price. Without that, the bare token
+  // count rendered with a "$" ("100 SOL OI" read "$100", #38).
   const rawOiAtoms = market?.total_open_interest as number | null | undefined;
-  const oi: number | null = (() => {
-    // BUG 13 fix: this branch omitted `* priceUsd`, rendering raw base-token
-    // quantity as if it were USD (e.g. "100 SOL OI" showed as "$100"). Mirror the
-    // fallback branch below: scale to a token count, then convert to USD via the
-    // live price when available.
-    if (totalOI != null) {
-      const tokenAmount = Number(totalOI) / 1_000_000;
-      return priceUsd != null && priceUsd > 0 ? tokenAmount * priceUsd : tokenAmount;
-    }
-    if (rawOiAtoms == null) return null;
-    // Q units (1e6), not the mint's decimals — SOL (9dp) read 1000x low.
-    const tokenAmount = rawOiAtoms / Q_SCALE;
-    if (priceUsd != null && priceUsd > 0) return tokenAmount * priceUsd;
-    return tokenAmount;
-  })();
+  const oi = qToUsd(totalOI != null ? Number(totalOI) : rawOiAtoms, priceUsd);
 
   return (
     <div
@@ -236,7 +222,8 @@ export const MarketInfoBar: FC<MarketInfoBarProps> = ({ slabAddress, symbol, log
               : "bg-[var(--short)]/15 text-[var(--short)] border border-[var(--short)]/20"
         }`}
       >
-        {change24h == null ? "0.00%" : `${isUp ? "+" : ""}${change24hDisplay.toFixed(2)}%`}
+        {/* Unknown is "—", not a flat 0.00% (#38). */}
+        {change24h == null ? "—" : `${isUp ? "+" : ""}${change24hDisplay.toFixed(2)}%`}
       </span>
 
       </div>
@@ -259,8 +246,11 @@ export const MarketInfoBar: FC<MarketInfoBarProps> = ({ slabAddress, symbol, log
         {/* OI */}
         <div className="flex flex-col shrink-0">
           <span className="text-[10px] uppercase tracking-[0.1em] text-[var(--text-muted)]">Open Interest</span>
-          <span className="text-xs font-medium text-[var(--text)]" style={{ fontFamily: "var(--font-mono)" }}>
-            {formatCompactUsd(oi as number)}
+          <span
+            className={`text-xs font-medium ${oi == null ? "text-[var(--text-dim)]" : "text-[var(--text)]"}`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            {oi == null ? "—" : formatCompactUsd(oi)}
           </span>
         </div>
 

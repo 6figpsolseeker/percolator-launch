@@ -1405,6 +1405,8 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
             launchDisabled={launchDisabled}
             launchDisabledReason={launchDisabledReason}
             instantLaunch={mockBypass}
+            // The value create() itself is called with: a reset clears it (chainResume can outlive it).
+            resuming={resumeFromStep !== null}
             onBack={goBack}
           />
         )}

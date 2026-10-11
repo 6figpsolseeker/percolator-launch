@@ -51,7 +51,7 @@ const MarketSwitcherInner: FC<MarketSwitcherProps> = ({ slabAddress, symbol, log
   // useAllMarketStats — markets/page.tsx, portfolio/page.tsx, and
   // MarketSelector.tsx are different pages/flows with their own instances),
   // so gating this one doesn't starve anything else of a warm cache.
-  const { statsMap } = useAllMarketStats({ enabled: open });
+  const { statsMap, loading, error } = useAllMarketStats({ enabled: open });
   const [query, setQuery] = useState("");
   const [panelPos, setPanelPos] = useState<{ left: number; top: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -205,7 +205,14 @@ const MarketSwitcherInner: FC<MarketSwitcherProps> = ({ slabAddress, symbol, log
           <div className="max-h-72 overflow-y-auto pb-1">
             {results.length === 0 && (
               <p className="px-3 py-3 text-[11px] text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
-                No markets match &quot;{query.trim()}&quot;
+                {/* With no markets loaded, a query can't be what failed to match. */}
+                {allMarkets.length > 0
+                  ? `No markets match "${query.trim()}"`
+                  : loading
+                    ? "Loading markets…"
+                    : error
+                      ? "Couldn't load markets"
+                      : "No markets yet"}
               </p>
             )}
             {results.map((r) => {

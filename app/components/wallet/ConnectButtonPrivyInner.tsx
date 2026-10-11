@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useCallback, useMemo, useState, useRef, useEffect } from "react";
+import { FC, useCallback, useMemo, useState, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useLogin, usePrivy, type LinkedAccountWithMetadata } from "@privy-io/react-auth";
@@ -12,6 +12,9 @@ import { usePrivyLogin } from "@/hooks/usePrivySafe";
 import { useSignInLoopRecovery } from "@/hooks/useSignInLoopRecovery";
 import { resetPrivyConnection } from "@/lib/privy-reset";
 import { isReconnectFallbackEligible, useWalletNeedsReconnect } from "@/hooks/useWalletNeedsReconnect";
+import { useMenuDismiss } from "@/hooks/useMenuDismiss";
+import { useOptionalToast } from "@/hooks/useToast";
+import { copyAddress } from "@/lib/copy-address";
 
 /**
  * Privy-backed connect button. Split into its own module (loaded via
@@ -90,17 +93,9 @@ export const ConnectButtonPrivyInner: FC = () => {
   const canExport = !!exportWallet && !!embeddedWallet && ready && authenticated;
   const canFund = !!fundWallet && !!activeWallet && network === "mainnet";
 
-  // Close menu on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [menuOpen]);
+  // Close menu on outside click or Escape
+  useMenuDismiss(menuOpen, setMenuOpen, menuRef);
+  const toast = useOptionalToast();
 
   const handleClick = useCallback(() => {
     if (!authenticated) {
@@ -173,6 +168,7 @@ export const ConnectButtonPrivyInner: FC = () => {
             : "text-[var(--text)] border-[var(--accent)] bg-[var(--accent)]/20 hover:bg-[var(--accent)]/30",
         ].join(" ")}
         aria-label={authenticated ? `Wallet: ${displayAddress || "connected"}` : "Connect wallet"}
+        aria-expanded={authenticated ? menuOpen : undefined}
       >
         {authenticated ? (displayAddress || "Wallet") : "Connect"}
       </button>
@@ -219,7 +215,7 @@ export const ConnectButtonPrivyInner: FC = () => {
           </Link>
           <button
             onClick={() => {
-              navigator.clipboard.writeText(activeWallet?.address ?? "");
+              void copyAddress(activeWallet?.address ?? "", toast);
               setMenuOpen(false);
             }}
             className="w-full px-3 py-1.5 text-left text-[13px] text-[var(--text-secondary)] hover:bg-[var(--accent)]/[0.06] rounded-sm transition-colors"

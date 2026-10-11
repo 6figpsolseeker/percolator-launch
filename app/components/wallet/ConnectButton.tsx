@@ -1,7 +1,9 @@
 "use client";
 
-import { FC, useCallback, useMemo, useState, useRef, useEffect } from "react";
+import { FC, useCallback, useMemo, useState, useRef } from "react";
 import { useToast } from "@/hooks/useToast";
+import { useMenuDismiss } from "@/hooks/useMenuDismiss";
+import { copyAddress } from "@/lib/copy-address";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -96,17 +98,8 @@ const ConnectButtonAdapterInner: FC = () => {
     [wallets],
   );
 
-  // Close menu on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [menuOpen]);
+  // Close menu on outside click or Escape
+  useMenuDismiss(menuOpen, setMenuOpen, menuRef);
 
   const handleConnect = useCallback(
     async (walletName: string) => {
@@ -147,6 +140,7 @@ const ConnectButtonAdapterInner: FC = () => {
           data-state="connected"
           className="min-h-10 max-w-[10rem] truncate rounded-sm border border-[var(--accent)]/30 bg-[var(--accent)]/[0.06] px-4 text-[13px] font-medium text-[var(--accent)] transition-all duration-200 hover:bg-[var(--accent)]/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           aria-label={`Wallet: ${displayAddress}`}
+          aria-expanded={menuOpen}
         >
           {displayAddress}
         </button>
@@ -165,7 +159,7 @@ const ConnectButtonAdapterInner: FC = () => {
             </Link>
             <button
               onClick={() => {
-                void navigator.clipboard.writeText(publicKey.toBase58());
+                void copyAddress(publicKey.toBase58(), toast);
                 setMenuOpen(false);
               }}
               className="w-full rounded-sm px-3 py-1.5 text-left text-[13px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent)]/[0.06]"
@@ -221,6 +215,7 @@ const ConnectButtonAdapterInner: FC = () => {
         onClick={() => setMenuOpen((v) => !v)}
         data-testid="wallet-connect"
         data-state="disconnected"
+        aria-expanded={menuOpen}
         className="min-h-10 rounded-sm border border-[var(--accent)] bg-[var(--accent)]/20 px-4 text-[13px] font-medium text-[var(--text)] transition-all hover:bg-[var(--accent)]/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
       >
         Connect Wallet

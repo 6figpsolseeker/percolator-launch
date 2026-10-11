@@ -67,6 +67,17 @@ export function EarnVaultView() {
     if (stats.markets.length > 0) setSelectedSlab(stats.markets[0].slabAddress);
   }, [stats.markets, selectedSlab]);
 
+  // Below lg the rail renders under the table, so a row tap changed nothing on screen. Bring the
+  // rail into view, its top below the sticky header (scroll-mt-24 on the rail). No `behavior`: the
+  // html scroll-behavior applies, smooth unless the user prefers reduced motion. Not on auto-select above.
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const selectVault = useCallback((slab: string) => {
+    setSelectedSlab(slab);
+    if (!window.matchMedia('(min-width: 64rem)').matches) {
+      railRef.current?.scrollIntoView({ block: 'start' });
+    }
+  }, []);
+
   const selectedVault = useMemo(
     () => stats.markets.find((m) => m.slabAddress === selectedSlab) ?? null,
     [stats.markets, selectedSlab],
@@ -116,13 +127,13 @@ export function EarnVaultView() {
               loading={loading}
               error={error}
               selectedSlab={selectedSlab}
-              onSelect={setSelectedSlab}
+              onSelect={selectVault}
               userDeposits={tableDeposits}
             />
           </div>
 
           {/* RIGHT RAIL — deposit/withdraw bound to the selected row */}
-          <div className="lg:sticky lg:top-4">
+          <div ref={railRef} className="scroll-mt-24 lg:sticky lg:top-4">
             <VaultDepositRail
               slab={selectedSlab}
               vault={selectedVault}

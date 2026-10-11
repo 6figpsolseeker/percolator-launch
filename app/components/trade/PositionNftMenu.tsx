@@ -9,8 +9,10 @@
  * unwrapped leg; send / unwrap act on the NFT actually held, self-minted or received).
  * ClosedPositionNftNotice covers the one case the row menu can't: a wrapped position that closed, which has no row.
  */
-import { type FC, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type FC, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Modal } from "@/components/ui/Modal";
+import { displayMenuPosition } from "@/components/trade/ChartDisplayMenu";
 import { usePositionNft } from "@/hooks/usePositionNft";
 import { useMintPositionNft } from "@/hooks/useMintPositionNft";
 import { useBurnPositionNft } from "@/hooks/useBurnPositionNft";
@@ -64,13 +66,48 @@ export const PositionNftMenuView: FC<PositionNftMenuViewProps> = ({ canWrap, isW
   const ref = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  // The menu is portaled with fixed positioning: inline, the dock's overflow-x-auto table wrapper
+  // (PositionsDock) clipped it to the row. Right-aligned to ⋯, and flipped above it when there is
+  // no room below (the dock sits at the bottom of the screen on phones).
+  const place = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const style = displayMenuPosition(rect, { width: document.documentElement.clientWidth }, menuRef.current?.offsetWidth || 160);
+    const h = menuRef.current?.offsetHeight ?? 0;
+    const above = rect.top - 4 - h;
+    if ((style.top as number) + h > window.innerHeight - 8 && above >= 8) style.top = above;
+    setMenuStyle(style);
+  }, []);
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (ref.current && !ref.current.contains(t) && !menuRef.current?.contains(t)) setOpen(false);
     };
     // Keyboard: Escape closes and returns focus to the ⋯ button.
     const onKey = (e: KeyboardEvent) => {
+      // The portaled menu sits at the end of <body>, so Tab past either end would leave the row
+      // (Shift+Tab from the first item used to land on ⋯). Close and go back to ⋯ instead.
+      if (e.key === "Tab") {
+        const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? []);
+        if (document.activeElement === (e.shiftKey ? items[0] : items[items.length - 1])) {
+          e.preventDefault();
+          setOpen(false);
+          buttonRef.current?.focus();
+        }
+        return;
+      }
       if (e.key !== "Escape") return;
       e.stopPropagation();
       setOpen(false);
@@ -94,7 +131,8 @@ export const PositionNftMenuView: FC<PositionNftMenuViewProps> = ({ canWrap, isW
       data-testid="position-nft-menu"
       // Tabbing out of an open menu closes it, so it can't linger behind other UI.
       onBlur={(e) => {
-        if (open && !e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+        const next = e.relatedTarget as Node | null;
+        if (open && !e.currentTarget.contains(next) && !menuRef.current?.contains(next)) setOpen(false);
       }}
     >
       <button
@@ -109,8 +147,9 @@ export const PositionNftMenuView: FC<PositionNftMenuViewProps> = ({ canWrap, isW
       >
         ⋯
       </button>
-      {open && (
-        <div ref={menuRef} role="menu" className="absolute right-0 z-30 mt-1 min-w-[160px] border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-lg">
+      {open && createPortal(
+        // z-[70]: ChartDisplayMenu's layer, above the bottom nav (z-50), below modals.
+        <div ref={menuRef} role="menu" style={menuStyle} className="fixed z-[70] min-w-[160px] border border-[var(--border)] bg-[var(--bg-elevated)] py-1 shadow-lg">
           {canWrap && (
             <button role="menuitem" type="button" data-testid="position-nft-wrap" className={item} disabled={busy !== null} onClick={() => {
                 // Focus ⋯ before the menu unmounts, so the sheet (Modal) restores focus to it on close.
@@ -131,7 +170,8 @@ export const PositionNftMenuView: FC<PositionNftMenuViewProps> = ({ canWrap, isW
               </button>
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
       {/* The shared Modal: Escape, focus trap and restore, scroll lock, and a portal above the
           mobile tab bar (inline, the trade page's animate-fade-in root capped its z-index and

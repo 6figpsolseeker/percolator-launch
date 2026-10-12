@@ -96,7 +96,7 @@ describe("first trade, one approval", () => {
     render(<OrderTicket slabAddress={SLAB} />);
     await waitFor(() => expect(screen.queryByTestId("trade-submit")).not.toBeNull());
     size("5"); // $5 at 1x: margin 5, fee 0.015 => deposit (5.015) * 1.1 = 5.52 (cent up)
-    expect(screen.getByTestId("first-trade-line").textContent).toBe("First trade on this market sets up your trading account (one approval)");
+    expect(screen.getByTestId("first-trade-line").textContent).toBe("First trade on this market sets up your trading account (one approval, plus ~0.05 SOL one-time account rent)");
     expect(submit().textContent).toBe("Deposit 5.52 USDC & Long");
     expect(submit().disabled).toBe(false);
     expect(screen.queryByTestId("deposit-submit")).toBeNull(); // the old 2-step "Start Trading" CTA is gone

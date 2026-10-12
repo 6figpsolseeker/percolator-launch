@@ -880,7 +880,17 @@ export async function sendTx({
       let gateGreen = false;
       if (computeUnitsFromSim) {
         const g = await simulateForGate(connection, feePayer, healedInstructions);
-        if (g.err && !skipPreflight) throw new SimulationRefusal(g.err, g.logs, g.simulated);
+        if (g.err && !skipPreflight) {
+          // A wallet short of the rent for an account this tx creates (a first trade's portfolio)
+          // fails here, before the balance check below runs. Name the shortfall ("add at least X
+          // SOL") instead of the generic refusal; checkSufficientBalance only throws when short.
+          const rentLamports = getAccountCreationLamports(instructions);
+          if (rentLamports > 0) {
+            const fees = estimateFees(sizeComputeUnitLimit(g.consumed, computeUnitsFromSim), PRIORITY_FEE_FALLBACK, 1 + signers.length);
+            await checkSufficientBalance(connection, wallet.publicKey, fees, rentLamports);
+          }
+          throw new SimulationRefusal(g.err, g.logs, g.simulated);
+        }
         gateGreen = !g.err && !g.rpcFailed;
         healedComputeUnits = sizeComputeUnitLimit(g.consumed, computeUnitsFromSim);
         onComputeUnits?.({ limit: healedComputeUnits, consumed: g.consumed });

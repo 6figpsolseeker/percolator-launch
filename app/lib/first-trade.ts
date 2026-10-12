@@ -27,6 +27,7 @@ import {
   encodeInitUser,
 } from "@percolatorct/sdk";
 import { buildTradeCpiIx, type TradeIdentity } from "@/lib/trade-ix";
+import { rentSol } from "@/lib/rent";
 import { assetWrapperOff } from "@/lib/limits/constants";
 import { WRAPPER_ERR } from "@/lib/wrapper-errors";
 
@@ -139,8 +140,14 @@ export class FirstTradeDepositError extends Error {
   }
 }
 
+/** SOL the first trade moves into the new portfolio account's rent (~0.049 SOL at 9,563 bytes). */
+export const FIRST_TRADE_RENT_SOL = rentSol(V17_PORTFOLIO_ACCOUNT_LEN);
+const rentLabel = `~${FIRST_TRADE_RENT_SOL.toFixed(2)} SOL`;
+
 export const FIRST_TRADE_COPY = {
-  line: "First trade on this market sets up your trading account (one approval)",
+  line: `First trade on this market sets up your trading account (one approval, plus ${rentLabel} one-time account rent)`,
+  /** The confirm modal's row for that rent. */
+  rentRow: { label: "Account setup (one-time)", value: rentLabel },
   button: (amount: string, side: string) => `Deposit ${amount} & ${side}`,
   race: "One more approval: someone joined this market at the same moment.",
   /** GH#2959: the user turned the fund-and-trade down in the wallet. */

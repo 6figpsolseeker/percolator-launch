@@ -220,6 +220,18 @@ function resolveUserMessageInner(err: unknown, ctx: MessageContext): UserMessage
     return m("wallet-locked", "error", "Wallet locked", `Unlock ${ctx.walletName ?? "your wallet"} and try again.`);
   }
   if (/insufficient lamports|insufficient sol|not enough sol|attempt to debit an account but found no record of a prior credit/i.test(p.raw)) {
+    // lib/tx.ts's pre-flight for a tx that creates accounts (a first trade's portfolio, a market's
+    // slab) names their rent and the shortfall; that is not "a little SOL for fees". Both figures
+    // come from the message, so the line is right for whichever flow it was.
+    const rent = Number(/~([\d.]+) SOL account rent/i.exec(p.raw)?.[1]);
+    const short = Number(/add at least ([\d.]+) SOL/i.exec(p.raw)?.[1]);
+    if (rent > 0 && short > 0) {
+      const rentLabel = rent >= 0.01 ? rent.toFixed(2) : rent.toFixed(4);
+      const addLabel = Math.max(0.001, Math.ceil(short * 1000) / 1000).toFixed(3); // rounded up, never 0.000
+      return m("insufficient-sol", "error", "Need SOL for account rent", `This creates an on-chain account: ~${rentLabel} SOL of one-time rent plus network fees. Add at least ${addLabel} SOL.`, {
+        action: { id: "get-funds", label: "Get test funds" },
+      });
+    }
     return m("insufficient-sol", "error", "Need network fees", "You need a little SOL for network fees.", {
       action: { id: "get-funds", label: "Get test funds" },
     });

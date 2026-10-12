@@ -349,6 +349,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
     worstFillPriceE6: bigint;
     riskLeverage: number | null;
     depositAtoms: bigint;
+    createsAccount: boolean;
   } | null>(null);
   const [showInlineDeposit, setShowInlineDeposit] = useState(false);
   // A faucet claim changes none of the wallet-balance effect's other deps.
@@ -2051,6 +2052,8 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
               // the liq row uses, over capital + deposit + pnl, as the position panel's Lev.
               riskLeverage: computeRiskLeverage(combinedSignedSize, livePriceE6 ?? 0n, capitalAfterFund + safeExistingPnl),
               depositAtoms: fundingMode && hasOrder ? fundAtoms : 0n,
+              // First trade: it creates the market portfolio account, whose SOL rent the modal shows.
+              createsAccount: needsAccount && fundingMode,
             });
             setShowConfirmModal(true);
             // Prewarm the entire submission path (blockhash, priority fee,
@@ -2145,6 +2148,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
           accountEquity={userAccount ? capital : null}
           riskLeverage={confirmSnapshot.riskLeverage}
           depositAmount={confirmSnapshot.depositAtoms}
+          createsAccount={confirmSnapshot.createsAccount}
           symbol={baseTicker}
           collateralSymbol={collateralSymbol}
           decimals={decimals}

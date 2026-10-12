@@ -112,7 +112,7 @@ export interface InsuranceLPState {
   mintExists: boolean;
   /** The insurance LP mint address */
   lpMintAddress: PublicKey | null;
-  /** Decimals of the LP token mint (NOT collateral decimals) */
+  /** The LP mint's on-chain decimals (0 today). NOT for display: Earn shares are counted in the collateral's decimals (lib/lp-share-wallet-note.ts, percolator-prog#542). */
   lpDecimals: number;
 
   // ─── LP Vault Registry (v17 "Earn" vault — CreateLpVault/DepositToLpVault,
@@ -361,7 +361,8 @@ export function useInsuranceLP() {
 
       if (mintExists) {
         // Read supply and decimals from LP mint
-        // IMPORTANT: LP tokens have their own decimals — do NOT use collateral decimals here.
+        // The mint's own decimals (0 today) are not the display unit: shares are counted in
+        // collateral-atom units and shown in collateral decimals (lib/lp-share-wallet-note.ts).
         const mint = unpackMint(lpMintInfo.mintPda, mintInfo);
         lpSupply = mint.supply;
         lpDecimals = mint.decimals;

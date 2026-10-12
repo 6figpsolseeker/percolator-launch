@@ -13,10 +13,8 @@ interface LpPositionDashboardProps {
   lpSupply: bigint;
   /** Total vault balance (raw) */
   vaultBalance: bigint;
-  /** Decimals for collateral */
+  /** Decimals for collateral; also used for LP shares, which the app counts in collateral decimals (lib/lp-share-wallet-note.ts, percolator-prog#542) */
   decimals: number;
-  /** Decimals for the LP token mint — NOT necessarily the same as collateral decimals */
-  lpDecimals: number;
   /** Collateral symbol */
   collateralSymbol: string;
   /** Redemption rate (e6) */
@@ -50,7 +48,6 @@ export function LpPositionDashboard({
   lpSupply,
   vaultBalance,
   decimals,
-  lpDecimals,
   collateralSymbol,
   redemptionRateE6,
   loading,
@@ -165,7 +162,7 @@ export function LpPositionDashboard({
 
             {/* Metrics grid (UX WP-5 §4.4: shares at 2 dp, never raw atoms; one share value) */}
             <div className="grid grid-cols-2 gap-4">
-              <MetricCell label="Shares" value={formatShares(userLpBalance, lpDecimals)} />
+              <MetricCell label="Shares" value={formatShares(userLpBalance, decimals)} />
               <MetricCell label="Of the vault" value={`${userSharePct.toFixed(2)}%`} highlight />
               <MetricCell
                 label="Share value"

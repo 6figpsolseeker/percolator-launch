@@ -40,6 +40,7 @@ import { buildEarnDepositIxs, buildEarnExecuteIxs, buildRequestRedeemIx, earnTxP
 import { SimulationRefusal } from "@/lib/tx";
 import { WRAPPER_ERR } from "@/lib/wrapper-errors";
 import { resolveDevnetProgramIds } from "@/lib/program-ids";
+import { decodeLpVaultRegistryBound } from '@/lib/limits/decode';
 import { readEarnP3Context } from "@/lib/limits/earn-p3-read";
 import { readEmptyCloseIxs, readViewerTopupIxs } from "@/lib/limits/resolved-exit-load";
 import { sendWithTopup } from "@/lib/limits/resolved-topup";
@@ -448,6 +449,8 @@ export function useInsuranceLP() {
       // created, RPC hiccup, or an SDK without this export) never blocks the
       // insuranceBalance/lpSupply/userLpBalance state already computed above.
       let registryExists = false;
+      /** Unbound (two-pot) vault: worth its pots' NAV, never registry shares + fees. */
+      let twoPot = false;
       let lpVaultDomain = 0;
       let registryAddress: PublicKey | null = null;
       let vaultTotalAtoms = 0n;
@@ -475,11 +478,12 @@ export function useInsuranceLP() {
           if (registryAcctInfo && registryAcctInfo.data.length > 0) {
             const registry = parseLpVaultRegistry(new Uint8Array(registryAcctInfo.data));
             registryExists = true;
+            twoPot = decodeLpVaultRegistryBound(new Uint8Array(registryAcctInfo.data)) === false;
             lpVaultDomain = Number(registry.domain);
             redemptionCooldownSlots = sanitizeOnChainValue(registry.redemptionCooldownSlots);
 
-            // Total backing = shares outstanding (minted 1:1 with deposited atoms)
-            // + cumulative fee atoms distributed into the vault since launch.
+            // Fallback backing for legacy and bound registries: shares outstanding + cumulative fee
+            // atoms distributed into the vault. A two-pot vault is priced from its pots below.
             const shares = sanitizeOnChainValue(registry.totalLpSharesOutstanding);
             const feeAtoms = sanitizeOnChainValue(registry.feeDistributionTotalAtoms);
             vaultTotalAtoms = shares + feeAtoms;
@@ -548,6 +552,10 @@ export function useInsuranceLP() {
         const sp = rawSp ? repairUnderwaterPot(rawSp)?.state ?? null : null;
         // Wrapper 7a3ac04c+ (navFloor): an over-impaired pot is worth 0 instead of unpriceable.
         const v = sp ? combinedVault(sp.own, sp.sib, sp.feeShareBps, sp.navFloor === true) : null;
+        // A two-pot vault whose pots weren't read (RPC error) or couldn't be priced this cycle has no
+        // value: shares + fees above is far from its NAV (~3,450x on devnet). Fail the cycle so the
+        // outer catch keeps the last good state and flags readError, as useEarnStats does (#3264).
+        if (twoPot && !(sp && v)) throw new Error('Earn vault pot state unreadable');
         if (sp && v && sp.totalShares > 0n) {
           const held = heldShares;
           vaultTotalAtoms = v.nav;

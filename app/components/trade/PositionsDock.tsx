@@ -273,17 +273,16 @@ const PositionRow: FC<{ slabAddress: string; wrappedRow?: boolean }> = memo(func
   const pnlUsd = pnlUsdRaw !== null && Number.isFinite(pnlUsdRaw) ? pnlUsdRaw : null;
   const roe = pnlResult.roe ?? 0;
 
-  // GMX-style pool-capped PnL: the LP vault is the real counterparty (not a
+  // GMX-style pool-capped PnL (legacy v12 engine): the LP vault is the real counterparty (not a
   // matched order book) — a winning position's paper PnL can't exceed what
   // the vault + insurance fund can actually pay out. Display-only: does not
   // change settlement, just surfaces the same caveat GMX shows when
   // `cappedPnl !== poolPnl`. `engine.vault` is v12-only (legacy engine block;
   // always null on v17, and there's no v17 vault-capital field readable
   // client-side — same limitation MarketInfoBar's BUG 21 fix documents).
-  // `insuranceBalance` is `useEngineState()`'s unified v12/v17 field
-  // (`engine.insuranceFund.balance` on v12, `parseMarketGroupV17OI` on v17),
-  // so this gate at least fires off insurance capacity on v17 instead of
-  // silently reading 0 forever (engine.insuranceFund is always null there).
+  // On v17 the vault is unknown, so the capacity is null and no cap or caveat is shown: profit
+  // there converts per source domain (lib/convert-released-pnl.ts), and insurance alone is not
+  // a payout bound.
   const payableCapacity = poolPayableCapacity(engine?.vault, insuranceBalance);
   // Same predicate the Share-PnL card applies (lib/pnl-card), so they can't drift.
   const pnlIsCapped = hasValidMark && isPnlPoolCapped(pnlTokens, payableCapacity);

@@ -55,7 +55,9 @@ export interface PnlCardData {
    * What the market's vault + insurance can currently pay out, in collateral atoms
    * (PositionsDock's `payableCapacity`). When the paper PnL exceeds it the card
    * shows the payable figure instead, flagged as capped — the same rule as the
-   * dock's pool-cap caveat (isPnlPoolCapped). null/undefined = unknown, no cap.
+   * dock's pool-cap caveat (isPnlPoolCapped). null/undefined = unknown, no cap: always the case
+   * on v17/v18 markets, where no per-position payout cap is computed client-side (the market-wide
+   * payout haircut is surfaced by lib/market-health.ts).
    */
   payableCapacityAtoms?: bigint | null;
 }
@@ -64,17 +66,21 @@ export interface PnlCardData {
 export type PnlTone = "profit" | "loss" | "flat";
 
 /**
- * Pool-capped PnL (GMX-style): a winning position's paper PnL can't exceed what
- * the vault + insurance can pay. Shared by PositionsDock's caveat icon and the
+ * Pool-capped PnL (GMX-style, legacy v12 engine): a winning position's paper PnL can't exceed
+ * what the vault + insurance can pay. Shared by PositionsDock's caveat icon and the
  * share card so the two can never disagree about when a PnL is capped.
  */
 export function isPnlPoolCapped(pnlAtoms: bigint, payableCapacityAtoms: bigint | null | undefined): boolean {
   return payableCapacityAtoms != null && pnlAtoms > 0n && payableCapacityAtoms > 0n && pnlAtoms > payableCapacityAtoms;
 }
 
-/** Vault + insurance payout capacity, in collateral atoms (PositionsDock's formula). */
-export function poolPayableCapacity(vault: bigint | null | undefined, insurance: bigint | null | undefined): bigint {
-  return (vault ?? 0n) + (insurance ?? 0n);
+/**
+ * Vault + insurance payout capacity, in collateral atoms (PositionsDock's formula). null when the
+ * vault is unknown (v17/v18: no engine block): there a winner's profit converts per source domain
+ * (lib/convert-released-pnl.ts), so insurance alone is not a cap.
+ */
+export function poolPayableCapacity(vault: bigint | null | undefined, insurance: bigint | null | undefined): bigint | null {
+  return vault == null ? null : vault + (insurance ?? 0n);
 }
 
 export interface PnlCardStats {

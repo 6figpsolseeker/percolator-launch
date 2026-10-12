@@ -24,7 +24,7 @@ const WALLET = {
   signTransaction: vi.fn(async (tx: unknown) => tx),
 };
 const connection = {
-  getProgramAccounts: vi.fn(async () => [{ pubkey: PORTFOLIO, account: { data: Buffer.alloc(16) } }]),
+  getAccountInfo: vi.fn(async () => ({ owner: WRAPPER, data: Buffer.alloc(16) })),
   getLatestBlockhash: vi.fn(async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 })),
   simulateTransaction: vi.fn(async () => ({ value: { err: null, logs: [] } })),
   sendRawTransaction: vi.fn(async () => SIG),
@@ -39,7 +39,8 @@ vi.mock("@/hooks/useWalletCompat", () => ({ useWalletCompat: () => WALLET, useCo
 vi.mock("@/components/providers/SlabProvider", () => ({ useSlabState: () => ({ programId: WRAPPER, raw: new Uint8Array(8), refresh }) }));
 vi.mock("@/hooks/useToast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("@/lib/programAllowlist", () => ({ assertKnownProgram: () => undefined }));
-vi.mock("@/lib/userAccountScan", () => ({ isLpPortfolio: () => false }));
+// Targeting is covered by useMintPositionNft-row-target.test; here the row's account always verifies.
+vi.mock("@/lib/portfolio-target", async (orig) => ({ ...(await orig<object>()), verifyPortfolioTarget: () => Buffer.alloc(16) }));
 vi.mock("@percolatorct/sdk", async (orig) => ({
   ...(await orig<object>()),
   isV17Account: () => true,
@@ -80,7 +81,7 @@ describe("Wrap as NFT: a mint that landed is never reported as 'Nothing was sent
     const { result } = renderHook(() => useMintPositionNft(slab));
     let sig: unknown;
     await act(async () => {
-      sig = await result.current.mint();
+      sig = await result.current.mint(PORTFOLIO);
     });
     expect(sig).toBe(SIG);
     expect(result.current.error).toBeNull();
@@ -94,7 +95,7 @@ describe("Wrap as NFT: a mint that landed is never reported as 'Nothing was sent
     const { result } = renderHook(() => useMintPositionNft(slab));
     let sig: unknown;
     await act(async () => {
-      sig = await result.current.mint();
+      sig = await result.current.mint(PORTFOLIO);
     });
     expect(sig).toBeUndefined();
     expect(result.current.error).not.toBeNull();

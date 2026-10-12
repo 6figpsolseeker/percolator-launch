@@ -1,6 +1,6 @@
 /**
- * A close (or the withdraw that follows it) that names ONE portfolio account must act on exactly
- * that account (#3301). The caller bound the account when it drew the row; nothing here may
+ * A close (or the withdraw that follows it), or a Wrap as NFT, that names ONE portfolio account must
+ * act on exactly that account (#3301). The caller bound the account when it drew the row; nothing here may
  * substitute "the" wallet portfolio for it, because a wallet can own several on one market
  * (wrap, trade again, unwrap) and acting on another one closes a position the user did not pick.
  *

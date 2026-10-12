@@ -11,13 +11,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const MINT_OWN = new PublicKey("11111111111111111111111111111111");
 const MINT_WRAPPED = new PublicKey("So11111111111111111111111111111111111111112");
 const PDA_WRAPPED = new PublicKey("SysvarRent111111111111111111111111111111111");
+const ROW_PORTFOLIO = new PublicKey("SysvarC1ock11111111111111111111111111111111");
 
-const h = vi.hoisted(() => ({ burnArgs: [] as unknown[], transferArgs: [] as unknown[], hasMinted: true, wrapped: true }));
+
+const h = vi.hoisted(() => ({ burnArgs: [] as unknown[], transferArgs: [] as unknown[], hasMinted: true, wrapped: true, mint: null as null | ((pk?: unknown) => Promise<string>) }));
 
 vi.mock("@/hooks/usePositionNft", () => ({
   usePositionNft: () => ({ hasMintedNft: h.hasMinted, nftMint: null, nftPdaAddress: null, pendingSettlement: false }),
 }));
-vi.mock("@/hooks/useMintPositionNft", () => ({ useMintPositionNft: () => ({ mint: vi.fn(async () => "sig"), loading: false, error: null }) }));
+vi.mock("@/hooks/useMintPositionNft", () => ({ useMintPositionNft: () => ({ mint: h.mint ?? (h.mint = vi.fn(async () => "sig")), loading: false, error: null }) }));
 vi.mock("@/hooks/useBurnPositionNft", () => ({
   useBurnPositionNft: (...args: unknown[]) => {
     h.burnArgs = args;
@@ -31,8 +33,8 @@ vi.mock("@/hooks/useTransferPositionNft", () => ({
   },
 }));
 vi.mock("@/hooks/useUserAccount", () => ({
-  // The wallet's OWN (unwrapped) open position.
-  useUserAccount: () => ({ idx: 0, account: { positionSize: 40_000_000n, capital: 1_000_000_000n } }),
+  // The wallet's OWN (unwrapped) open position; the scan always carries the row's account.
+  useUserAccount: () => ({ idx: 0, pubkey: ROW_PORTFOLIO, account: { positionSize: 40_000_000n, capital: 1_000_000_000n } }),
 }));
 vi.mock("@/hooks/useNftWrappedPosition", () => ({
   // AND a wrapped one on the same market (always-on scan in the container).
@@ -97,6 +99,24 @@ describe("the pendingMint trap (#40 consensus: isNftPresent stays unscoped)", ()
     fireEvent.click(screen.getByTestId("position-nft-menu-button"));
     expect(screen.getByTestId("position-nft-wrap")).toBeInTheDocument();
     expect(screen.queryByTestId("position-nft-send")).toBeNull(); // still scoped to the own row
+  });
+});
+
+// S4: Wrap re-discovered "the" portfolio in RPC order; with two on one market it could escrow
+// the one the row and the sheet don't show. It now wraps exactly the row's account.
+describe("Wrap targets the row's own account", () => {
+  it("confirming the wrap mints exactly the row's portfolio", async () => {
+    h.hasMinted = false;
+    h.wrapped = false;
+    h.mint = vi.fn(async () => "sig");
+    render(<PositionNftMenu slabAddress="s" row="own" />);
+    fireEvent.click(screen.getByTestId("position-nft-menu-button"));
+    fireEvent.click(screen.getByTestId("position-nft-wrap"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("position-nft-wrap-confirm"));
+    });
+    expect(h.mint).toHaveBeenCalledTimes(1);
+    expect(h.mint).toHaveBeenCalledWith(ROW_PORTFOLIO);
   });
 });
 

@@ -182,7 +182,7 @@ const V17_PF_OWNER_OFF = 116;
 // "why" doc comment (creator LP-mistaken-for-own-account bug, plus the new
 // server-side use by app/api/markets/[slab]/logo/route.ts) — so it's a plain
 // (non `"use client"`) module a server route can import directly. Re-exported
-// here so every existing call site in this file (and useMintPositionNft,
+// here so every existing call site in this file (and
 // usePortfolio, useDeposit, useWithdraw, useClosePosition, useTrade,
 // useInitUser, useCreatedMarkets) keeps working unchanged.
 // ---------------------------------------------------------------------------

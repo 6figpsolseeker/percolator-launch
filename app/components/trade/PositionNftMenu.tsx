@@ -255,14 +255,18 @@ export const PositionNftMenu: FC<{ slabAddress: string; row?: "own" | "wrapped" 
   return (
     <>
       <PositionNftMenuView
-        canWrap={own !== null && !pendingMint}
+        // Wrap exactly the account this row and the sheet's collateral describe (own.pubkey), never a
+        // re-discovered one: a wallet can own two portfolios on a market. No pubkey, no Wrap.
+        canWrap={own?.pubkey != null && !pendingMint}
         isWrapped={row === "own" ? false : isNftPresent}
         collateralLabel={collateralLabel}
         busy={busy}
         error={mintError || burnError || transferError}
         onWrap={() => {
+          const pk = own?.pubkey;
+          if (!pk) return;
           setPendingMint(true);
-          void mintNft().then((sig) => {
+          void mintNft(pk).then((sig) => {
             if (!sig) setPendingMint(false);
           });
         }}

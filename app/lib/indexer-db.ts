@@ -372,7 +372,7 @@ export async function queryStatsAggregate(): Promise<StatsAggregate> {
         0
       )::text                                          AS volume_24h_raw
     FROM trades
-    WHERE network = ${getServerNetwork()}
+    WHERE network = ${getServerNetwork()} AND is_liquidation IS NOT TRUE
   `;
   const row = rows[0];
   return {
@@ -433,6 +433,10 @@ export async function queryLeaderboard(
   const sql = getSql();
 
   let rows: RawLeaderboardRow[];
+  // Liquidation markers (percolator-indexer db/v17_baseline.sql; no longer written since indexer
+  // #203, but the old rows remain) carry trader = a portfolio address and NULL size/price, and
+  // "MUST be excluded" from aggregates: a marker-only group sums to NULL, which sorts first under
+  // DESC and put those addresses on the podium at $0.
   if (period === "24h") {
     rows = await sql<RawLeaderboardRow[]>`
       SELECT
@@ -443,6 +447,7 @@ export async function queryLeaderboard(
       FROM trades
       WHERE created_at >= NOW() - INTERVAL '24 hours'
         AND network = ${getServerNetwork()}
+        AND is_liquidation IS NOT TRUE
         AND NOT (slab_address = ANY(${excludeSlabs}::text[]))
       GROUP BY trader
       ORDER BY SUM(ABS(size::numeric) * price::numeric / 1e6) DESC
@@ -458,6 +463,7 @@ export async function queryLeaderboard(
       FROM trades
       WHERE created_at >= NOW() - INTERVAL '7 days'
         AND network = ${getServerNetwork()}
+        AND is_liquidation IS NOT TRUE
         AND NOT (slab_address = ANY(${excludeSlabs}::text[]))
       GROUP BY trader
       ORDER BY SUM(ABS(size::numeric) * price::numeric / 1e6) DESC
@@ -472,6 +478,7 @@ export async function queryLeaderboard(
         MAX(created_at)           AS last_trade_at
       FROM trades
       WHERE network = ${getServerNetwork()}
+        AND is_liquidation IS NOT TRUE
         AND NOT (slab_address = ANY(${excludeSlabs}::text[]))
       GROUP BY trader
       ORDER BY SUM(ABS(size::numeric) * price::numeric / 1e6) DESC

@@ -4,6 +4,7 @@ import bs58 from "bs58";
 import type { PublicKey, Signer } from "@solana/web3.js";
 import { getNetwork } from "@/lib/config";
 import { connectionSelfHealDeps, describeRepair, isSelfHealEnabled, planSelfHeal } from "@/lib/self-heal";
+import { finalTxWireSize, PACKET_DATA_SIZE } from "@/lib/limits/resolved-topup";
 import {
   connectionVaultLpRepairDeps,
   isVaultLpSelfHealEnabled,
@@ -823,8 +824,13 @@ export async function sendTx({
         healedInstructions = instructions;
         healedComputeUnits = computeUnits;
         if (heal) {
-          onSelfHeal?.(heal);
-          if (heal.outcome === "repaired") {
+          // The heal simulation omits the CU-price ix this tx adds below, so a repaired list can pass
+          // it and still exceed the packet once signed (a large first trade + many catch-up cranks).
+          // Keep it only if the final tx fits; otherwise send unchanged, as when it doesn't simulate.
+          const fits = heal.outcome !== "repaired" || finalTxWireSize(heal.instructions, feePayer) <= PACKET_DATA_SIZE;
+          if (!fits) console.warn("[self-heal] repairs do not fit one transaction; the keeper must catch up");
+          onSelfHeal?.(fits ? heal : { ...heal, instructions, computeUnits, repairs: [], outcome: "rpc-error" });
+          if (fits && heal.outcome === "repaired") {
             healedInstructions = heal.instructions;
             healedComputeUnits = heal.computeUnits;
             console.info(`[self-heal] prepended ${heal.repairs.map(describeRepair).join(", ")}`);

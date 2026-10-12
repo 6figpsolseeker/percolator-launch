@@ -41,6 +41,8 @@ import { measureFill, recordFillResult } from "@/lib/limits/fill-check";
 import { signedPositionForAsset } from "@/lib/limits/decode";
 import { readU64LE } from "@/lib/u64le";
 import { WRAPPER_ERR } from "@/lib/wrapper-errors";
+import { pythCrankAccount } from "@/lib/limits/oracle-tail";
+import { crankOracleTail } from "@/lib/limits/vault-lp-repair";
 
 /** CU cap for [deposit, trade]: the trade's cap + the deposit. */
 const FUND_AND_TRADE_CU_CAP = tradeCuCap(1) + 60_000;
@@ -123,6 +125,14 @@ export function useFirstTrade(slabAddress: string) {
           fetchAssetMarketId(connection, market, 0),
         ]);
         const lpId = await fetchPortfolioIdentity(connection, lp.accountB);
+        // The same liveness repairs a normal trade gets (useTrade): a lagging engine clock or a lapsed
+        // backing bucket otherwise refuses every deposit-and-trade, the path new wallets onboard on.
+        // Market-level repairs + an LP catch-up crank: valid with no taker portfolio, wallet signs.
+        const selfHeal = {
+          programId,
+          market,
+          catchUp: { portfolio: lp.accountB, oracleTail: crankOracleTail(pythCrankAccount(mktConfig, wrapperConfigV17?.oracleMode)) },
+        };
         const ixp = (portfolio: PublicKey): FirstTradeIxParams => ({
           programId, owner, market, portfolio, userAta, vaultTokenAta, depositAtoms: p.depositAtoms,
           lp, lpId, marketId, size: p.size, limitPriceE6: p.limitPriceE6, feeBps: p.feeBps, marketTradeFeeBps: wrapperConfigV17?.tradeFeeBps,
@@ -149,6 +159,7 @@ export function useFirstTrade(slabAddress: string) {
               wallet,
               instructions: buildFundAndTradeIxs(ixp(existing), { portfolioId: id.portfolioId, sequence: id.matcherSequence, positionEpoch: id.positionEpoch }),
               computeUnitsFromSim: { cap: FUND_AND_TRADE_CU_CAP },
+              selfHeal,
             }),
           );
           await recordFill(signature, existing, beforeQ);
@@ -174,7 +185,7 @@ export function useFirstTrade(slabAddress: string) {
           ];
           try {
             const signature = await withPresignWait(() =>
-              sendTx({ connection, wallet, instructions: ixs, signers: [kp], computeUnitsFromSim: { cap: FIRST_TRADE_CU_CAP } }),
+              sendTx({ connection, wallet, instructions: ixs, signers: [kp], computeUnitsFromSim: { cap: FIRST_TRADE_CU_CAP }, selfHeal }),
             );
             // A brand-new portfolio holds no position before this transaction.
             await recordFill(signature, kp.publicKey, 0n);

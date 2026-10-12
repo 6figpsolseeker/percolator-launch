@@ -407,6 +407,9 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
   /** WP-3: the wait loop passed ~30 s; "We'll keep trying" + Stop. */
   const [waitingLong, setWaitingLong] = useState(false);
   const waitAbortRef = useRef<AbortController | null>(null);
+  // Leaving the market (switch or unmount) ends its wait, as Stop does: otherwise the loop keeps
+  // retrying and can open the wallet for a market that is gone (GH#2623 rule in lib/tx.ts sendTx).
+  useEffect(() => () => waitAbortRef.current?.abort(), [slabAddress]);
   const [showDetails, setShowDetails] = useState(false);
   // P2 fee channel: slippage margin on the signed fee cap (default NEXT_PUBLIC_FEE_CAP_MARGIN_BPS or +2).
   const [feeMarginBps, setFeeMarginBps] = useState<number>(() => defaultFeeCapMarginBps());

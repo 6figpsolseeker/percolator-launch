@@ -34,6 +34,8 @@ import {
   broadcastSignedTx,
   getPriorityFee,
   timedOutSignature,
+  isTxCancelledError,
+  WaitStoppedError,
 } from "@/lib/tx";
 import { planTakerCrank } from "@/lib/taker-crank";
 import { getMaintenanceConfig, MaintenanceError } from "@/lib/maintenance";
@@ -585,12 +587,14 @@ export function useTrade(slabAddress: string) {
           );
           if (plan === "separate-tx") {
             console.info("[useTrade] taker portfolio needs a maintenance crank first; sending it as its own tx");
-            await sendTx({ connection, wallet, instructions: [crankIx], computeUnitsFromSim: { cap: 200_000 } }).catch((err) => {
+            await sendTx({ connection, wallet, instructions: [crankIx], computeUnitsFromSim: { cap: 200_000 }, abortSignal: params.abortSignal }).catch((err) => {
               // The trade below was never sent. Don't let the ticket watch the crank's signature
               // and report the trade as landed (timedOutSignature reads the timeout message).
               if (timedOutSignature(err)) {
                 throw new Error("Maintenance crank did not confirm in time; the trade was not sent.", { cause: err });
               }
+              // Stopped (or left) before the crank was signed: the same quiet stop as the order's own wait.
+              if (params.abortSignal?.aborted && isTxCancelledError(err)) throw new WaitStoppedError();
               throw err;
             });
           }

@@ -1092,6 +1092,11 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
     // PERC-516: Clear persisted wizard state
     try { localStorage.removeItem(WIZARD_STORAGE_KEY); } catch {}
     setResumeFromStep(null);
+    // A verified chain resume ends here too: left set, the resume card would claim a resume that
+    // won't run, and the next LAUNCH would start fresh with the old launch's pinned params.
+    setChainResume(null);
+    setChainResumeError(null);
+    setResumeSlab(null);
   };
 
   // --- Render ---
@@ -1207,9 +1212,13 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
   return (
     <div className="space-y-6 p-4 sm:p-6">
       {/* #3267: continue an unfinished launch started on another device, rebuilt from chain. */}
-      {resumeSlabParam && resumeFromStep === null && (
+      {/* Stays up through the resume it verified (chainResume), so its "Verified…" summary and the
+          values the chain doesn't prove are read before launching. The local-device RESUME and
+          CANCEL clear chainResume, which takes the card back to its form. */}
+      {resumeSlabParam && (resumeFromStep === null || chainResume !== null) && (
         <ResumeFromChainCard
           slab={resumeSlabParam}
+          verified={chainResume}
           onVerified={(launch, step) => {
             // Only the slab ADDRESS is needed past step 0 (the keypair never left the launching browser).
             restoreSlabAddress(resumeSlabParam);
@@ -1278,6 +1287,9 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
           }
           setWizard({ ...DEFAULT_STATE });
           setResumeFromStep(null);
+          setChainResume(null);
+          setChainResumeError(null);
+          setResumeSlab(null);
           setCompletedSteps(new Set());
           resetCreate();
         }}

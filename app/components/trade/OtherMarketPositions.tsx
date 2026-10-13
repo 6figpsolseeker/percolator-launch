@@ -179,6 +179,8 @@ const OtherMarketRow: FC<{
     liqPriceE6,
     positionSize: pos.account?.positionSize ?? 0n,
     capital: pos.account?.capital ?? 0n,
+    entryPriceE6: pos.effectiveEntryPrice,
+    effectiveSize: pos.adlKnown ? pos.effectiveSize : null,
     markPriceE6: markE6,
     maintenanceMarginBps: pos.maintenanceMarginBps,
     // #2660: `entryE6 > 0n` is always true — on "unknown" it is the mark.

@@ -291,8 +291,8 @@ function PositionCard({
     entryDisplay.known,
   );
   const severity = getLiquidationSeverityForState(liveLiquidationState, liveMarginCushion(pos, livePriceE6));
-  // The risk figure that survives a missing liquidation price: capital over
-  // notional, needing neither an entry nor a liq price. It crosses its
+  // The risk figure that survives a missing liquidation price: equity over
+  // notional, valued with the same entry as the liq price. It crosses its
   // threshold at exactly the collateral level where the liq price disappears,
   // so the row can say which side of that line the position is on rather than
   // rendering a dash. Nominal size — see lib/margin-health.ts and #2558.
@@ -300,6 +300,8 @@ function PositionCard({
     liqPriceE6: liquidationPriceE6,
     positionSize: pos.account?.positionSize ?? 0n,
     capital: pos.account?.capital ?? 0n,
+    entryPriceE6: pos.effectiveEntryPrice,
+    effectiveSize: pos.adlKnown ? pos.effectiveSize : null,
     markPriceE6: markE6,
     maintenanceMarginBps: pos.maintenanceMarginBps,
     // Same verdict as the Entry cell, so the two cannot contradict (#2671).

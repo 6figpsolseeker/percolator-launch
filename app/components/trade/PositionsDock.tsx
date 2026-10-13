@@ -308,13 +308,15 @@ const PositionRow: FC<{ slabAddress: string; wrappedRow?: boolean }> = memo(func
   // liquidated by price (excess collateral) — formatLiqPrice renders "∞".
   const liqUnliquidatable = pnlResult.adlKnown && liqPriceE6 <= 0n && entryPriceE6 > 0n && account.positionSize !== 0n;
   // When there is no liquidation price, "no liquidation price" is not a risk
-  // figure. Margin health is: capital/notional, defined without an entry or a
+  // figure. Margin health is: equity/notional, valued with the same entry as the
   // liq price, and it crosses its threshold at exactly the collateral level
   // where the liq price disappears. See lib/margin-health.ts and #2558.
   const liqDisplay = describeLiqPrice({
     liqPriceE6,
     positionSize: account.positionSize,
     capital: account.capital,
+    entryPriceE6,
+    effectiveSize: pnlResult.effectiveSize,
     markPriceE6: currentPriceE6,
     maintenanceMarginBps: maintenanceBps,
     // #2660: `entryPriceE6 > 0n` is always true — on "unknown" it is the mark.

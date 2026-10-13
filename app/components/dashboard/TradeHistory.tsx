@@ -9,7 +9,7 @@
  * Bug 6 fix: "Trader dashboard showing stats but zero transactions"
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useWalletCompat } from "@/hooks/useWalletCompat";
 import { explorerTxUrl } from "@/lib/config";
 import { formatUsdFromNumber } from "@/lib/format";
@@ -76,7 +76,7 @@ export function TradeHistory() {
     setError(null);
     try {
       const res = await fetch(
-        `/api/trader/${wallet}/trades?limit=${PAGE_SIZE}&offset=${offset}`
+        `/api/trader/${wallet}/trades?limit=${PAGE_SIZE}&offset=${offset}${sideFilter === "all" ? "" : `&side=${sideFilter}`}`
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -92,7 +92,7 @@ export function TradeHistory() {
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [wallet, offset]);
+  }, [wallet, offset, sideFilter]);
 
   useEffect(() => {
     fetchTrades();
@@ -101,16 +101,12 @@ export function TradeHistory() {
     };
   }, [fetchTrades]);
 
-  const filtered = useMemo(() => {
-    if (sideFilter === "all") return trades;
-    return trades.filter((t) => t.side === sideFilter);
-  }, [trades, sideFilter]);
-
+  // The side filter runs on the server, so `trades` and `total` already describe the filtered set.
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const handleExportCsv = () => {
     const headers = ["Time", "Market", "Side", "Size", "Price", "Fee", "Tx"];
-    const rows = filtered.map((t) => [
+    const rows = trades.map((t) => [
       t.created_at,
       t.slab_address,
       fillSide(t.side) ?? "",
@@ -153,7 +149,8 @@ export function TradeHistory() {
         </p>
         <button
           onClick={handleExportCsv}
-          disabled={filtered.length === 0}
+          // `trades` keeps the last good read through a refetch or an error, so only export a settled one.
+          disabled={loading || !!error || trades.length === 0}
           className="rounded-sm border border-[var(--border)] px-3 py-1 text-[10px] text-[var(--text-secondary)] transition-all hover:border-[var(--accent)]/30 hover:text-[var(--text)] disabled:opacity-30"
         >
           Export CSV
@@ -166,6 +163,7 @@ export function TradeHistory() {
           value={sideFilter}
           onChange={(e) => {
             setSideFilter(e.target.value as TradeType);
+            setPage(1);
           }}
           className="rounded-sm border border-[var(--border)] bg-[var(--bg)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] outline-none focus:border-[var(--accent)]/30"
         >
@@ -191,7 +189,11 @@ export function TradeHistory() {
               Retry
             </button>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : trades.length === 0 && sideFilter !== "all" ? (
+          <div className="flex flex-col items-center justify-center py-12">
+            <p className="text-[13px] text-[var(--text-secondary)]">{sideFilter === "long" ? "No buy fills" : "No sell fills"}</p>
+          </div>
+        ) : trades.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
             <p className="text-[13px] text-[var(--text-secondary)]">No trades yet</p>
             <p className="mt-1 text-[10px] text-[var(--text-secondary)]">
@@ -219,7 +221,7 @@ export function TradeHistory() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((trade) => (
+              {trades.map((trade) => (
                 <tr
                   key={trade.id}
                   className="border-b border-[rgba(255,255,255,0.04)] text-[11px] transition-colors hover:bg-[rgba(255,255,255,0.02)]"
@@ -283,7 +285,8 @@ export function TradeHistory() {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
+      {/* After an error, `total` is the previous read's count (another side or wallet), so no pager. */}
+      {totalPages > 1 && !error && (
         <div className="flex items-center justify-end gap-3 border-t border-[var(--border)] px-5 py-3">
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}

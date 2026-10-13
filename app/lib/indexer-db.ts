@@ -661,7 +661,8 @@ export interface TraderTradesPageResult {
 }
 
 /**
- * Paginated trade history for a specific wallet, optionally filtered by slab.
+ * Paginated trade history for a specific wallet, optionally filtered by slab and by side. The side
+ * predicate sits in both the count and the page query, so `total` counts the filtered set.
  */
 export async function queryTraderTradesPage(
   wallet: string,
@@ -669,6 +670,7 @@ export async function queryTraderTradesPage(
   offset: number,
   slabFilter?: string,
   excludeSlabs: string[] = [],
+  side?: "long" | "short",
 ): Promise<TraderTradesPageResult> {
   const sql = getSql();
 
@@ -679,12 +681,14 @@ export async function queryTraderTradesPage(
         WHERE trader = ${wallet} AND slab_address = ${slabFilter}
           AND network = ${getServerNetwork()}
           AND NOT (slab_address = ANY(${excludeSlabs}::text[]))
+          AND (${side ?? null}::text IS NULL OR side = ${side ?? null}::text)
       `
     : await sql<Array<{ cnt: string }>>`
         SELECT COUNT(*)::text AS cnt FROM trades
         WHERE trader = ${wallet}
           AND network = ${getServerNetwork()}
           AND NOT (slab_address = ANY(${excludeSlabs}::text[]))
+          AND (${side ?? null}::text IS NULL OR side = ${side ?? null}::text)
       `;
   const total = Number(countRows[0]?.cnt ?? "0");
 
@@ -709,6 +713,7 @@ export async function queryTraderTradesPage(
         WHERE trader = ${wallet} AND slab_address = ${slabFilter}
           AND network = ${getServerNetwork()}
           AND NOT (slab_address = ANY(${excludeSlabs}::text[]))
+          AND (${side ?? null}::text IS NULL OR side = ${side ?? null}::text)
         ORDER BY created_at DESC
         LIMIT ${limit} OFFSET ${offset}
       `
@@ -720,6 +725,7 @@ export async function queryTraderTradesPage(
         WHERE trader = ${wallet}
           AND network = ${getServerNetwork()}
           AND NOT (slab_address = ANY(${excludeSlabs}::text[]))
+          AND (${side ?? null}::text IS NULL OR side = ${side ?? null}::text)
         ORDER BY created_at DESC
         LIMIT ${limit} OFFSET ${offset}
       `;

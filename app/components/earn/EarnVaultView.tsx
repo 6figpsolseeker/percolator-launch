@@ -144,7 +144,7 @@ export function EarnVaultView() {
         </div>
 
         {/* SECONDARY — explanatory content, kept below the functional table+rail */}
-        <EarnInfoStrip totalInsurance={stats.totalInsurance} />
+        <EarnInfoStrip totalInsurance={loading ? null : stats.totalInsurance} />
       </div>
 
       {/* Error toast */}
@@ -171,7 +171,8 @@ export function EarnVaultView() {
 
 /* ── Secondary info strip — slim row of small cards below the table+rail ── */
 
-function EarnInfoStrip({ totalInsurance }: { totalInsurance: number }) {
+/** `totalInsurance` null = not read yet (the header shows its loading state for the same figure). */
+function EarnInfoStrip({ totalInsurance }: { totalInsurance: number | null }) {
   return (
     <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
       {/* How it works */}
@@ -195,7 +196,7 @@ function EarnInfoStrip({ totalInsurance }: { totalInsurance: number }) {
           </h3>
         </div>
         <div className="mb-2 text-lg font-bold tabular-nums text-[var(--text)]" style={{ fontFamily: 'var(--font-mono)' }}>
-          ${formatCompact(totalInsurance)}
+          {totalInsurance == null ? "—" : `$${formatCompact(totalInsurance)}`}
         </div>
         <ul className="space-y-1 text-[11px] text-[var(--text-secondary)]">
           <li>· Absorbs liquidation shortfalls</li>

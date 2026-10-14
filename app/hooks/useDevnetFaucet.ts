@@ -23,6 +23,7 @@ import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { getConfig } from "@/lib/config";
 import { invalidateWalletBalance } from "@/lib/wallet-balance-invalidation";
 import { keepAppMessage, plainMessage } from "@/lib/limits/user-message";
+import { shortRateLimitMessage } from "@/lib/faucet-429";
 
 export type FaucetStep = "idle" | "sol" | "usdc" | "deposit" | "done" | "error";
 
@@ -167,6 +168,12 @@ export function useDevnetFaucet(): DevnetFaucetState {
     usdcAirdropPendingRef.current = false;
     setSolBalance(null);
     setUsdcBalance(null);
+    // The 24h claim gate is per wallet: the previous wallet's "Rate limited" / next-claim time
+    // and its error must not disable or explain this one's claim.
+    setRateLimited(false);
+    setNextClaimAt(null);
+    setError(null);
+    setStep("idle");
   }, [walletAddress]);
 
   const refreshBalances = useCallback(async () => {
@@ -352,6 +359,7 @@ export function useDevnetFaucet(): DevnetFaucetState {
 
   const airdropUsdc = useCallback(async () => {
     if (!publicKey) return;
+    const forWallet = publicKey.toBase58();
     setStep("usdc");
     setLoading(true);
     setError(null);
@@ -360,9 +368,18 @@ export function useDevnetFaucet(): DevnetFaucetState {
       const resp = await fetch("/api/faucet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: publicKey.toBase58(), type: "usdc" }),
+        body: JSON.stringify({ wallet: forWallet, type: "usdc" }),
       });
       const data = await resp.json();
+      // A reply for the previous wallet must not mark this one rate limited or funded (as refreshBalances).
+      if (walletAddressRef.current !== forWallet) return;
+      // The short per-IP / middleware limit: say so, and don't latch "Rate limited" (lib/faucet-429).
+      const shortLimit = shortRateLimitMessage(resp, data);
+      if (shortLimit) {
+        lastOpFailedRef.current = true;
+        setError(shortLimit);
+        return;
+      }
       if (resp.status === 429) {
         lastOpFailedRef.current = true;
         setRateLimited(true);

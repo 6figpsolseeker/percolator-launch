@@ -277,16 +277,30 @@ export function useDevnetFaucet(): DevnetFaucetState {
       // UX WP-10 (FA-1): the server faucet first — it sends from the playground's server wallet
       // when that is configured (the public airdrop below is usually rate-limited).
       let sig: string | null = null;
+      let pendingMsg: string | null = null;
       try {
         const resp = await fetch("/api/faucet", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ wallet: publicKey.toBase58(), type: "sol" }),
         });
-        const data = (await resp.json().catch(() => ({}))) as { signature?: string };
+        const data = (await resp.json().catch(() => ({}))) as { signature?: string; pending?: boolean; error?: string };
         if (resp.ok && data.signature) sig = data.signature;
+        // The server sent the SOL but couldn't confirm it in time (503 `pending`). It counts that as
+        // the claim and never re-sends, so the fallbacks below would be a second airdrop, and their
+        // failure read "SOL airdrop failed" while this one was landing (as /faucet's sol_pending).
+        else if (resp.status === 503 && data.pending === true)
+          pendingMsg = data.error ?? "Your test SOL is on its way but not confirmed yet. Check your balance in a minute before trying again.";
       } catch {
         sig = null;
+      }
+      if (pendingMsg) {
+        // Not done until the balance shows it: refreshBalances marks SOL done once it lands.
+        lastOpFailedRef.current = true;
+        solErrorRef.current = pendingMsg;
+        setError(pendingMsg);
+        void refreshBalances();
+        return;
       }
       // PERC-808: Try Helius devnet faucet next (more reliable, higher limits)
       if (!sig && HELIUS_DEVNET_RPC) {

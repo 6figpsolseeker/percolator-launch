@@ -809,9 +809,12 @@ function MarketsPageInner() {
 
             {/* Results count — desktop only, in filter row */}
             <span className="hidden md:inline-block ml-auto text-xs font-semibold uppercase tracking-[0.08em] text-[var(--text)] shrink-0 whitespace-nowrap tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>
-              {(hasSearch) && filtered.length !== activeMarkets.length
-                ? `${filtered.length} / ${activeMarkets.length} MARKETS`
-                : `${activeMarkets.length} ${activeMarkets.length !== 1 ? "MARKETS" : "MARKET"}`}
+              {/* Same as the mobile count: activeMarkets is empty until stats load, so not "0 MARKETS". */}
+              {loading
+                ? "… MARKETS"
+                : (hasSearch) && filtered.length !== activeMarkets.length
+                  ? `${filtered.length} / ${activeMarkets.length} MARKETS`
+                  : `${activeMarkets.length} ${activeMarkets.length !== 1 ? "MARKETS" : "MARKET"}`}
             </span>
           </div>
         </ScrollReveal>

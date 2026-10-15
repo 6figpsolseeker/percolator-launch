@@ -45,6 +45,7 @@ describe("background reloads keep what is on screen", () => {
     };
     render(<TradeHistoryTable wallet="wallet-a" />);
     expect(screen.queryByText(/Failed to load trade history/)).toBeNull();
-    expect(screen.getByTitle("SlabAddr1111111111")).toBeTruthy();
+    // The market cell is a link titled "<slab> — open market" since #3485.
+    expect(screen.getByTitle("SlabAddr1111111111 — open market")).toBeTruthy();
   });
 });

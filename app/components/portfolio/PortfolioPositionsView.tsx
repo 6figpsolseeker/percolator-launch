@@ -622,6 +622,7 @@ export function PortfolioPositionsView() {
 
   // Earn deposits and stake positions (neither adds to the insurance balance)
   const lpPositions = useLpPositions();
+  const lpUnread = lpPositions.error != null && lpPositions.positions.length === 0;
   const isRefreshing = portfolio.isRefreshing || lpPositions.isRefreshing;
 
   // PERC-481: Aggregate trade statistics
@@ -900,8 +901,9 @@ export function PortfolioPositionsView() {
               },
               {
                 label: "LP Value",
-                value: !walletConnected ? "\u2014" : lpPositions.loading ? "\u2026" : `$${lpPositions.totalRedeemable.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-                color: !walletConnected ? "text-[var(--text-dim)]" : lpPositions.totalRedeemable > 0 ? "text-[var(--cyan)]" : "text-[var(--text-secondary)]",
+                // A failed read with nothing read is unknown, not $0 (as loadError on the tiles beside it).
+                value: !walletConnected ? "\u2014" : lpPositions.loading ? "\u2026" : lpUnread ? "\u2014" : `$${lpPositions.totalRedeemable.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                color: !walletConnected || lpUnread ? "text-[var(--text-dim)]" : lpPositions.totalRedeemable > 0 ? "text-[var(--cyan)]" : "text-[var(--text-secondary)]",
                 sub: walletConnected && lpPositions.positions.length > 0
                   ? `${lpPositions.positions.length} pool${lpPositions.positions.length > 1 ? "s" : ""}`
                   : undefined,

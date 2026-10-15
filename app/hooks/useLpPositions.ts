@@ -433,6 +433,11 @@ export function useLpPositions(): LpPositionsState & { refresh: () => void } {
     // New wallet identity should start with initial-load semantics (CodeRabbit fix)
     hasLoadedOnce.current = false;
     setIsRefreshing(false);
+    // The previous wallet's rows and total are not this one's: clear them, so the first read shows its
+    // loading state instead (a failed read only sets `error`, and would leave them showing).
+    setPositions([]);
+    setTotalRedeemable(0);
+    setError(null);
     fetchRef.current();
     // Visibility-gated: a backgrounded tab shouldn't keep polling the
     // rate-limited devnet RPC every 30s for a dashboard nobody is looking at.

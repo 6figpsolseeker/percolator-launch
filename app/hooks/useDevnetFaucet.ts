@@ -65,6 +65,9 @@ export interface DevnetFaucetState {
 const PUBLIC_DEVNET_RPC = "https://api.devnet.solana.com";
 const SOL_THRESHOLD = 0.05 * LAMPORTS_PER_SOL;
 const USDC_THRESHOLD = 1_000_000_000n; // 1,000 USDC (6 decimals) — PERC-808
+/** How long a pending server SOL send holds back a retry: a blockhash expires in about 60-90 s, so by
+ *  then the send has landed or never will. */
+const SOL_SERVER_PENDING_MS = 120_000;
 const DISMISSED_KEY = "percolator:faucet-dismissed";
 
 /**
@@ -130,6 +133,9 @@ export function useDevnetFaucet(): DevnetFaucetState {
   // airdrop by a few seconds). Keeps the step done until a read shows the funds, then the step
   // follows the balance again.
   const solAirdropPendingRef = useRef(false);
+  // The server's "on its way" (503 pending) reply and when it came: a retry before the SOL lands
+  // would get the daily-claim 429 and fall through to a second, public airdrop.
+  const solServerPendingRef = useRef<{ msg: string; at: number } | null>(null);
   const usdcAirdropPendingRef = useRef(false);
 
   // Check if previously dismissed for this wallet
@@ -165,6 +171,7 @@ export function useDevnetFaucet(): DevnetFaucetState {
     setSolDone(false);
     setUsdcDone(false);
     solAirdropPendingRef.current = false;
+    solServerPendingRef.current = null;
     usdcAirdropPendingRef.current = false;
     setSolBalance(null);
     setUsdcBalance(null);
@@ -185,7 +192,10 @@ export function useDevnetFaucet(): DevnetFaucetState {
       const bal = await connection.getBalance(publicKey);
       if (stale()) return;
       setSolBalance(bal / LAMPORTS_PER_SOL);
-      if (bal >= SOL_THRESHOLD) solAirdropPendingRef.current = false;
+      if (bal >= SOL_THRESHOLD) {
+        solAirdropPendingRef.current = false;
+        solServerPendingRef.current = null;
+      }
       setSolDone(bal >= SOL_THRESHOLD || solAirdropPendingRef.current);
     } catch {
       // non-fatal
@@ -280,6 +290,18 @@ export function useDevnetFaucet(): DevnetFaucetState {
     // the fallbacks must not spend another airdrop on a wallet that is no longer connected.
     const forWallet = publicKey.toBase58();
     const stale = () => walletAddressRef.current !== forWallet;
+    // A server send still within its window: say so again instead of airdropping a second time.
+    // Past it the send has landed (the balance check clears this) or can't any more (blockhash expiry).
+    const serverPending = solServerPendingRef.current;
+    if (serverPending && Date.now() - serverPending.at < SOL_SERVER_PENDING_MS) {
+      setStep("sol");
+      lastOpFailedRef.current = true;
+      solErrorRef.current = serverPending.msg;
+      setError(serverPending.msg);
+      void refreshBalances();
+      return;
+    }
+    solServerPendingRef.current = null;
     setStep("sol");
     setLoading(true);
     setError(null);
@@ -308,6 +330,7 @@ export function useDevnetFaucet(): DevnetFaucetState {
       if (stale()) return;
       if (pendingMsg) {
         // Not done until the balance shows it: refreshBalances marks SOL done once it lands.
+        solServerPendingRef.current = { msg: pendingMsg, at: Date.now() };
         lastOpFailedRef.current = true;
         solErrorRef.current = pendingMsg;
         setError(pendingMsg);

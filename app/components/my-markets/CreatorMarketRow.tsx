@@ -31,6 +31,7 @@ import { subscribeSlab, getSnapshot } from "@/lib/priceStore/priceStore";
 import { formatUsdFromNumber, formatStatValue, formatSlotAge } from "@/lib/format";
 import { detectOracleMode, sanitizePriceE6, applyInvert, priceE6ToUsd } from "@/lib/oraclePrice";
 import { CreatorTranchePanel } from "@/components/limits/CreatorLimits";
+import { sanitizeDecimalInput } from "@/lib/decimal-input";
 
 /** Same accrue-cliff threshold as useCreatedMarkets/CrankHealthCard — the
  *  asset's accrue slot (advances only via crank/trade) vs the current
@@ -633,7 +634,8 @@ export const CreatorMarketRow: FC<CreatorMarketRowProps> = ({ market, detail, id
         confirmLabel="top up"
         onConfirm={(v) => {
           setShowTopUpInput(false);
-          const parsed = parseFloat(v);
+          // A decimal comma ("1,5") parsed as 1.
+          const parsed = parseFloat(sanitizeDecimalInput(v));
           if (isNaN(parsed) || parsed <= 0) return;
           const amount = BigInt(Math.round(parsed * Math.pow(10, decimals)));
           handleAction("Top Up Insurance", () => actions.topUpInsurance(market, amount));

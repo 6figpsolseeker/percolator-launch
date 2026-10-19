@@ -23,6 +23,7 @@ import { watchPendingSignature } from '@/lib/pending-signature';
 import { explorerTxUrl } from '@/lib/config';
 import { ConnectButton } from "@/components/wallet/ConnectButtonLazy";
 import { lpShareWalletNote } from '@/lib/lp-share-wallet-note';
+import { sanitizeDecimalInput } from '@/lib/decimal-input';
 
 
 type Tab = 'deposit' | 'withdraw';
@@ -499,8 +500,7 @@ export function DepositWithdrawPanel({
               value={amount}
               disabled={loading || !vaultAvailable}
               onChange={(e) => {
-                const v = e.target.value;
-                if (/^\d*\.?\d*$/.test(v)) setAmount(v);
+                setAmount(sanitizeDecimalInput(e.target.value));
               }}
               className="w-full h-12 px-4 pr-16 text-2xl font-mono tabular-nums bg-[var(--bg)] border border-[var(--border)] rounded-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]/40 transition-colors"
             />

@@ -18,6 +18,7 @@
  * Fractional leverage is not an edge case here: markets are created in 0.5
  * steps (GH#2621), and a market's own maximum is derived to two decimals.
  */
+import { sanitizeDecimalInput } from "@/lib/decimal-input";
 
 /** Preset leverages offered as buttons, filtered to what the market allows. */
 export const LEVERAGE_SNAP_POINTS = [1, 3, 5, 10, 20];
@@ -100,14 +101,6 @@ export interface LeverageInputState {
   text: string;
   /** The leverage to apply, or null while the text is not yet a number. */
   leverage: number | null;
-}
-
-/** Digits and at most one decimal point, mirroring the ticket's own sanitiser. */
-function sanitizeDecimalInput(value: string): string {
-  const cleaned = value.replace(/[^0-9.]/g, "");
-  const dot = cleaned.indexOf(".");
-  if (dot === -1) return cleaned;
-  return cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, "");
 }
 
 /**

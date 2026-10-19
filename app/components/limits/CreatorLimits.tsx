@@ -36,6 +36,7 @@ import { formatTokenAmount } from "@/lib/format";
 import { LimitsNotice, LimitsRow } from "./LimitsRow";
 import { fmtQ } from "./OrderTicketLimits";
 import { CREATOR_STAKE_COPY } from "@/lib/wizard-copy";
+import { sanitizeDecimalInput } from "@/lib/decimal-input";
 
 export const WizardTranchePanel: FC<{
   juniorUnits: number;
@@ -206,7 +207,7 @@ export const JuniorTrancheActionsView: FC<{
           data-testid="limits-junior-amount-input"
           inputMode="decimal"
           value={raw}
-          onChange={(e) => setRaw(e.target.value)}
+          onChange={(e) => setRaw(sanitizeDecimalInput(e.target.value))}
           placeholder={`Amount (${collateralSymbol})`}
           className="min-w-0 flex-1 border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 font-mono text-[11px] text-[var(--text)]"
         />

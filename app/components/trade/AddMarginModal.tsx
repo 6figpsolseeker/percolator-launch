@@ -8,6 +8,7 @@ import { useSlabState } from "@/components/providers/SlabProvider";
 import { checkDepositAmount, depositAmountMessage } from "@/lib/deposit-guard";
 import { formatTokenAmount } from "@/lib/format";
 import { parseHumanAmount } from "@/lib/parseAmount";
+import { sanitizeDecimalInput } from "@/lib/decimal-input";
 
 // ─── 5.9: Add Margin modal ────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ export const AddMarginModal: FC<AddMarginModalProps> = ({ slabAddress, userIdx, 
           <input
             type="text"
             value={amount}
-            onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+            onChange={(e) => setAmount(sanitizeDecimalInput(e.target.value))}
             placeholder={`0.00 ${symbol}`}
             style={{ fontFamily: "var(--font-mono)" }}
             className="w-full rounded-none border border-[var(--border)]/50 bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] placeholder-[var(--text-muted)] focus:border-[var(--accent)]/40 focus:outline-none focus:ring-1 focus:ring-[var(--accent)]/20"

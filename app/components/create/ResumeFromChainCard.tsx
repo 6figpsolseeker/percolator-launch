@@ -14,6 +14,7 @@ import { leverageFromMarginBps } from "@/lib/market-params";
 import { bpsPct } from "@/lib/format";
 import { parseHumanAmount } from "@/lib/parseAmount";
 import { clampLpExposureBps, LP_EXPOSURE_DEFAULT_BPS } from "@/lib/matcher-params";
+import { sanitizeDecimalInput } from "@/lib/decimal-input";
 import {
   adoptRecoveredLaunch,
   atomsToHuman,
@@ -244,7 +245,7 @@ export const ResumeFromChainCard: FC<{
             <input
               data-testid="resume-chain-lp"
               value={lp}
-              onChange={(e) => setLp(e.target.value)}
+              onChange={(e) => setLp(sanitizeDecimalInput(e.target.value))}
               placeholder="liquidity you chose (if nothing is deposited yet)"
               inputMode="decimal"
               className="min-w-[16rem] flex-1 border border-[var(--border)]/50 bg-transparent px-3 py-2 text-[11px] text-[var(--text)] outline-none focus:border-[var(--accent)]/40"

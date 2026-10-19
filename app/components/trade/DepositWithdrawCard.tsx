@@ -22,6 +22,7 @@ import { isSentinelValue } from "@/lib/health";
 import { useConvertibleProfit } from "@/hooks/useConvertibleProfit";
 import { settlingProfitMessage } from "@/lib/convert-released-pnl";
 import { useWalletBalanceRefreshKey } from "@/lib/wallet-balance-invalidation";
+import { sanitizeDecimalInput } from "@/lib/decimal-input";
 
 interface DepositWithdrawCardProps {
   slabAddress: string;
@@ -33,13 +34,6 @@ interface DepositWithdrawCardProps {
   /** The order ticket's "Get test funds": the wallet holds some collateral but less than the
    *  order needs, so offer the faucet even though the balance is not 0. */
   offerFaucet?: boolean;
-}
-
-function sanitizeDecimalInput(value: string): string {
-  const cleaned = value.replace(/[^0-9.]/g, "");
-  const dotIndex = cleaned.indexOf(".");
-  if (dotIndex === -1) return cleaned;
-  return cleaned.slice(0, dotIndex + 1) + cleaned.slice(dotIndex + 1).replace(/\./g, "");
 }
 
 export const DepositWithdrawCard: FC<DepositWithdrawCardProps> = ({ slabAddress, isDevnetMirror = false, initialMode = "deposit", offerFaucet = false }) => {

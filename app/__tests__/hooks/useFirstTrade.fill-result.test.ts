@@ -96,6 +96,16 @@ vi.mock("@/lib/first-trade", async (orig) => {
     buildFundAndTradeIxs: (p: { portfolio: PublicKey }) => [ix(3, p.portfolio), ix(10, p.portfolio)],
   };
 });
+// The ADL-effective reads need a market account; stub them and keep the real sig registry.
+const readBeforeTrade = vi.fn(async () => chain.beforeQ as bigint | null);
+const measurePositionChange = vi.fn(async (_c: unknown, _p: PublicKey, _m: PublicKey, _s: string, beforeQ: bigint | null) =>
+  beforeQ === null ? null : { beforeQ, afterQ: chain.afterQ },
+);
+vi.mock("@/lib/position-change", async (orig) => ({
+  ...(await orig<typeof import("@/lib/position-change")>()),
+  readBeforeTrade: (...a: unknown[]) => readBeforeTrade(...(a as [])),
+  measurePositionChange: (...a: Parameters<typeof measurePositionChange>) => measurePositionChange(...a),
+}));
 vi.mock("@/lib/tx", async (orig) => ({
   ...(await orig<typeof import("@/lib/tx")>()),
   sendTx: (...a: unknown[]) => sendTx(...a),
@@ -103,10 +113,11 @@ vi.mock("@/lib/tx", async (orig) => ({
 
 import { useFirstTrade } from "@/hooks/useFirstTrade";
 import { takeFillResult } from "@/lib/limits/fill-check";
+import { takePositionChange } from "@/lib/position-change";
 import { fmtQ } from "@/lib/limits/format";
 
-async function fundAndTrade(size: bigint) {
-  const { result } = renderHook(() => useFirstTrade(Keypair.generate().publicKey.toBase58()));
+async function fundAndTrade(size: bigint, slab = Keypair.generate().publicKey) {
+  const { result } = renderHook(() => useFirstTrade(slab.toBase58()));
   let sig = "";
   await act(async () => {
     sig = (await result.current.fundAndTrade({ size, depositAtoms: 55_060_000n, limitPriceE6: 127_659_537n, amountLabel: "55.06 USDC" })).signature;
@@ -155,6 +166,43 @@ describe("useFirstTrade records the MEASURED fill for the ticket", () => {
     chain.afterQ = 0n;
     const sig = await fundAndTrade(822_500n);
     expect(takeFillResult(sig)).toEqual({ kind: "zero", filledQ: 0n });
+  });
+});
+
+/**
+ * An add or flip through a bundled deposit must leave OrderTicket a position change to save the
+ * entry from (#3314). Without one the ticket cleared the saved entry and wrote none, so Entry /
+ * PnL fell back to "--" or an estimate.
+ */
+describe("useFirstTrade records the position change for an existing portfolio", () => {
+  beforeEach(() => {
+    sendTx.mockReset();
+    readBeforeTrade.mockClear();
+    measurePositionChange.mockClear();
+    findV17Portfolio.mockReset();
+  });
+
+  it("add: before is read ahead of the send, and the change is there for the ticket", async () => {
+    const existing = Keypair.generate().publicKey;
+    const slab = Keypair.generate().publicKey;
+    findV17Portfolio.mockResolvedValue(existing);
+    sendTx.mockResolvedValue("sigAdd");
+    chain.beforeQ = 1_000_000n;
+    chain.afterQ = 1_822_500n;
+    const sig = await fundAndTrade(822_500n, slab);
+    expect(readBeforeTrade).toHaveBeenCalledWith(expect.anything(), existing, slab);
+    expect(readBeforeTrade.mock.invocationCallOrder[0]).toBeLessThan(sendTx.mock.invocationCallOrder[0]);
+    expect(measurePositionChange).toHaveBeenCalledWith(expect.anything(), existing, slab, "sigAdd", 1_000_000n);
+    expect(await takePositionChange(sig)).toEqual({ beforeQ: 1_000_000n, afterQ: 1_822_500n });
+  });
+
+  it("flip: the sign change reaches the ticket", async () => {
+    findV17Portfolio.mockResolvedValue(Keypair.generate().publicKey);
+    sendTx.mockResolvedValue("sigFlip");
+    chain.beforeQ = 1_000_000n;
+    chain.afterQ = -500_000n;
+    const sig = await fundAndTrade(-1_500_000n);
+    expect(await takePositionChange(sig)).toEqual({ beforeQ: 1_000_000n, afterQ: -500_000n });
   });
 });
 

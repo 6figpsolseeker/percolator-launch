@@ -38,6 +38,7 @@ import {
 } from "@/lib/first-trade";
 import { invalidatePortfolio } from "@/lib/portfolio-invalidation";
 import { measureFill, recordFillResult } from "@/lib/limits/fill-check";
+import { measurePositionChange, readBeforeTrade, recordPositionChange } from "@/lib/position-change";
 import { signedPositionForAsset } from "@/lib/limits/decode";
 import { readU64LE } from "@/lib/u64le";
 import { WRAPPER_ERR } from "@/lib/wrapper-errors";
@@ -153,6 +154,10 @@ export function useFirstTrade(slabAddress: string) {
         const existing = await findV17Portfolio(connection, programId, market, owner);
         if (existing) {
           const id = await fetchPortfolioIdentity(connection, existing);
+          // #3314: the ADL-effective position before the trade, for the saved entry (as useTrade).
+          // Without it an add or flip through a bundled deposit left OrderTicket nothing to measure:
+          // it cleared the entry and saved none, so Entry / PnL fell back to "--" or an estimate.
+          const beforeEffectiveQ = readBeforeTrade(connection, existing, market);
           // The position BEFORE the trade, for the fill measurement (null = unread -> "unknown").
           const beforeInfo = await connection.getAccountInfo(existing, "confirmed").catch(() => null);
           const beforeQ = beforeInfo ? signedPositionForAsset(new Uint8Array(beforeInfo.data), 0, marketId) : null;
@@ -164,6 +169,10 @@ export function useFirstTrade(slabAddress: string) {
               computeUnitsFromSim: { cap: FUND_AND_TRADE_CU_CAP },
               selfHeal,
             }),
+          );
+          recordPositionChange(
+            signature,
+            beforeEffectiveQ.then((before) => measurePositionChange(connection, existing, market, signature, before)),
           );
           await recordFill(signature, existing, beforeQ);
           invalidatePortfolio();

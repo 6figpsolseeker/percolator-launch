@@ -1084,8 +1084,8 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
       const price = formatUsdPriceE6(submitPriceE6);
       const measured = takePositionChange(sig).then((change): PositionChange | null => {
         if (change) return change;
-        // Fund-and-trade records no position change, only the fill it measured itself. For a
-        // first trade (no position in this ticket) that fill is an open of the measured size.
+        // Fund-and-trade with no measured change (a new portfolio, or a read that failed) leaves
+        // only the fill it measured itself: from a flat position that fill is an open of its size.
         if (fundingMode && existingPositionSize === 0n && limitsFillResult?.filledQ != null && limitsFillResult.filledQ !== 0n && (limitsFillResult.kind === "full" || limitsFillResult.kind === "partial")) {
           return { beforeQ: 0n, afterQ: limitsFillResult.filledQ };
         }

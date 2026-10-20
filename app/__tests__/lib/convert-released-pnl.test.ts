@@ -23,6 +23,7 @@ import {
   convertGate,
   planWithdraw,
   quoteConvertible,
+  pendingProfit,
   releasedPnlFace,
   settlingProfitMessage,
   simulateConvertMath,
@@ -70,6 +71,22 @@ describe("releasedPnlFace — v16.rs:19863-19864", () => {
     expect(releasedPnlFace(1_000n, 5_000n)).toBe(0n);
     expect(releasedPnlFace(-7n, 0n)).toBe(0n);
     expect(releasedPnlFace(0n, 0n)).toBe(0n);
+  });
+});
+
+describe("pendingProfit: what both Portfolio Value tiles add for a flat account", () => {
+  const pos = (positionSize: bigint, pnl: bigint, reservedPnl = 0n) => ({ account: { positionSize, pnl, reservedPnl } });
+  it("a flat account's released pnl counts", () => {
+    expect(pendingProfit(pos(0n, 20_000_000n))).toBe(20_000_000n);
+    expect(pendingProfit(pos(0n, 20_000_000n, 5_000_000n))).toBe(15_000_000n);
+  });
+  it("an open position's pnl is not counted (it is in unrealized PnL already)", () => {
+    expect(pendingProfit(pos(1_000_000n, 20_000_000n))).toBe(0n);
+    expect(pendingProfit(pos(-1_000_000n, 20_000_000n))).toBe(0n);
+  });
+  it("a u64::MAX sentinel pnl and a missing account are not profit", () => {
+    expect(pendingProfit(pos(0n, 2n ** 64n - 1n))).toBe(0n);
+    expect(pendingProfit({})).toBe(0n);
   });
 });
 

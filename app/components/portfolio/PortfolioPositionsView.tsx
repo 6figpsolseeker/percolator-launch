@@ -33,8 +33,7 @@ import { useLiveSlabPrices } from "@/hooks/useLiveSlabPrices";
 import { useLpPositions } from "@/hooks/useLpPositions";
 import { AtRiskBanner } from "@/components/portfolio/AtRiskBanner";
 import { formatTokenAmount, formatUsdPriceE6 } from "@/lib/format";
-import { isSentinelValue } from "@/lib/health";
-import { releasedPnlFace } from "@/lib/convert-released-pnl";
+import { pendingProfit } from "@/lib/convert-released-pnl";
 import { positionSizeUsdText } from "@/lib/q-usd";
 import dynamic from "next/dynamic";
 import { ConnectButton } from "@/components/wallet/ConnectButtonLazy";
@@ -649,17 +648,6 @@ export function PortfolioPositionsView() {
   // Formula: depositedUsd = rawCapital / 10^decimals
   // Matches PositionsDock's pnlUsdRaw convention (divide by decimals only) and
   // this hook's own usePortfolio totals (which never multiply capital by price).
-  // Realized profit the engine can still convert on a flat account (pnl minus the
-  // reserved part, the exact ConvertReleasedPnl cap). A full close sweeps capital to
-  // the wallet but leaves this in `pnl` until the user converts it from the market's
-  // Withdraw tab — so a flat account can hold money with capital 0. Sentinel first:
-  // v12 flat accounts carry u64::MAX pnl, and MAX minus reserved is still "profit".
-  const pendingProfit = (pos: PortfolioPosition): bigint => {
-    const pnl = pos.account?.pnl ?? 0n;
-    if ((pos.account?.positionSize ?? 0n) !== 0n || isSentinelValue(pnl)) return 0n;
-    return releasedPnlFace(pnl, pos.account?.reservedPnl ?? 0n);
-  };
-
   // Filter out empty/closed accounts (FLAT with zero capital and no pending
   // profit) — they clutter the list
   const activePositions = positions.filter(

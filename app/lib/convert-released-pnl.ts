@@ -63,6 +63,7 @@ import type { PortfolioLegV17, PortfolioSourceDomainV17, PortfolioV17 } from "@p
 import { defaultCrankObservations } from "@/lib/v18-wire";
 import { WRAPPER_ERR } from "@/lib/wrapper-errors";
 import { parseCustomInstructionError } from "@/lib/self-heal";
+import { isSentinelValue } from "@/lib/health";
 
 export const CONVERT_RELEASED_PNL_TAG = 28;
 /** percolator src/lib.rs:25-26. */
@@ -77,6 +78,19 @@ const SIDE_LONG = 0;
 export function releasedPnlFace(pnl: bigint, reservedPnl: bigint): bigint {
   const pos = pnl > 0n ? pnl : 0n;
   return pos > reservedPnl ? pos - reservedPnl : 0n;
+}
+
+/**
+ * Realized profit the engine can still convert on a flat account (`releasedPnlFace`, the exact
+ * ConvertReleasedPnl cap). A full close sweeps capital to the wallet but leaves this in `pnl`
+ * until the user converts it from the market's Withdraw tab, so a flat account can hold money
+ * with capital 0. Sentinel first: v12 flat accounts carry u64::MAX pnl, and MAX minus reserved is
+ * still "profit". Both Portfolio Value tiles (/portfolio and /dashboard) count it.
+ */
+export function pendingProfit(pos: { account?: { positionSize: bigint; pnl: bigint; reservedPnl?: bigint } }): bigint {
+  const pnl = pos.account?.pnl ?? 0n;
+  if ((pos.account?.positionSize ?? 0n) !== 0n || isSentinelValue(pnl)) return 0n;
+  return releasedPnlFace(pnl, pos.account?.reservedPnl ?? 0n);
 }
 
 /** v16.rs:22352-22365 `is_occupied`. */

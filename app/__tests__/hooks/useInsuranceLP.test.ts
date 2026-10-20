@@ -1091,5 +1091,53 @@ describe("useInsuranceLP", () => {
       expect(result.current.state.userSharePct).toBe(25);
       expect(result.current.state.userVaultValueAtoms).toBe(250_000n);
     });
+
+    // N13: a wallet switch whose first read fails kept the previous wallet's ticket, so its
+    // "Finish withdrawal" stayed enabled and would ask the new wallet to sign a fresh request.
+    it("N13: a wallet switch drops the previous wallet's position, even when the new read fails", async () => {
+      const MINT = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+      const REGISTRY = "7pXnR8Eg2g7YDtPkUeEmcYNpPN5yzGLbNHREeHJMzNhq";
+      const REDEMPTION = "6UwgpB4FBfQpKW8ACFv7EW5vXg1NiHRQijYzGBaXJSHJ";
+      const acct = { data: Buffer.alloc(64), lamports: 1, executable: false, owner: mockProgramId };
+      let failReads = false;
+      mockConnection.getAccountInfo.mockImplementation(async (pk: PublicKey) => {
+        if (failReads && pk.toBase58() !== MINT) throw new Error("429 Too Many Requests");
+        return [MINT, REGISTRY, REDEMPTION].includes(pk.toBase58()) ? acct : null;
+      });
+      vi.mocked(unpackMint).mockReturnValue({ supply: 1_000_000n, decimals: 6, isInitialized: true } as never);
+      const sdk = await import("@percolatorct/sdk");
+      vi.mocked(sdk.parseLpVaultRegistry).mockReturnValue({
+        totalLpSharesOutstanding: 1_000_000n,
+        feeDistributionTotalAtoms: 0n,
+        redemptionCooldownSlots: 0n,
+        domain: 0,
+      } as never);
+      vi.mocked(sdk.parseLpRedemption).mockReturnValue({ shares: 250_000n, requestSlot: 0n } as never);
+
+      const { result, rerender } = renderHook(() => useInsuranceLP());
+      await waitFor(() => expect(result.current.state.hasPendingRedemption).toBe(true));
+      const refreshOfA = result.current.refreshState;
+
+      failReads = true;
+      vi.mocked(useWalletCompat).mockReturnValue({ ...mockWallet, publicKey: new PublicKey("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM") });
+      rerender();
+      await waitFor(() => expect(result.current.readError).toBe(true));
+      expect(result.current.state.hasPendingRedemption).toBe(false);
+      expect(result.current.state.pendingRedemptionShares).toBe(0n);
+      expect(result.current.state.userVaultValueAtoms).toBe(0n);
+      expect(result.current.state.userSharePct).toBe(0);
+      // Vault-level state is not the wallet's, so it stays.
+      expect(result.current.state.registryExists).toBe(true);
+
+      // A deposit/withdraw that started under the old wallet refreshes through its own closure
+      // when it confirms. That refresh must not republish the old wallet's ticket.
+      const staleRefresh = refreshOfA;
+      failReads = false;
+      await act(async () => {
+        await staleRefresh();
+      });
+      expect(result.current.state.hasPendingRedemption).toBe(false);
+      expect(result.current.state.pendingRedemptionShares).toBe(0n);
+    });
   });
 });

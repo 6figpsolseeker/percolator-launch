@@ -250,6 +250,9 @@ export function useInsuranceLP() {
 
   // Stabilize wallet.publicKey reference — PublicKey is not referentially stable
   const walletPubkeyStr = wallet.publicKey?.toBase58() ?? null;
+  // The wallet as of the latest render, for refreshState's superseded-wallet check.
+  const walletKeyRef = useRef(walletPubkeyStr);
+  walletKeyRef.current = walletPubkeyStr;
 
   // PERC-9204: stable primitive standing in for `slabState.config` in the
   // effect below. SlabProvider rebuilds `config` as a brand-new object literal
@@ -323,6 +326,9 @@ export function useInsuranceLP() {
 
   // Poll insurance state
   const refreshState = useCallback(async () => {
+    // N13: a refresh from a closure of a previous wallet (a deposit/withdraw that confirmed after a
+    // switch) must neither publish that wallet's position nor supersede the current wallet's read.
+    if (walletKeyRef.current !== walletPubkeyStr) return;
     if (!slabState || !lpMintInfo || !connection) {
       // Nothing to fetch yet (market/programId not resolved) — don't leave
       // the UI stuck on a loading skeleton forever. While the slab itself is
@@ -638,6 +644,28 @@ export function useInsuranceLP() {
   useEffect(() => {
     refreshStateRef.current = refreshState;
   }, [refreshState]);
+
+  // N13: the previous wallet's position is not this one's. Drop it before the re-read below, so a
+  // slow or failed read (the catch keeps `state`) never shows, or acts on, another wallet's value or
+  // pending withdrawal: a stale "Finish withdrawal" asked the new wallet to sign a fresh request
+  // sized to the old wallet's ticket. Vault-level fields stay. (An in-flight read for the old wallet
+  // is already dropped by refreshState's request id and wallet checks.)
+  useEffect(() => {
+    setState((s) => ({
+      ...s,
+      userLpBalance: 0n,
+      userSharePct: 0,
+      userRedeemableValue: 0n,
+      userCollateralBalance: 0n,
+      userVaultValueAtoms: 0n,
+      hasPendingRedemption: false,
+      pendingRedemptionShares: 0n,
+      cooldownRemainingSlots: 0n,
+      cooldownElapsed: true,
+      splitPot: s.splitPot && { ...s.splitPot, maxNowAtoms: null },
+    }));
+    setLastDrawSummary(null);
+  }, [walletPubkeyStr]);
 
   // S-H1 fix: refresh immediately whenever the derived PDAs, wallet, or slab
   // config change (wallet connect/switch, market switch) — previously this

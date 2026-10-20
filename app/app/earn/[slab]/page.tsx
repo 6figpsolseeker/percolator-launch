@@ -138,14 +138,17 @@ function VaultDetailInner({ slabAddress }: { slabAddress: string }) {
     lastDrawSummary,
     readError: lpVaultReadError,
   } = useInsuranceLP();
+  const earnWallet = useWalletCompat();
+  const walletKey = earnWallet.publicKey?.toBase58() ?? 'none';
   // UX WP-10 (UI-2): until the first read lands, figures show "—" (data-state="loading").
   const [loadedOnce, setLoadedOnce] = useState(false);
+  // N13: a new wallet's position is unread until its own first load.
+  useEffect(() => setLoadedOnce(false), [walletKey]);
   // A failed read is not a load: its zeros stay "—".
   useEffect(() => {
     if (!lpVaultLoading && !lpVaultReadError) setLoadedOnce(true);
   }, [lpVaultLoading, lpVaultReadError]);
   const firstLoad = !loadedOnce;
-  const earnWallet = useWalletCompat();
   const earnLimits = useMarketLimits(slabAddress);
   // GH#2882: a depleted counterparty pauses trading; Earn deposits on an unbound vault can't reopen it.
   const marketHealth = useSingleMarketHealth(slabAddress);
@@ -454,9 +457,10 @@ function VaultDetailInner({ slabAddress }: { slabAddress: string }) {
           {/* P3 / F-4: after Resolve, finish the market so Earn can pay out (nothing on a live market). */}
           <ResolvedExitPanel slab={slabAddress} walletConnected={!!earnWallet.publicKey} onDone={refreshState} {...earnExitProps(lpVaultState, collateralDecimals, collateralSymbol)} />
 
-          {/* Deposit / Withdraw */}
+          {/* Deposit / Withdraw. Keyed by wallet (N13): its form and auto-finish arming are per wallet. */}
           <ScrollReveal>
             <DepositWithdrawPanel
+              key={walletKey}
               userBalance={lpVaultState.userCollateralBalance}
               userLpBalance={lpVaultState.userLpBalance}
               vaultBalance={lpVaultState.vaultTotalAtoms}

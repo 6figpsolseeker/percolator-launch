@@ -49,6 +49,7 @@ interface VaultDepositRailProps {
  * hooks unchanged — this is purely the binding + presentation.
  */
 export function VaultDepositRail({ slab, vault, onTxSuccess, onPositionResolved }: VaultDepositRailProps) {
+  const walletKey = useWalletCompat().publicKey?.toBase58() ?? 'none';
   if (!slab) {
     return (
       <div className="border border-[var(--border)] bg-[var(--panel-bg)] p-8 text-center hud-corners">
@@ -63,10 +64,12 @@ export function VaultDepositRail({ slab, vault, onTxSuccess, onPositionResolved 
   }
 
   // key={slab} forces a clean remount on vault switch so the panel never shows
-  // the previous vault's balances/cooldown while the new one's reads resolve.
+  // the previous vault's balances/cooldown while the new one's reads resolve. The inner key does
+  // the same on a wallet switch (N13): it resets everLoaded, so the rail never reports the new
+  // wallet's not-yet-read $0 to the table, and the panel's form and auto-finish arming.
   return (
     <SlabProvider key={slab} slabAddress={slab}>
-      <VaultDepositRailInner slab={slab} vault={vault} onTxSuccess={onTxSuccess} onPositionResolved={onPositionResolved} />
+      <VaultDepositRailInner key={walletKey} slab={slab} vault={vault} onTxSuccess={onTxSuccess} onPositionResolved={onPositionResolved} />
     </SlabProvider>
   );
 }

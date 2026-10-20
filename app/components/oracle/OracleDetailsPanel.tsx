@@ -1,6 +1,7 @@
 "use client";
 
 import { FC, useEffect, useCallback, useRef, useState } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { createPortal } from "react-dom";
 import { useOracleFreshness } from "@/hooks/useOracleFreshness";
 import { useSlabState } from "@/components/providers/SlabProvider";
@@ -44,6 +45,7 @@ export const OracleDetailsPanel: FC<OracleDetailsPanelProps> = ({ onClose }) => 
   const panelRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const [isClosing, setIsClosing] = useState(false);
+  useDialogFocus(overlayRef);
 
   // Same pattern as TradeConfirmationModal — keep onClose accessible via ref
   // so the mount-time Escape listener always invokes the latest closure

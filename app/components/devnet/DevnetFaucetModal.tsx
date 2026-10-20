@@ -15,6 +15,7 @@
 "use client";
 
 import { FC, useCallback, useEffect, useRef } from "react";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useDevnetFaucet } from "@/hooks/useDevnetFaucet";
@@ -83,6 +84,9 @@ export const DevnetFaucetModal: FC = () => {
   const router = useRouter();
   const pathname = usePathname();
   const modalRef = useRef<HTMLDivElement>(null);
+
+  // It covers the whole page, so keep keyboard focus inside it while it shows.
+  useDialogFocus(modalRef, faucet.shouldShow);
 
   // Close on Escape
   useEffect(() => {

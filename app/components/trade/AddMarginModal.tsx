@@ -5,6 +5,7 @@ import type { PublicKey } from "@solana/web3.js";
 import { useDeposit } from "@/hooks/useDeposit";
 import { useWalletAtaBalance } from "@/hooks/useWalletAtaBalance";
 import { useSlabState } from "@/components/providers/SlabProvider";
+import { Modal } from "@/components/ui/Modal";
 import { checkDepositAmount, depositAmountMessage } from "@/lib/deposit-guard";
 import { formatTokenAmount } from "@/lib/format";
 import { parseHumanAmount } from "@/lib/parseAmount";
@@ -61,18 +62,20 @@ export const AddMarginModal: FC<AddMarginModalProps> = ({ slabAddress, userIdx, 
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Add margin"
+    // The shared Modal (GH#2286): focus trap + restore, Escape, portal above the header and tab bar.
+    // Not dismissible while the deposit is in flight, or its result line went with the dialog.
+    <Modal
+      onClose={onClose}
+      dismissible={!loading}
+      labelledBy="add-margin-title"
+      scrimClassName="backdrop-blur-sm"
+      panelClassName="w-full max-w-sm rounded-none border border-[var(--border)]/60 bg-[var(--bg)] p-4 shadow-2xl"
     >
-      <div className="w-full max-w-sm rounded-none border border-[var(--border)]/60 bg-[var(--bg)] p-4 shadow-2xl">
         <div className="mb-3 flex items-center justify-between">
-          <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-[var(--text)]">Add Margin</span>
+          <span id="add-margin-title" className="text-[11px] font-bold uppercase tracking-[0.15em] text-[var(--text)]">Add Margin</span>
           <button
             onClick={onClose}
+            disabled={loading}
             aria-label="Close"
             className="text-[var(--text-secondary)] hover:text-[var(--text)] transition-colors"
           >
@@ -85,10 +88,11 @@ export const AddMarginModal: FC<AddMarginModalProps> = ({ slabAddress, userIdx, 
         </p>
 
         <div className="mb-2 flex flex-col gap-1">
-          <label className="text-[9px] uppercase tracking-[0.12em] text-[var(--text)]">
+          <label htmlFor="add-margin-amount" className="text-[9px] uppercase tracking-[0.12em] text-[var(--text)]">
             Amount ({symbol})
           </label>
           <input
+            id="add-margin-amount"
             type="text"
             value={amount}
             onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
@@ -131,7 +135,6 @@ export const AddMarginModal: FC<AddMarginModalProps> = ({ slabAddress, userIdx, 
             Tx: {lastSig.slice(0, 16)}…
           </p>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 };

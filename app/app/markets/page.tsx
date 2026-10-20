@@ -10,7 +10,7 @@ import { numericToBigInt, openInterestOf, isSupabaseSentinel } from "@/lib/supab
 import { setMarketIdentity } from "@/lib/marketIdentityCache";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMarketDiscovery } from "@/hooks/useMarketDiscovery";
-import { computeMarketHealth, computeMarketHealthFromStats, sanitizeOnChainValue } from "@/lib/health";
+import { computeMarketHealth, computeMarketHealthFromStats, sanitizeOnChainValue, type HealthLevel } from "@/lib/health";
 import { HealthBadge, HEALTH_HEADER_TOOLTIP } from "@/components/market/HealthBadge";
 import { formatTokenAmount } from "@/lib/format";
 import type { Database } from "@/lib/database.types";
@@ -43,6 +43,9 @@ import { isListedMarketRow, isOwnAwaitingPriceRow, MAX_SANE_PRICE_USD } from "@/
  *  DB values (keeper bug, row injection, data corruption). 200x is well above any
  *  legitimate max leverage on Percolator devnet (MAX_LEVERAGE_X, lib/market-params.ts). */
 const MAX_DISPLAY_LEVERAGE = 200;
+
+/** Health levels where no new position can open: the phone card names these (N19). */
+const OPEN_REFUSED_LEVELS: ReadonlySet<HealthLevel> = new Set<HealthLevel>(["close-only", "needs-liquidity", "oracle-down"]);
 
 function formatNum(n: number | null | undefined): string {
   if (n === null || n === undefined) return "\u2014";
@@ -1070,8 +1073,21 @@ function MarketsPageInner() {
                               <LiveRowPrice slab={m.slabAddress} fallback={lastPrice} />
                             </span>
                           </div>
-                          <div className="truncate text-[11px] text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
-                            OI {oiDisplay} · Vol {volumeDisplay ?? "\u2014"} · up to {m.maxLeverage}×
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 truncate text-[11px] text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
+                              OI {oiDisplay} · Vol {volumeDisplay ?? "\u2014"} · up to {m.maxLeverage}×
+                            </div>
+                            {/* N19: the desktop Health column is hidden on phones, yet the phone sort offers Health.
+                                A market that refuses new positions says so on the card. Caution and Low Liq
+                                don't change what a user can do (nearly every devnet market reads Low Liq);
+                                Empty from stats is weak evidence (reduced schema), and a real no-LP market
+                                reads Needs liquidity. The creator's own unpriced market already says
+                                "awaiting live price" by the symbol. */}
+                            {OPEN_REFUSED_LEVELS.has(effectiveHealth.level) && !awaitingOwnPrice.has(m.slabAddress) && (
+                              <span data-testid="market-card-health" className="shrink-0">
+                                <HealthBadge level={effectiveHealth.level} />
+                              </span>
+                            )}
                           </div>
                         </div>
                         <span aria-hidden="true" className="shrink-0 text-[var(--text-secondary)]">›</span>

@@ -1073,22 +1073,20 @@ function MarketsPageInner() {
                               <LiveRowPrice slab={m.slabAddress} fallback={lastPrice} />
                             </span>
                           </div>
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0 truncate text-[11px] text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
-                              OI {oiDisplay} · Vol {volumeDisplay ?? "\u2014"} · up to {m.maxLeverage}×
-                            </div>
-                            {/* N19: the desktop Health column is hidden on phones, yet the phone sort offers Health.
-                                A market that refuses new positions says so on the card. Caution and Low Liq
-                                don't change what a user can do (nearly every devnet market reads Low Liq);
-                                Empty from stats is weak evidence (reduced schema), and a real no-LP market
-                                reads Needs liquidity. The creator's own unpriced market already says
-                                "awaiting live price" by the symbol. */}
-                            {OPEN_REFUSED_LEVELS.has(effectiveHealth.level) && !awaitingOwnPrice.has(m.slabAddress) && (
-                              <span data-testid="market-card-health" className="shrink-0">
-                                <HealthBadge level={effectiveHealth.level} />
-                              </span>
-                            )}
+                          <div className="truncate text-[11px] text-[var(--text-secondary)]" style={{ fontFamily: "var(--font-mono)" }}>
+                            OI {oiDisplay} · Vol {volumeDisplay ?? "\u2014"} · up to {m.maxLeverage}×
                           </div>
+                          {/* N19: the desktop Health column is hidden on phones, yet the phone sort offers Health.
+                              A market that refuses new positions says so on the card. Caution and Low Liq
+                              don't change what a user can do (nearly every devnet market reads Low Liq);
+                              Empty from stats is weak evidence (reduced schema), and a real no-LP market
+                              reads Needs liquidity. The creator's own unpriced market already says
+                              "awaiting live price" by the symbol. */}
+                          {OPEN_REFUSED_LEVELS.has(effectiveHealth.level) && !awaitingOwnPrice.has(m.slabAddress) && (
+                            <div data-testid="market-card-health" className="mt-1">
+                              <HealthBadge level={effectiveHealth.level} />
+                            </div>
+                          )}
                         </div>
                         <span aria-hidden="true" className="shrink-0 text-[var(--text-secondary)]">›</span>
                       </div>

@@ -41,7 +41,7 @@ import { useWalletBalanceRefreshKey } from "@/lib/wallet-balance-invalidation";
 import { useWalletCompat, useConnectionCompat } from "@/hooks/useWalletCompat";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { computeNotionalNative } from "@/lib/notional";
-import { availableLeverage as availableLeverageFor, nextLeverageInputState, clampSliderLeverage, LEVERAGE_STEP } from "@/lib/leverage-control";
+import { availableLeverage as availableLeverageFor, nextLeverageInputState, clampSliderLeverage, leverageToPct, pctToLeverage, LEVERAGE_STEP } from "@/lib/leverage-control";
 import { useTrade, prewarmTradeSubmission } from "@/hooks/useTrade";
 import { useFirstTrade } from "@/hooks/useFirstTrade";
 import { FIRST_TRADE_COPY, FirstTradeDepositError, fundDepositAtoms, tradableMarginAtoms } from "@/lib/first-trade";
@@ -1711,29 +1711,44 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
           </div>
         </div>
         {maxLeverage > 1 ? (() => {
-          const n = availableLeverage.length;
-
-          // Maps a leverage value → uniform display % — interpolates between
-          // snap-point INDICES, not raw numeric values, so labels stay evenly
-          // spaced regardless of the gap between them (e.g. 1/3/5/10/20 would
-          // bunch up on a linear numeric scale; this keeps them uniform).
-          const valueToPct = (val: number): number => {
-            if (n <= 1) return 0;
-            for (let i = 0; i < n - 1; i++) {
-              if (val <= availableLeverage[i + 1]) {
-                const lo = availableLeverage[i], hi = availableLeverage[i + 1];
-                return ((i + (hi > lo ? (val - lo) / (hi - lo) : 0)) / (n - 1)) * 100;
-              }
-            }
-            return 100;
+          // Thumb, fill and labels sit on the preset INDEX scale, so 1/3/5/10/20 stay evenly
+          // spaced (lib/leverage-control.ts leverageToPct).
+          const thumbPct = leverageToPct(leverage, availableLeverage);
+          // N3: the pointer maps through the same scale, so a click or drag lands on the leverage
+          // drawn under it. The native input below maps linearly, so it only takes the keyboard
+          // and screen readers (pointer-events-none), which step in leverage units.
+          const fromPointer = (e: React.PointerEvent<HTMLDivElement>) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            if (r.width <= 0) return;
+            const next = pctToLeverage((e.clientX - r.left) / r.width, availableLeverage, maxLeverage);
+            if (next !== leverage) updateLeverage(next);
           };
-
-          const thumbPct = valueToPct(leverage);
 
           return (
             <div className="relative pb-1">
-              {/* Track wrapper — gives the invisible input a well-defined bounding box */}
-              <div className="relative mx-0 mt-3 h-6">
+              {/* Track wrapper — takes clicks and drags, and gives the invisible input its box */}
+              <div
+                className="relative mx-0 mt-3 h-6 cursor-pointer select-none"
+                // pan-y: a vertical swipe still scrolls the mobile order sheet.
+                style={{ touchAction: "pan-y" }}
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  // A touch that turns into that scroll is cancelled; put the leverage back then.
+                  e.currentTarget.dataset.leverageAtDown = String(leverage);
+                  e.currentTarget.setPointerCapture?.(e.pointerId);
+                  fromPointer(e);
+                }}
+                onPointerCancel={(e) => {
+                  const before = Number(e.currentTarget.dataset.leverageAtDown);
+                  delete e.currentTarget.dataset.leverageAtDown;
+                  if (Number.isFinite(before) && before !== leverage) updateLeverage(before);
+                }}
+                onPointerMove={(e) => {
+                  if (e.currentTarget.hasPointerCapture?.(e.pointerId)) fromPointer(e);
+                }}
+                // After the mousedown default (which would blur it), so arrows keep working.
+                onPointerUp={(e) => e.currentTarget.querySelector("input")?.focus()}
+              >
                 {/* Visual track line, vertically centred */}
                 <div className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-[var(--border)]/30">
                   {/* Fill */}
@@ -1750,7 +1765,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
                   }`}
                   style={{ left: `${thumbPct}%` }}
                 />
-                {/* Invisible native input — same bounding box as the wrapper (h-6), handles all drag/click */}
+                {/* Invisible native input — keyboard and screen readers only; the wrapper takes the pointer */}
                 <input
                   type="range"
                   min={1}
@@ -1768,9 +1783,10 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
                   }}
                   onFocus={() => setLeverageFocused(true)}
                   onBlur={() => setLeverageFocused(false)}
-                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
                   style={{ height: "100%" }}
                   aria-label="Leverage"
+                  aria-valuetext={`${formatLeverageValue(leverage)}x`}
                   data-testid="trade-leverage-slider"
                 />
               </div>

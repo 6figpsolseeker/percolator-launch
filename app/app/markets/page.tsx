@@ -10,7 +10,7 @@ import { numericToBigInt, openInterestOf, isSupabaseSentinel } from "@/lib/supab
 import { setMarketIdentity } from "@/lib/marketIdentityCache";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMarketDiscovery } from "@/hooks/useMarketDiscovery";
-import { computeMarketHealth, computeMarketHealthFromStats, sanitizeOnChainValue } from "@/lib/health";
+import { computeMarketHealth, computeMarketHealthFromStats, sanitizeOnChainValue, type HealthLevel } from "@/lib/health";
 import { HealthBadge, HEALTH_HEADER_TOOLTIP } from "@/components/market/HealthBadge";
 import { formatTokenAmount } from "@/lib/format";
 import type { Database } from "@/lib/database.types";
@@ -28,7 +28,6 @@ import { WatchButton } from "@/components/market/WatchButton";
 import { MarketHealthBadges } from "@/components/market/MarketHealthBadges";
 import { useMarketHealth } from "@/hooks/useMarketHealth";
 import { liveHealthLevel } from "@/lib/market-health-overlay";
-import { MAX_HEALTH_SLABS } from "@/lib/market-health";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { detectOracleMode, resolveMarketPriceE6, priceE6ToUsd, sanitizePriceE6, applyInvert } from "@/lib/oraclePrice";
 import { LiveRowPrice } from "@/components/market/LiveRowPrice";
@@ -420,6 +419,14 @@ function MarketsPageInner() {
   // a display error from corrupted on-chain data. We clamp in the display layer.
   // MAX_SANE_PRICE_USD is defined at module level (shared with active-market filtering).
 
+  // P0b: v18 health (LP depleted / ADL close-only / payout haircut) for EVERY listed market, read
+  // before sorting: the Health sort ranks by it and the row badges show it. Choosing the set from
+  // the sorted, visible rows would loop: a demoted row leaves the set, loses its read and sorts
+  // back up. Keyed on a sorted string so a re-sort or a poll with the same markets never refetches.
+  const healthSlabsKey = useMemo(() => activeMarkets.map((m) => m.slabAddress).sort().join(","), [activeMarkets]);
+  const healthSlabs = useMemo(() => (healthSlabsKey ? healthSlabsKey.split(",") : []), [healthSlabsKey]);
+  const { health: marketHealth } = useMarketHealth(healthSlabs);
+
   const filtered = useMemo(() => {
     let list = activeMarkets;
     // Text search — matches on-chain symbol, name, slab address, mint address,
@@ -508,10 +515,13 @@ function MarketsPageInner() {
           // GH#1637: oracle-down sort rank — below Warning but above Empty.
           // GH#1643: Markets with valid oracle but c_tot=0 (health="empty") were ranking
           // after oracle-down markets because "empty"=4 > "oracle-down"=3. Fix: add a
-          // "empty-oracle-up" rank (3) for markets that have a working oracle but no capital.
+          // "empty-oracle-up" rank for markets that have a working oracle but no capital.
           // These have working oracle feeds so they should rank above oracle-down markets.
-          // New order: healthy=0 < caution=1 < warning=2 < empty-oracle-up=3 < oracle-down=4 < empty=5.
-          const order: Record<string, number> = { healthy: 0, caution: 1, warning: 2, "empty-oracle-up": 3, "oracle-down": 4, empty: 5 };
+          // N18: the live grades rank below warning, since no position can open there: needs-liquidity
+          // (funding fixes it) above empty-oracle-up, close-only (waits on the engine) below it.
+          // Order: healthy=0 < caution=1 < warning=2 < needs-liquidity=3 < empty-oracle-up=4
+          //   < close-only=5 < oracle-down=6 < empty=7.
+          const order: Record<string, number> = { healthy: 0, caution: 1, warning: 2, "needs-liquidity": 3, "empty-oracle-up": 4, "close-only": 5, "oracle-down": 6, empty: 7 };
           const numericOrNullForSort = (v: unknown): number | null => {
             if (v == null) return null;
             const n = Number(v);
@@ -569,14 +579,17 @@ function MarketsPageInner() {
           };
           // GH#1643: Markets with a working oracle but c_tot=0 should sort above oracle-down.
           // Use "empty-oracle-up" rank for empty markets that are NOT oracle-down.
-          const getEffectiveSortLevel = (m: MergedMarket, baseLevel: string): string => {
+          // N18: then the live grade the row badge shows (liveHealthLevel), so a market that refuses
+          // every open (LP depleted, ADL close-only) no longer sorts with the healthy ones.
+          const getEffectiveSortLevel = (m: MergedMarket, baseLevel: HealthLevel): string => {
             if (computeIsOracleDown(m)) return "oracle-down";
-            if (baseLevel === "empty") return "empty-oracle-up";
-            return baseLevel;
+            const level = liveHealthLevel(baseLevel, marketHealth[m.slabAddress]);
+            if (level === "empty") return "empty-oracle-up";
+            return level;
           };
           const levelA = getEffectiveSortLevel(a, ha.level);
           const levelB = getEffectiveSortLevel(b, hb.level);
-          return (order[levelA] ?? 5) - (order[levelB] ?? 5);
+          return (order[levelA] ?? 7) - (order[levelB] ?? 7);
         }
         case "recent": {
           // Sort by created_at descending; fall back to slab address if missing
@@ -598,7 +611,7 @@ function MarketsPageInner() {
       }
     });
     return list;
-  }, [effectiveMarkets, debouncedSearch, sortBy, showUsd, tokenMetaMap]);
+  }, [effectiveMarkets, debouncedSearch, sortBy, showUsd, tokenMetaMap, marketHealth]);
 
   // P-MED-3: Progressive reveal + intersection observer backup
   // Auto-load items in batches via requestAnimationFrame for instant display.
@@ -655,12 +668,6 @@ function MarketsPageInner() {
   }, [debouncedSearch, sortBy]);
 
   const displayedMarkets = filtered.slice(0, displayCount);
-  // P0b: v18 health (LP depleted / payout haircut / resolved) for the visible rows.
-  const healthSlabs = useMemo(
-    () => displayedMarkets.slice(0, MAX_HEALTH_SLABS).map((m) => m.slabAddress),
-    [displayedMarkets],
-  );
-  const { health: marketHealth } = useMarketHealth(healthSlabs);
   const loading = discoveryLoading || statsLoading;
   const showDegradedBanner = Boolean(loadErrorMessage && !loading && filtered.length > 0);
 

@@ -20,6 +20,7 @@ import { sendTx } from '@/lib/tx';
 import { stakeErrorMessage } from '@/lib/earnErrors';
 import { getConfig } from '@/lib/config';
 import { assertDepositWithinBalance, readTokenBalance } from '@/lib/deposit-guard';
+import { invalidateWalletBalance } from '@/lib/wallet-balance-invalidation';
 
 export interface StakeDepositPoolParams {
   /** The slab (market) address this pool belongs to. Used for PDA derivation. */
@@ -185,6 +186,8 @@ export function useStakeDepositByPool({ slabAddress, collateralMint }: StakeDepo
         );
 
         const sig = await sendTx({ connection, wallet, instructions });
+        // The wallet's collateral just left it: /stake's Balance / MAX re-read it.
+        invalidateWalletBalance();
         return sig;
       } catch (e) {
         // #26: the plain line, never the raw simulation JSON / program logs (kept in the console).

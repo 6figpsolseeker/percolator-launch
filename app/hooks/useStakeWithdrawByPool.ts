@@ -19,6 +19,7 @@ import {
 import { sendTx } from '@/lib/tx';
 import { stakeErrorMessage } from '@/lib/earnErrors';
 import { getConfig } from '@/lib/config';
+import { invalidateWalletBalance } from '@/lib/wallet-balance-invalidation';
 
 export interface StakeWithdrawPoolParams {
   /** The slab (market) address this pool belongs to. Used for PDA derivation. */
@@ -168,6 +169,8 @@ export function useStakeWithdrawByPool({ slabAddress, collateralMint }: StakeWit
         );
 
         const sig = await sendTx({ connection, wallet, instructions });
+        // The collateral is back in the wallet: /stake's Balance / MAX re-read it.
+        invalidateWalletBalance();
         return sig;
       } catch (e) {
         // #26: the plain line, never the raw simulation JSON / program logs (kept in the console).

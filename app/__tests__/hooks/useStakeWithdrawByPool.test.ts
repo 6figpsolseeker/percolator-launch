@@ -31,6 +31,8 @@ vi.mock('@/lib/tx', () => ({
   sendTx: vi.fn(),
 }));
 
+vi.mock('@/lib/wallet-balance-invalidation', () => ({ invalidateWalletBalance: vi.fn() }));
+
 vi.mock('@percolatorct/sdk', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const { PublicKey: PK } = require('@solana/web3.js');
@@ -73,6 +75,7 @@ vi.mock('@solana/spl-token', () => {
 import { useStakeWithdrawByPool } from '../../hooks/useStakeWithdrawByPool';
 import { useConnectionCompat, useWalletCompat } from '@/hooks/useWalletCompat';
 import { sendTx } from '@/lib/tx';
+import { invalidateWalletBalance } from '@/lib/wallet-balance-invalidation';
 import { encodeStakeWithdraw, withdrawAccounts } from '@percolatorct/sdk';
 
 // Build a fake pool account buffer (384 bytes — the v2 StakePool size;
@@ -141,6 +144,22 @@ describe('useStakeWithdrawByPool', () => {
     const args = (withdrawAccounts as ReturnType<typeof vi.fn>).mock.calls[0][0] as { slab: PublicKey };
     expect(args.slab.toBase58()).toBe(mockSlabAddress);
     expect(sendTx).toHaveBeenCalled();
+  });
+
+  it('N12: a confirmed withdraw tells /stake the wallet balance changed; a failed one does not', async () => {
+    const { result } = renderHook(() => useStakeWithdrawByPool(DEFAULT_PARAMS));
+    await act(async () => {
+      await result.current.withdraw(500_000n);
+    });
+    expect(invalidateWalletBalance).toHaveBeenCalledTimes(1);
+    expect((invalidateWalletBalance as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0])
+      .toBeGreaterThan((sendTx as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]);
+
+    (sendTx as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('rejected'));
+    await act(async () => {
+      await expect(result.current.withdraw(500_000n)).rejects.toThrow();
+    });
+    expect(invalidateWalletBalance).toHaveBeenCalledTimes(1);
   });
 
   it('#26: a failed send sets a plain error, not the raw simulation text', async () => {

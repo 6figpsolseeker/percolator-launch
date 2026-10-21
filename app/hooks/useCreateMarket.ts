@@ -2538,6 +2538,16 @@ export function useCreateMarket() {
         }));
       }
 
+      // #3601: a bond launch exists only as ONE transaction (Wave C N-2: the Earn seed between the
+      // steps disables bonds for good). The step-by-step path below never reads the bond, so a
+      // fresh launch or a step-0 retry that reaches here would go live without it. Refuse instead;
+      // nothing is on chain yet. (A resume past step 0 was never a bond launch.)
+      if (params.v22?.bond && startStep <= 0) {
+        // batchFallbackReason cleared: "your wallet signs each step separately" would contradict this refusal.
+        setState((s) => ({ ...s, loading: false, phase: "idle", error: bondNeedsSingleTxMessage, step: 0, stepLabel: STEP_LABELS[0] ?? s.stepLabel, batchFallbackReason: null }));
+        return;
+      }
+
       // The sequential step currently running, for the failure message: the
       // same program error means different things at different steps.
       let runningStep = startStep;

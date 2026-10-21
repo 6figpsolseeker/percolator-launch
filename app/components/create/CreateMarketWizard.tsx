@@ -60,6 +60,7 @@ import { isValidBase58Pubkey } from "@/lib/createWizardUtils";
 import { isMockMode } from "@/lib/mock-mode";
 import { lowestLeverageTrackablePriceUsd } from "@/lib/launch-price-floor";
 import { pickInitialPrice, toInitialPriceE6, withTrackableFloor } from "@/lib/initial-price";
+import { bondBundleTooLargeMessage, bondNeedsSingleTxMessage } from "@/lib/v22/launch-wire";
 
 type WizardStep = 1 | 2;
 
@@ -1011,7 +1012,9 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
   }, []);
 
   // Launch market (or resume from a stuck slab when resumeFromStep is set)
-  const handleLaunch = () => {
+  // #3601: `withoutBond` launches the same market with the v2.2 capacity bond left out (the user's explicit choice
+  // after the bond refusal); otherwise the launch is exactly what the wizard shows.
+  const launch = (withoutBond: boolean) => {
     if (!allValid || !oracleSettled || !publicKey) return;
     // #3320: the button is disabled at a known limit; this keeps any other caller of handleLaunch
     // from building a transaction for a market that would be refused a live price.
@@ -1066,7 +1069,7 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
       // InvalidSlabLen. v17 has no slab tiers; maxAccounts is deliberately omitted too.
       // P3: vault-owned LP + the creator's junior tranche (= the Liquidity amount).
       ...(growthWithTiers ? { growth: growthWithTiers } : {}),
-      ...(v22Params ? { v22: v22Params } : {}),
+      ...(v22Params ? { v22: withoutBond ? { ...v22Params, bond: undefined } : v22Params } : {}),
       p3: wizardP3Params(
         p3WizardEnabled(),
         parseHumanAmount(wizard.lpCollateral || "0", decimals),
@@ -1104,9 +1107,37 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
     if (!gate.ok) return;
     create(applySameBrowserPin(applyRecoveredLaunch(params, gate.resume), activeSameBrowserPin), resumeFromStep ?? undefined);
   };
+  const handleLaunch = () => launch(false);
+  // #3601: after the bond refusal nothing is on chain, so both choices are a fresh launch: the same one again (the
+  // single-transaction path can fail on a passing RPC blip), or the same market without the bond, unticked in the
+  // form too so what the user sees matches what launches.
+  const bondRefusal = createState.error === bondNeedsSingleTxMessage || createState.error === bondBundleTooLargeMessage;
+  // One fresh launch per refusal: each click makes a new slab keypair, so a double click would start two launches.
+  // Re-armed when the error changes (the next attempt clears it, a new refusal sets it again).
+  const bondChoiceUsedRef = useRef(false);
+  useEffect(() => {
+    bondChoiceUsedRef.current = false;
+  }, [createState.error]);
+  const handleBondTryAgain = () => {
+    if (bondChoiceUsedRef.current) return;
+    bondChoiceUsedRef.current = true;
+    launch(false);
+  };
+  const handleLaunchWithoutBond = () => {
+    if (bondChoiceUsedRef.current) return;
+    bondChoiceUsedRef.current = true;
+    setWizard((prev) => ({ ...prev, v22: { ...(prev.v22 ?? {}), bond: false } }));
+    launch(true);
+  };
 
   // Retry from failed step
   const handleRetry = () => {
+    // #3601: a bond launch that failed at step 0 (declined prompt, simulation) left nothing on chain and can only go as
+    // one transaction: Continue is a fresh launch, not the step-by-step path (which refuses a bond).
+    if (v22Params?.bond && createState.step === 0 && resumeFromStep === null) {
+      launch(false);
+      return;
+    }
     // Never a silent no-op: a Retry that does nothing reads as a hung launch. Say why.
     const blocked = retryBlockedReason({ hasWallet: !!publicKey, configValid, step: createState.step, hasSlab: !!createState.slabAddress });
     setRetryNote(blocked);
@@ -1278,6 +1309,11 @@ export const CreateMarketWizard: FC<{ initialMint?: string; /** /create?resume=<
           state={createState}
           onReset={handleReset}
           onRetry={handleRetry}
+          bondChoice={bondRefusal ? {
+            // Too large is not a passing failure: the same launch would be refused the same way.
+            onTryAgain: createState.error === bondNeedsSingleTxMessage ? handleBondTryAgain : undefined,
+            onLaunchWithoutBond: handleLaunchWithoutBond,
+          } : undefined}
         />
       </>
     );

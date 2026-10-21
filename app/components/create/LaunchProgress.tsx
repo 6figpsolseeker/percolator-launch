@@ -33,6 +33,12 @@ interface LaunchProgressProps {
   };
   onReset: () => void;
   onRetry?: () => void;
+  /**
+   * #3601: the launch was refused because its capacity bond needs one transaction. Continue would take the
+   * step-by-step path, which has no bond, so the error offers these instead: the same launch again (absent when
+   * it would be refused the same way) or the launch without the bond.
+   */
+  bondChoice?: { onTryAgain?: () => void; onLaunchWithoutBond: () => void };
 }
 
 /**
@@ -78,7 +84,7 @@ const STEP_LABELS = [
  * Step-by-step signing progress overlay.
  * Replaces the review panel after submit.
  */
-export const LaunchProgress: FC<LaunchProgressProps> = ({ state, onReset, onRetry }) => {
+export const LaunchProgress: FC<LaunchProgressProps> = ({ state, onReset, onRetry, bondChoice }) => {
   // W10 fix (2026-07-08): the recovery panel used to gate on `state.step >= 1 &&
   // state.slabAddress` — component-local state that never advances past 0 (and never
   // gets slabAddress set) when Step 0's confirmation THROWS client-side (e.g. a
@@ -326,7 +332,28 @@ export const LaunchProgress: FC<LaunchProgressProps> = ({ state, onReset, onRetr
             <BatchFallbackNote reason={state.batchFallbackReason} />
           )}
           <div className="mt-3 flex flex-wrap gap-2">
-            {onRetry && (
+            {bondChoice ? (
+              <>
+                {bondChoice.onTryAgain && (
+                  <button
+                    type="button"
+                    onClick={bondChoice.onTryAgain}
+                    data-testid="wizard-bond-try-again"
+                    className="border border-[var(--short)]/30 bg-[var(--short)]/[0.08] px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--short)] hover:bg-[var(--short)]/[0.15] transition-colors min-h-[44px]"
+                  >
+                    Try again
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={bondChoice.onLaunchWithoutBond}
+                  data-testid="wizard-bond-launch-without"
+                  className="border border-[var(--short)]/30 bg-[var(--short)]/[0.08] px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--short)] hover:bg-[var(--short)]/[0.15] transition-colors min-h-[44px]"
+                >
+                  Launch without the bond
+                </button>
+              </>
+            ) : onRetry && (
               <button
                 type="button"
                 onClick={onRetry}

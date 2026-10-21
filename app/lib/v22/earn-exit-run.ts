@@ -6,7 +6,8 @@
  *  1. QUOTE first: plan with the stale portfolios as inline refresh accounts, SIMULATE (floor 1 atom, explicit compute
  *     budget), read the payout from the redeemer's token balance change. Nothing is sent, nothing is signed.
  *  2. 118 while quoting: re-read the stale set, re-plan, wait, simulate again (bounded), saying only "Refreshing positions…".
- *  3. The quoted minimum (quote - at most 5 bps) is shown BEFORE signing; `confirm` sends exactly that floor.
+ *  3. The quoted minimum (quote - at most 5 bps; a cooldown `request`: 10% under the estimate, #3600) is shown BEFORE
+ *     signing; `confirm` sends exactly that floor.
  *  4. 118 at send time: re-plan and send again inside the same action when the new floor is not below the one the user
  *     confirmed (the user's consent is "at least X"); 117 at send time: RE-QUOTE and hand the new minimum back for one confirm.
  *  5. A compute overrun is never reported as 118.
@@ -23,6 +24,7 @@ import {
   type RefreshCandidateV22,
 } from "./sdk";
 import { buildExitPlan, type ExitContext } from "./earn-exit";
+import { earnRequestFloorAtoms } from "@/lib/limits/earn-ixs";
 import {
   EXIT_MAX_COMPUTE_UNITS,
   classifyExitError,
@@ -74,7 +76,7 @@ export interface ExitQuote {
   mode: ExitMode;
   /** Simulated payout (atoms). For `request` mode: the caller-supplied estimate. */
   quote: bigint;
-  /** The signed floor: quote - at most 5 bps. */
+  /** The signed floor: quote - at most 5 bps (`request`: EARN_REQUEST_FLOOR_BPS under the estimate). */
   minPayout: bigint;
   /** Stale portfolios still needing a refresh after the plan (drives the dip note). */
   staleCount: number;
@@ -141,11 +143,9 @@ export async function quoteExit(input: ExitRunInput, deps: ExitRunDeps): Promise
     // A request cannot be simulated until its cooldown has passed: the floor rides on the 76 from the par estimate.
     const est = input.estimateAtoms ?? 0n;
     if (est <= 0n) return { status: "failed", error: new Error("no estimate for the request") };
-    const plan = buildExitPlan(ctx, []);
-    const f = plan.finalize(est);
     return {
       status: "quoted",
-      quote: { mode, quote: est, minPayout: f.minPayoutAtoms, staleCount: 0, refreshSelected: 0, refreshDeferred: 0, computeUnits: COMPUTE_PRESETS_V22.requestRedeem.units, estimate: true },
+      quote: { mode, quote: est, minPayout: earnRequestFloorAtoms(est), staleCount: 0, refreshSelected: 0, refreshDeferred: 0, computeUnits: COMPUTE_PRESETS_V22.requestRedeem.units, estimate: true },
     };
   }
   let state: ExitRetryState = initialExitRetryState();
@@ -225,10 +225,22 @@ export async function quoteExit(input: ExitRunInput, deps: ExitRunDeps): Promise
   }
 }
 
+/**
+ * #3600: a request's floor is STORED and binds every later 77 (the program pays `max(wire, stored)`), after a cooldown
+ * nobody can simulate across. 5 bps under the par estimate turned ordinary NAV drift into a 117 on every collect, so a
+ * request takes the flag-off floor (EARN_REQUEST_FLOOR_BPS, 10%, AUD-S1-18 / #3582). `pair` and `execute` keep the SDK's
+ * 5 bps: their floor comes from a simulation of the same transaction.
+ */
 function instructionsFor(input: ExitRunInput, plan: EarnExitPlanV22, quote: bigint, units: number): { ixs: TransactionInstruction[]; minPayout: bigint } {
   void units;
+  if (input.mode === "request") {
+    // Built here, not by plan.finalize: the SDK's floor helper refuses anything wider than 5 bps.
+    const { ctx } = input;
+    const minPayout = earnRequestFloorAtoms(quote);
+    return { ixs: [buildRequestRedeemLpSharesIxV22(ctx.market, ctx.redeemer, ctx.redeemerLpAta, ctx.shares, minPayout, ctx.keeperOk === true)], minPayout };
+  }
   const f = plan.finalize(quote);
-  const body = input.mode === "pair" ? [f.requestIx, f.executeIx] : input.mode === "execute" ? [f.executeIx] : [f.requestIx];
+  const body = input.mode === "pair" ? [f.requestIx, f.executeIx] : [f.executeIx];
   return { ixs: body, minPayout: f.minPayoutAtoms };
 }
 

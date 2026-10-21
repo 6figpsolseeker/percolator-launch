@@ -133,10 +133,37 @@ describe("v22 earn exit runner", () => {
     const { d: d2 } = deps({});
     const r = await quoteExit({ ...input("request"), estimateAtoms: 5_000_000n }, d2);
     expect(d2.simulate).not.toHaveBeenCalled();
+    expect(r.status).toBe("quoted");
     if (r.status === "quoted") {
       expect(r.quote.estimate).toBe(true);
-      expect(r.quote.minPayout).toBe(4_997_500n);
+      // #3600: 10% under the estimate (EARN_REQUEST_FLOOR_BPS), as the flag-off path (#3582); was 5 bps (4_997_500).
+      expect(r.quote.minPayout).toBe(4_500_000n);
     }
+  });
+
+  it("#3600: a request SIGNS the 10% floor it showed (one 76, stored floor binds every later 77)", async () => {
+    const { d } = deps({});
+    const inp = { ...input("request"), estimateAtoms: 5_000_000n };
+    const r = await quoteExit(inp, d);
+    if (r.status !== "quoted") throw new Error(`not quoted: ${r.status}`);
+    const s = await sendExit(inp, r.quote, d);
+    expect(s.status).toBe("sent");
+    const sent = (d.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as TransactionInstruction[];
+    expect(sent.map((i) => i.data[0]).filter((t) => t === 76 || t === 77)).toEqual([76]);
+    // 76 data: [tag u8][shares u128][min_payout u64][keeper_ok u8]
+    expect(sent.find((i) => i.data[0] === 76)!.data.readBigUInt64LE(1 + 16)).toBe(4_500_000n);
+  });
+
+  it("#3600 CONTROL: pair mode keeps its simulated 5 bps floor on both 76 and 77", async () => {
+    const { d } = deps({ sims: [ok(1_000_000n)] });
+    const r = await quoteExit(input("pair"), d);
+    if (r.status !== "quoted") throw new Error(`not quoted: ${r.status}`);
+    expect(r.quote.minPayout).toBe(999_500n);
+    await sendExit(input("pair"), r.quote, d);
+    const sent = (d.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as TransactionInstruction[];
+    expect(sent.find((i) => i.data[0] === 76)!.data.readBigUInt64LE(1 + 16)).toBe(999_500n);
+    // 77's min_payout sits at byte 3, as in earn-exit.test.ts
+    expect(sent.find((i) => i.data[0] === 77)!.data.readBigUInt64LE(3)).toBe(999_500n);
   });
 });
 

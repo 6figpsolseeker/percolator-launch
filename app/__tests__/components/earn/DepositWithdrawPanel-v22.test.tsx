@@ -3,7 +3,8 @@
  * (no one-step "request" button) and an elapsed pending redemption is claimed through the same quote (a bare legacy
  * tag 77 would be answered 118 on a book that is not loss-current). Flag off or params absent: the existing UI, untouched.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import "@testing-library/jest-dom";
 import { PublicKey } from "@solana/web3.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __setDevnetV22ForTest } from "@/lib/v22/flag";
@@ -38,7 +39,7 @@ const base = {
   onWithdraw: vi.fn(),
 };
 const exitV22 = { market: new PublicKey("11111111111111111111111111111112"), programId: new PublicKey("11111111111111111111111111111113"), collateralMint: new PublicKey("11111111111111111111111111111114"), sourceDomain: 0 };
-const api = (phase: string, quote: unknown = null) => ({ state: { phase, quote, requoted: false, message: null, signature: null }, getQuote: vi.fn(), confirm: vi.fn() });
+const api = (phase: string, quote: unknown = null, extra: Record<string, unknown> = {}) => ({ state: { phase, quote, requoted: false, message: null, signature: null, ...extra }, getQuote: vi.fn(), confirm: vi.fn(), reset: vi.fn() });
 const openWithdraw = () => fireEvent.click(screen.getAllByTestId("earn-tab").find((t) => t.dataset.tab === "withdraw")!);
 
 beforeEach(() => {
@@ -89,6 +90,38 @@ describe("pending redemption", () => {
     render(<DepositWithdrawPanel {...pending} cooldownElapsed={false} cooldownRemainingSlots={150n} exitV22={exitV22} />);
     expect(screen.getByTestId("earn-pending-withdrawal").dataset.phase).toBe("counting");
     expect(screen.queryByTestId("earn-pending-claim-v22")).toBeNull();
+  });
+  // #3615: a stored floor above today's payout refuses every collect; the v2.2 card must offer the way out.
+  it("collect refused on the stored floor + flag on: 'Cancel and request again' runs the resize with the pending shares", async () => {
+    __setDevnetV22ForTest(true);
+    const exit = api("error", null, { floorStuck: true });
+    useEarnExitV22.mockReturnValue(exit);
+    const onResizeRedemption = vi.fn(async () => {});
+    render(<DepositWithdrawPanel {...pending} exitV22={exitV22} onResizeRedemption={onResizeRedemption} />);
+    await act(async () => { fireEvent.click(screen.getByTestId("earn-pending-rerequest-v22")); });
+    expect(onResizeRedemption).toHaveBeenCalledWith(9_523_809n);
+    expect(exit.reset).toHaveBeenCalled();
+  });
+  it("CONTROL: any other collect failure (RPC, declined prompt) offers no cancel", () => {
+    __setDevnetV22ForTest(true);
+    useEarnExitV22.mockReturnValue(api("error"));
+    render(<DepositWithdrawPanel {...pending} exitV22={exitV22} onResizeRedemption={vi.fn()} />);
+    expect(screen.queryByTestId("earn-pending-rerequest-v22")).toBeNull();
+  });
+  it("collect failed + the re-request fails: the reason shows and it can be tried again", async () => {
+    __setDevnetV22ForTest(true);
+    useEarnExitV22.mockReturnValue(api("error", null, { floorStuck: true }));
+    const onResizeRedemption = vi.fn(async () => { throw new Error("User rejected the request."); });
+    render(<DepositWithdrawPanel {...pending} exitV22={exitV22} onResizeRedemption={onResizeRedemption} />);
+    await act(async () => { fireEvent.click(screen.getByTestId("earn-pending-rerequest-v22")); });
+    expect(screen.getByRole("alert").textContent).toBeTruthy();
+    expect(screen.getByTestId("earn-pending-rerequest-v22")).not.toBeDisabled();
+  });
+  it("CONTROL: a quote that works offers no cancel", () => {
+    __setDevnetV22ForTest(true);
+    useEarnExitV22.mockReturnValue(api("quoted", { quote: 1_000_000n, minPayout: 999_500n }));
+    render(<DepositWithdrawPanel {...pending} exitV22={exitV22} onResizeRedemption={vi.fn()} />);
+    expect(screen.queryByTestId("earn-pending-rerequest-v22")).toBeNull();
   });
   it("CONTROL flag off: the legacy 'Finish withdrawal' claim", () => {
     __setDevnetV22ForTest(false); // explicit off: independent of NEXT_PUBLIC_DEVNET_V22 in the environment

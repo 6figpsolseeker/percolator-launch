@@ -142,3 +142,22 @@ describe("N3 reader: rescan is one fresh scan that replaces the remembered keys"
     expect(fetchMany.mock.calls[0][0].length).toBe(2);
   });
 });
+
+// #3615: the collect card offers "cancel and request again" only for the floor-stuck failure.
+describe("floor-stuck failure is flagged", () => {
+  it("execute mode refused on the stored floor: floorStuck is set", async () => {
+    const { V22_COPY } = await import("@/lib/v22/copy");
+    quoteExit.mockResolvedValue({ status: "failed", error: new Error(V22_COPY.earnExit.floorStuck) });
+    const { result } = renderHook(() => useEarnExitV22({ ...base, mode: "execute", shares: 100n }));
+    await act(async () => void (await result.current.getQuote()));
+    expect(result.current.state.phase).toBe("error");
+    expect(result.current.state.floorStuck).toBe(true);
+  });
+  it("CONTROL: any other failure leaves it unset", async () => {
+    quoteExit.mockResolvedValue({ status: "failed", error: new Error("The exit could not be priced right now. Try again shortly.") });
+    const { result } = renderHook(() => useEarnExitV22({ ...base, mode: "execute", shares: 100n }));
+    await act(async () => void (await result.current.getQuote()));
+    expect(result.current.state.phase).toBe("error");
+    expect(result.current.state.floorStuck).toBeFalsy();
+  });
+});

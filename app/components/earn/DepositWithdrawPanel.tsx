@@ -148,11 +148,49 @@ function ExitV22Step({ ex, shares, estimate, flow, decimals, symbol, valid }: { 
  * v2.2: collecting a pending redemption is tag 77 too, so it needs the same floor, the inline refresh and the quote
  * shown first (the legacy one-step claim sends a bare 77 that a v2.2 vault answers with 118 on a book that is not loss-current).
  */
-function PendingClaimV22({ ex, shares, decimals, symbol }: { ex: NonNullable<DepositWithdrawPanelProps['exitV22']>; shares: bigint; decimals: number; symbol: string }) {
+function PendingClaimV22({ ex, shares, decimals, symbol, onRerequest }: { ex: NonNullable<DepositWithdrawPanelProps['exitV22']>; shares: bigint; decimals: number; symbol: string; onRerequest?: (shares: bigint) => Promise<void> }) {
   const exit = useEarnExitV22({ ...ex, shares, mode: 'execute', estimateAtoms: 0n });
+  const [rerequesting, setRerequesting] = useState(false);
+  const [rerequestError, setRerequestError] = useState<string | null>(null);
+  // #3615: a request whose stored floor is above today's payout is refused (117) on every collect, and this card
+  // replaces EarnPendingWithdrawal (the flag-off home of the resize). Offer the same way out: cancel (81) and
+  // request again at today's price (resizeRedemption). The cooldown restarts; if the new request fails, the
+  // shares are back in the wallet.
+  const rerequest = async () => {
+    if (!onRerequest || rerequesting) return;
+    setRerequesting(true);
+    setRerequestError(null);
+    try {
+      await onRerequest(shares);
+      // A vault with no cooldown keeps this card mounted: drop the old failure with it.
+      exit.reset();
+    } catch (e) {
+      setRerequestError(earnErrorMessage(e, 'claim'));
+    } finally {
+      setRerequesting(false);
+    }
+  };
   return (
     <div data-testid="earn-pending-claim-v22" className="mx-5 mt-3">
-      <EarnExitQuote exit={exit} decimals={decimals} symbol={symbol} canQuote={shares > 0n} />
+      {/* No collect while the cancel is in flight: a 77 would race the 81. */}
+      <EarnExitQuote exit={exit} decimals={decimals} symbol={symbol} canQuote={shares > 0n && !rerequesting} />
+      {/* Only the floor-stuck refusal: an RPC failure or a declined wallet prompt is fixed by trying again, and a
+          cancel would restart the wait for nothing. */}
+      {exit.state.phase === 'error' && exit.state.floorStuck && onRerequest && (
+        <div className="mt-2">
+          <button
+            type="button"
+            data-testid="earn-pending-rerequest-v22"
+            disabled={rerequesting}
+            onClick={() => void rerequest()}
+            className="text-[11px] text-[var(--accent)] underline disabled:opacity-50"
+          >
+            {rerequesting ? 'Requesting again…' : "Cancel and request again at today's price"}
+          </button>
+          <p className="mt-1 text-[10px] text-[var(--text-secondary)]">The wait starts over. Your shares stay yours either way.</p>
+          {rerequestError && <p role="alert" className="mt-1 text-[11px] text-[var(--short)]">{rerequestError}</p>}
+        </div>
+      )}
     </div>
   );
 }
@@ -489,7 +527,7 @@ export function DepositWithdrawPanel({
       {/* UX WP-4: the pending withdrawal card (both tabs). A full request escrows every share, so
           this is also what keeps the payout reachable (S1). It counts as an active position. */}
       {hasPendingRedemption && isDevnetV22Enabled() && exitV22 && cooldownElapsed ? (
-        <PendingClaimV22 ex={exitV22} shares={pendingRedemptionShares} decimals={decimals} symbol={collateralSymbol} />
+        <PendingClaimV22 ex={exitV22} shares={pendingRedemptionShares} decimals={decimals} symbol={collateralSymbol} onRerequest={onResizeRedemption} />
       ) : hasPendingRedemption && (
         <EarnPendingWithdrawal
           amountLabel={pendingAtoms !== null ? `${formatUsdc(pendingAtoms, decimals)} ${collateralSymbol}` : `${formatRaw(pendingRedemptionShares, shareDecimals)} shares`}

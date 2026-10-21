@@ -54,9 +54,17 @@ export interface EarnExitState {
   signature: string | null;
   /** F6: the inputs + time the quote was made for (null with no quote). */
   bound?: BoundQuote | null;
+  /**
+   * #3615: set when a collect (execute) failed because the stored request floor is above today's payout, the one
+   * failure a cancel-and-request-again fixes. `message` can't carry this: it is resolved to plain copy.
+   */
+  floorStuck?: boolean;
 }
 
 const IDLE: EarnExitState = { phase: 'idle', quote: null, requoted: false, message: null, signature: null, bound: null };
+
+/** The runner's own floor-stuck failure (lib/v22/earn-exit-run.ts, execute mode, 117 on every quote). */
+const isFloorStuck = (e: unknown): boolean => e instanceof Error && e.message === V22_COPY.earnExit.floorStuck;
 
 export const __clock = { now: () => Date.now() };
 
@@ -205,7 +213,7 @@ export function useEarnExitV22(p: EarnExitParams) {
       if (id !== runId.current) return;
       if (r.status === 'quoted') setState({ phase: 'quoted', quote: r.quote, requoted: false, message: null, signature: null, bound: { key: keyAtStart, at: __clock.now() } });
       else if (r.status === 'wait-for-sweep') setState({ ...IDLE, phase: 'wait', message: V22_COPY.earnExit.wait });
-      else setState({ ...IDLE, phase: 'error', message: failMessage(r.error) });
+      else setState({ ...IDLE, phase: 'error', message: failMessage(r.error), floorStuck: isFloorStuck(r.error) });
     } catch (e) {
       if (id === runId.current) setState({ ...IDLE, phase: 'error', message: failMessage(e) });
     }

@@ -8,12 +8,14 @@ import { PublicKey } from "@solana/web3.js";
 
 const h = vi.hoisted(() => ({
   recover: vi.fn(), adopt: vi.fn(), account: vi.fn(), conn: null as unknown as { connection: unknown }, wallet: null as unknown,
-  oi: { insuranceBalance: 0n } as { insuranceBalance: bigint }, isV17: true, marketauth: null as unknown as PublicKey, complete: false, header: { mode: 0, cTot: 0n, materializedPortfolioCount: 0n },
+  oi: { insuranceBalance: 0n } as { insuranceBalance: bigint }, isV17: true, unknownVersion: false, marketauth: null as unknown as PublicKey, complete: false, header: { mode: 0, cTot: 0n, materializedPortfolioCount: 0n },
 }));
 const WALLET = new PublicKey("EXC8LS3YzsbyadhaQPqaeGjb2ttfGgDLno9jeCFWqqyi");
 const OTHER = new PublicKey("DrrDGxiojUPHnLZaNw7DN6JYoEKKqu3bG4PmNjv8P1yG");
 const SLAB = new PublicKey("GrKZUtyeaqbg1Q1J1kPWznui92sbLpX5F62LrBVGkifL");
-vi.mock("@percolatorct/sdk", async (orig) => ({ ...(await orig<object>()), isV17Account: () => h.isV17, parseWrapperConfigV17: () => ({ marketauth: h.marketauth }), parseMarketGroupV17OI: () => h.oi, V17_HEADER_LEN: 0 }));
+vi.mock("@percolatorct/sdk", async (orig) => ({ ...(await orig<object>()), parseWrapperConfigV17: () => ({ marketauth: h.marketauth }), V17_HEADER_LEN: 0 }));
+// #3603: the market check and OI read go through the layout-aware helpers.
+vi.mock("@/lib/v22/layout", async (orig) => ({ ...(await orig<object>()), isWrapperMarketAccount: () => h.isV17, isUnknownWrapperVersion: () => h.unknownVersion, parseMarketOI: () => h.oi }));
 vi.mock("@/lib/v18-wire", () => ({ readMarketGroupHeader: () => h.header }));
 vi.mock("@/lib/market-completeness", () => ({ isMarketauthComplete: () => h.complete }));
 vi.mock("@/hooks/useWalletCompat", () => ({ useWalletCompat: () => h.wallet, useConnectionCompat: () => h.conn }));
@@ -29,7 +31,7 @@ const bytes = new Uint8Array(8);
 beforeEach(() => {
   h.conn = { connection: { getAccountInfo: h.account } };
   h.wallet = { publicKey: WALLET };
-  Object.assign(h, { oi: { insuranceBalance: 0n } as { insuranceBalance: bigint }, isV17: true, marketauth: WALLET, complete: false, header: { mode: 0, cTot: 0n, materializedPortfolioCount: 0n } });
+  Object.assign(h, { oi: { insuranceBalance: 0n } as { insuranceBalance: bigint }, isV17: true, unknownVersion: false, marketauth: WALLET, complete: false, header: { mode: 0, cTot: 0n, materializedPortfolioCount: 0n } });
   h.recover.mockReset(); h.adopt.mockReset();
   h.account.mockReset().mockResolvedValue({ data: Buffer.from(bytes) });
 });

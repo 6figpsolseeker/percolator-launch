@@ -3,7 +3,8 @@
 import { FC, useEffect, useState } from "react";
 import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
-import { isV17Account, parseMarketGroupV17OI, parseWrapperConfigV17, V17_HEADER_LEN } from "@percolatorct/sdk";
+import { parseWrapperConfigV17, V17_HEADER_LEN } from "@percolatorct/sdk";
+import { isUnknownWrapperVersion, isWrapperMarketAccount, parseMarketOI } from "@/lib/v22/layout";
 import { useConnectionCompat, useWalletCompat } from "@/hooks/useWalletCompat";
 import { searchVerifiedPools } from "@/hooks/useDexPoolSearch";
 import { fetchTokenMeta } from "@/lib/tokenMeta";
@@ -44,8 +45,12 @@ export function classifyResumeSlab(
   completeFn: (marketauth: PublicKey, slab: PublicKey) => boolean = isMarketauthComplete,
 ): ResumeChainState {
   if (!data) return { kind: "not-a-market" };
+  // #3603: by the account's VERSION (lib/v22/layout): the installed SDK's isV17Account accepts VERSION 18 only, so a
+  // v2.2 launch (VERSION 19) read as "not an initialised market". A wrapper VERSION this build can't decode is
+  // "couldn't read", never "nothing to continue".
+  if (isUnknownWrapperVersion(data)) return { kind: "unreadable" };
   try {
-    if (!isV17Account(data)) return { kind: "not-a-market" };
+    if (!isWrapperMarketAccount(data)) return { kind: "not-a-market" };
     const cfg = parseWrapperConfigV17(data, V17_HEADER_LEN);
     // The creator is marketauth until the final step rotates it. Anyone else gets nothing here.
     if (completeFn(cfg.marketauth, slab)) return { kind: "finished" };
@@ -53,7 +58,7 @@ export function classifyResumeSlab(
     const h = readMarketGroupHeader(data);
     let insuranceAtoms: bigint | null = null;
     try {
-      insuranceAtoms = parseMarketGroupV17OI(data).insuranceBalance;
+      insuranceAtoms = parseMarketOI(data).insuranceBalance;
     } catch {
       insuranceAtoms = null;
     }

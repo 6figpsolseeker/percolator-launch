@@ -26,7 +26,6 @@ function stakeProgramId(): PublicKey {
 export function useStakeFirstLoss(slabAddress: string, collateralMint: string) {
   const { connection } = useConnectionCompat();
   const wallet = useWalletCompat();
-  const [pool, setPool] = useState<StakePoolV5 | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inflight = useRef(false);
@@ -39,13 +38,26 @@ export function useStakeFirstLoss(slabAddress: string, collateralMint: string) {
     return readFirstLossPool(new Uint8Array(info.data));
   }, [connection, slabAddress]);
 
+  // #3607: the read's own outcome, keyed to the slab (and retry) it was read for, so a pending or failed read is never
+  // taken for "not a first-loss pool", and another slab's result never shows for one render after a switch.
+  const [readKey, setReadKey] = useState(0);
+  const rereadPool = useCallback(() => setReadKey((k) => k + 1), []);
+  const key = `${slabAddress}:${readKey}`;
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const [result, setResult] = useState<{ key: string; pool: StakePoolV5 | null; failed: boolean } | null>(null);
+  const current = enabled && result?.key === key ? result : null;
+  const pool = current?.pool ?? null;
+  const poolRead: 'reading' | 'failed' | 'done' = !enabled ? 'done' : !current ? 'reading' : current.failed ? 'failed' : 'done';
+
   useEffect(() => {
-    setPool(null);
     if (!enabled) return;
     let cancelled = false;
-    read().then((p) => { if (!cancelled) setPool(p); }).catch(() => { if (!cancelled) setPool(null); });
+    read()
+      .then((p) => { if (!cancelled) setResult({ key, pool: p, failed: false }); })
+      .catch(() => { if (!cancelled) setResult({ key, pool: null, failed: true }); });
     return () => { cancelled = true; };
-  }, [enabled, read]);
+  }, [enabled, read, key]);
 
   const deposit = useCallback(
     async (amount: bigint, accepted: ConsentView) => {
@@ -60,7 +72,7 @@ export function useStakeFirstLoss(slabAddress: string, collateralMint: string) {
         if (!fresh) throw new Error('Stake pool not available for this market.');
         const now = consentViewOf(fresh);
         if (consentKey(now) !== consentKey(accepted)) {
-          setPool(fresh);
+          setResult({ key: keyRef.current, pool: fresh, failed: false });
           throw new ConsentChangedError(now);
         }
         const programId = stakeProgramId();
@@ -87,5 +99,5 @@ export function useStakeFirstLoss(slabAddress: string, collateralMint: string) {
     [connection, wallet, read, slabAddress, collateralMint],
   );
 
-  return { pool, deposit, loading, error };
+  return { pool, poolRead, rereadPool, deposit, loading, error };
 }

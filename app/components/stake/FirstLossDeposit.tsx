@@ -2,7 +2,7 @@
 
 /**
  * Deposit into a first-loss (stake v5) pool: the pool's target, liquid buffer and rebalance band, the consent
- * text v2 verbatim, a required checkbox, then Deposit. Renders nothing unless the pool is a v5 first-loss pool.
+ * text v2 verbatim, a required checkbox, then Deposit. Until the v5 pool is read it says so (reading, read failed with a retry, or not available).
  */
 import { errorText } from "@/lib/error-text";
 import { useEffect, useState } from 'react';
@@ -12,7 +12,7 @@ import { STAKE_CONSENT_TEXT_V2, V22_COPY, consentDisplay } from '@/lib/v22/copy'
 import { parseHumanAmount } from '@/lib/parseAmount';
 
 export function FirstLossDeposit({ slabAddress, collateralMint, decimals = 6, deployedUsd, onDone }: { slabAddress: string; collateralMint: string; decimals?: number; /** Insurance deployed for this pool, USD; null = unreadable; undefined = not shown. */ deployedUsd?: number | null; onDone?: () => void }) {
-  const { pool, deposit, loading } = useStakeFirstLoss(slabAddress, collateralMint);
+  const { pool, poolRead, rereadPool, deposit, loading } = useStakeFirstLoss(slabAddress, collateralMint);
   const [amount, setAmount] = useState('');
   const [accepted, setAccepted] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -24,7 +24,19 @@ export function FirstLossDeposit({ slabAddress, collateralMint, decimals = 6, de
     setAccepted((prev) => (prev !== null && prev !== key ? null : prev));
   }, [key]);
 
-  if (!view) return null;
+  // #3607: the page sends every first-loss pool here, so a pool not (yet) read says why instead of rendering nothing.
+  if (!view) {
+    if (poolRead === 'reading') return <p data-testid="first-loss-reading" className="text-[11px] text-[var(--text-muted)]">Reading this pool…</p>;
+    if (poolRead === 'done') return <p data-testid="first-loss-no-pool" className="text-[11px] text-[var(--text-secondary)]">This pool isn&apos;t available for deposit right now.</p>;
+    return (
+      <p role="alert" data-testid="first-loss-read-error" className="text-[11px] text-[var(--text-secondary)]">
+        Couldn&apos;t read this pool.{' '}
+        <button type="button" onClick={rereadPool} className="text-[var(--accent-text)] transition-colors hover:text-[var(--accent)]">
+          Try again
+        </button>
+      </p>
+    );
+  }
   // F11: the text below is consent text v2; a pool on another consent version gets no deposit UI at all.
   if (!consentTextMatches(view)) return <p data-testid="first-loss-unavailable" className="text-[11px] text-[var(--text-secondary)]">{V22_COPY.stake.consentUnavailable}</p>;
   let atoms: bigint | null = null;

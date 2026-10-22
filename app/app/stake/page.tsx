@@ -769,7 +769,8 @@ function DepositWidget({
   });
 
   // Devnet v2.2 (flag-gated): a stake-v5 first-loss pool gets the consent deposit instead of the plain form.
-  // `firstLoss.pool` is null with the flag off and for every other pool, so nothing changes there.
+  // `firstLoss.pool` is null with the flag off and for every other pool, so nothing changes there. A pool the API labels
+  // first-loss gets the consent deposit too, which says so while its chain read is pending or failed (#3607).
   const firstLoss = useStakeFirstLoss(pool?.slabAddress ?? "", pool?.collateralMint ?? "");
 
   // Withdraw for the currently SELECTED pool — same tx builder YourPositionPanel
@@ -981,7 +982,8 @@ function DepositWidget({
           )}
         </div>
 
-        {mode === "deposit" && firstLoss.pool ? (
+        {/* #3607: a pool the API labels first-loss never gets the plain form (its deposit is refused, 33), even while its chain read is pending or failed. */}
+        {mode === "deposit" && (firstLoss.pool || (isDevnetV22Enabled() && pool?.stakeKind === "first-loss")) ? (
           <FirstLossDeposit
             slabAddress={pool?.slabAddress ?? ""}
             collateralMint={pool?.collateralMint ?? ""}

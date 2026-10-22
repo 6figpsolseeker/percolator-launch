@@ -22,10 +22,24 @@ beforeEach(() => { hook.state = { pool: pool(), deposit: vi.fn().mockResolvedVal
 afterEach(cleanup);
 
 describe("FirstLossDeposit", () => {
-  it("renders nothing for a pool that is not v5 first-loss", () => {
-    hook.state = { ...hook.state, pool: null };
-    const { container } = render(<FirstLossDeposit {...props} />);
-    expect(container.firstChild).toBeNull();
+  it("a pool that is not v5 first-loss gets no deposit UI, and says so (#3607: the page sends every first-loss pool here)", () => {
+    hook.state = { ...hook.state, pool: null, poolRead: "done" } as typeof hook.state;
+    render(<FirstLossDeposit {...props} />);
+    expect(screen.getByTestId("first-loss-no-pool")).toBeTruthy();
+    expect(screen.queryByTestId("stake-deposit-input")).toBeNull();
+    expect(screen.queryByTestId("first-loss-submit")).toBeNull();
+  });
+
+  it("#3607: while the pool is read, and when the read failed (with Try again), there is no deposit UI", () => {
+    const rereadPool = vi.fn();
+    hook.state = { ...hook.state, pool: null, poolRead: "reading", rereadPool } as typeof hook.state;
+    const { rerender } = render(<FirstLossDeposit {...props} />);
+    expect(screen.getByTestId("first-loss-reading")).toBeTruthy();
+    hook.state = { ...hook.state, poolRead: "failed" } as typeof hook.state;
+    rerender(<FirstLossDeposit {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(rereadPool).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("stake-deposit-input")).toBeNull();
   });
 
   it("shows the target, buffer and hysteresis and the consent text v2 verbatim, paragraph by paragraph", () => {

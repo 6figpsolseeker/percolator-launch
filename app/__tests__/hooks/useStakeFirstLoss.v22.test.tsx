@@ -95,4 +95,28 @@ describe("useStakeFirstLoss", () => {
     expect((err as ConsentChangedError).now.targetBps).toBe(6500);
     expect(m.sendTx).not.toHaveBeenCalled();
   });
+
+  it("#3607: a failed pool read says so (not 'no first-loss pool'), and rereadPool reads it again", async () => {
+    __setDevnetV22ForTest(true);
+    m.conn.getAccountInfo.mockRejectedValue(new Error("429 Too Many Requests"));
+    const { result } = renderHook(() => useStakeFirstLoss(SLAB.toBase58(), MINT.toBase58()));
+    expect(result.current.poolRead).toBe("reading");
+    await waitFor(() => expect(result.current.poolRead).toBe("failed"));
+    expect(result.current.pool).toBeNull();
+    m.conn.getAccountInfo.mockImplementation(async () => info(poolData(5000)));
+    act(() => result.current.rereadPool());
+    await waitFor(() => expect(result.current.pool).not.toBeNull());
+    expect(result.current.poolRead).toBe("done");
+  });
+
+  it("#3607: on a switch to another pool the previous pool's result never shows; the new one is 'reading' at once", async () => {
+    __setDevnetV22ForTest(true);
+    m.conn.getAccountInfo.mockImplementation(async () => info(poolData(5000)));
+    const { result, rerender } = renderHook((p: { slab: string }) => useStakeFirstLoss(p.slab, MINT.toBase58()), { initialProps: { slab: SLAB.toBase58() } });
+    await waitFor(() => expect(result.current.pool).not.toBeNull());
+    m.conn.getAccountInfo.mockImplementation(() => new Promise(() => {})); // the new pool's read never lands
+    rerender({ slab: Keypair.generate().publicKey.toBase58() });
+    expect(result.current.pool).toBeNull();
+    expect(result.current.poolRead).toBe("reading");
+  });
 });

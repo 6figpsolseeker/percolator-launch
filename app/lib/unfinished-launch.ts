@@ -8,7 +8,8 @@
  * its panel compose them, so the wording and the removable/committed decision are testable without a
  * wallet.
  */
-import { parseBackingBucketsV17 } from "@percolatorct/sdk";
+// #3606: the flag-gated wrapper (VERSION 18 and 19); the installed SDK's reads VERSION 18 only.
+import { parseBackingBucketsV17 } from "@/lib/v22/records";
 import { readMarketGroupHeader } from "@/lib/v18-wire";
 
 /** What the indexer writes for a market whose real symbol nothing on chain can supply. */

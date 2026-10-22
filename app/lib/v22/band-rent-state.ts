@@ -114,10 +114,17 @@ export function legBelowHalfMin(absQ: bigint, markE6: bigint, minLegNotionalAtom
  * worth more than a fraction of it (swordcat: min 100 USDC, one lot = 32.12 USDC -> 4 lots = 128.47 USDC; a 120 USDC
  * order rounds down to 3 lots = 96.35 and is refused 113). The copy, the notice and the pre-sign check all use this.
  */
-export function bandMinLeg(view: BandRentView | null): { lots: bigint; minQ: bigint; notionalAtoms: bigint } | null {
+export function bandMinLeg(view: BandRentView | null): { lots: bigint; minQ: bigint; notionalAtoms: bigint; wholeLots: boolean } | null {
   if (!view || !view.band.enabled || view.band.minLegNotionalAtoms <= 0n || view.price.markE6 <= 0n) return null;
+  // #3604: at lotExp 0 a "lot" is one token and an order can be any fraction of one, so rounding up to a whole lot
+  // refused valid orders and showed a minimum of one whole token ($5,000 on a $5,000 token with a 100 USDC minimum).
+  // There the smallest order is the program's exact minimum.
+  if (view.lotExp === 0) {
+    const minQ = bandMinLegExactQ(view)!;
+    return { lots: 0n, minQ, notionalAtoms: (minQ * view.price.markE6) / 1_000_000n, wholeLots: false };
+  }
   const lots = (view.band.minLegNotionalAtoms + view.price.markE6 - 1n) / view.price.markE6; // mark is per lot, atoms
-  return { lots, minQ: lots * 1_000_000n, notionalAtoms: lots * view.price.markE6 };
+  return { lots, minQ: lots * 1_000_000n, notionalAtoms: lots * view.price.markE6, wholeLots: true };
 }
 
 /**

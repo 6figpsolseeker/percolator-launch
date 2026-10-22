@@ -1178,7 +1178,8 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
   // the button funds and trades in one approval (UX WP-6).
   const ticketLocked = needsWallet || accountPending || ((needsAccount || needsDeposit) && !walletHasTokens) || lotGuard !== null;
 
-  const fmtUsdMin = (atoms: bigint, dec: number): string => (Number(atoms) / 10 ** dec).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  // Rounded UP to the cent: a minimum shown rounded down (100.0012 as "100") is refused again when typed (#3604).
+  const fmtUsdMin = (atoms: bigint, dec: number): string => (Math.ceil(Number(atoms) / 10 ** (dec - 2)) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 });
   async function handleTrade(
     snapshotSize?: bigint,
     snapshotLimitPriceE6?: bigint,
@@ -1204,7 +1205,9 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
     if (bandView && legBelowBandMin(bandView, existingPositionSize, direction === "long" ? effectiveSize : -effectiveSize)) {
       const real = bandMinLeg(bandView);
       if (real) {
-        setHumanError(`Below the minimum position size here: ${real.lots} lots (about ${fmtUsdMin(real.notionalAtoms, decimals)} ${collateralSymbol}) or more, or close fully. Nothing was sent.`);
+        // #3604: no lot count on a market without lots (lotExp 0), where the minimum is a fraction of a token.
+        const minLabel = real.wholeLots ? `${real.lots} lots (about ${fmtUsdMin(real.notionalAtoms, decimals)} ${collateralSymbol})` : `${fmtUsdMin(real.notionalAtoms, decimals)} ${collateralSymbol}`;
+        setHumanError(`Below the minimum position size here: ${minLabel} or more, or close fully. Nothing was sent.`);
         return;
       }
     }
@@ -1489,7 +1492,7 @@ const OrderTicketInner: FC<{ slabAddress: string }> = ({ slabAddress }) => {
         // GH#2953: fund-and-trade does not wait and resend; never promise "goes through automatically".
         oneShot: fundingMode,
         // MIN-1: error 113 names the real minimum for this market at this mark.
-        ...(bandMinLeg(bandView) ? { minPositionLabel: `${bandMinLeg(bandView)!.lots} lots (about ${fmtUsdMin(bandMinLeg(bandView)!.notionalAtoms, decimals)} ${collateralSymbol})` } : {}),
+        ...(bandMinLeg(bandView) ? { minPositionLabel: bandMinLeg(bandView)!.wholeLots ? `${bandMinLeg(bandView)!.lots} lots (about ${fmtUsdMin(bandMinLeg(bandView)!.notionalAtoms, decimals)} ${collateralSymbol})` : `${fmtUsdMin(bandMinLeg(bandView)!.notionalAtoms, decimals)} ${collateralSymbol}` } : {}),
         // GH#2959: a 49 on a new position below the market's floor is the floor, not the size.
         ...(belowImFloor ? { imFloorLabel: `$${usd2(imFloor, decimals).replace(/\.00$/, "")}` } : {}),
       });

@@ -272,7 +272,8 @@ describe("RT5-2 round g: an expired Solflare popup through guardSign -> the tick
 
 describe("MIN-1: the ticket refuses a sub-minimum leg BEFORE the wallet, naming the real minimum", () => {
   it("band min 100 USDC at 32.12 per lot: 3 lots is refused with '4 lots (about 128.47 USDC)'; nothing is sent", async () => {
-    mocks.bandView = { assetIndex: 0, lotExp: 0, band: { enabled: true, bandBps: 130, epochSlots: 600n, pinSlots: 9000n, maxPositionsPerSide: 256n, minLegNotionalAtoms: 100_000_000n, recoveryMinutes: 64 }, price: { markE6: 32_116_513n, targetE6: 32_116_513n, lagging: false, floorStuck: false, favourableCloseSide: null }, rent: { enabled: false, maxE9PerSlot: 0n, kinkBps: 0, rateLongE9: 0n, rateShortE9: 0n } };
+    // A LOT market (orders are whole lots); #3604 makes lotExp 0 (no lots) take the exact fractional minimum.
+    mocks.bandView = { assetIndex: 0, lotExp: 4, band: { enabled: true, bandBps: 130, epochSlots: 600n, pinSlots: 9000n, maxPositionsPerSide: 256n, minLegNotionalAtoms: 100_000_000n, recoveryMinutes: 64 }, price: { markE6: 32_116_513n, targetE6: 32_116_513n, lagging: false, floorStuck: false, favourableCloseSide: null }, rent: { enabled: false, maxE9PerSlot: 0n, kinkBps: 0, rateLongE9: 0n, rateShortE9: 0n } };
     render(<OrderTicket slabAddress={SLAB} />);
     await waitFor(() => expect(screen.queryByTestId("trade-submit")).not.toBeNull());
     size("3");
@@ -280,6 +281,28 @@ describe("MIN-1: the ticket refuses a sub-minimum leg BEFORE the wallet, naming 
     await waitFor(() => expect(document.body.textContent).toContain("4 lots (about 128.47 USDC)"));
     expect(mocks.fund).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Minimum position 128.47 USDC (4 lots)".replace(" (4 lots)", "")); // the notice states the same number
+  });
+});
+
+describe("#3604: a band market without lots (lotExp 0, a $10+ token) uses the exact minimum", () => {
+  it("$5,000 token, 100 USDC minimum: a 50 USDC order is refused with '100 USDC' and no lot count", async () => {
+    mocks.bandView = { assetIndex: 0, lotExp: 0, band: { enabled: true, bandBps: 130, epochSlots: 600n, pinSlots: 9000n, maxPositionsPerSide: 256n, minLegNotionalAtoms: 100_000_000n, recoveryMinutes: 64 }, price: { markE6: 5_000_000_000n, targetE6: 5_000_000_000n, lagging: false, floorStuck: false, favourableCloseSide: null }, rent: { enabled: false, maxE9PerSlot: 0n, kinkBps: 0, rateLongE9: 0n, rateShortE9: 0n } };
+    render(<OrderTicket slabAddress={SLAB} />);
+    await waitFor(() => expect(screen.queryByTestId("trade-submit")).not.toBeNull());
+    size("0.01"); // 10,000 Q at the mocked $1 live price: 0.01 token, 50 USDC at the band mark
+    await place();
+    await waitFor(() => expect(document.body.textContent).toContain("Below the minimum position size here: 100 USDC or more"));
+    expect(document.body.textContent).not.toContain("1 lots");
+    expect(mocks.fund).not.toHaveBeenCalled();
+  });
+  it("$13 token: the minimum (100.000004 USDC) is shown rounded UP to 100.01, so typing the shown figure passes", async () => {
+    mocks.bandView = { assetIndex: 0, lotExp: 0, band: { enabled: true, bandBps: 130, epochSlots: 600n, pinSlots: 9000n, maxPositionsPerSide: 256n, minLegNotionalAtoms: 100_000_000n, recoveryMinutes: 64 }, price: { markE6: 13_000_000n, targetE6: 13_000_000n, lagging: false, floorStuck: false, favourableCloseSide: null }, rent: { enabled: false, maxE9PerSlot: 0n, kinkBps: 0, rateLongE9: 0n, rateShortE9: 0n } };
+    render(<OrderTicket slabAddress={SLAB} />);
+    await waitFor(() => expect(screen.queryByTestId("trade-submit")).not.toBeNull());
+    size("0.01");
+    await place();
+    await waitFor(() => expect(document.body.textContent).toContain("Below the minimum position size here: 100.01 USDC or more"));
+    expect(mocks.fund).not.toHaveBeenCalled();
   });
 });
 

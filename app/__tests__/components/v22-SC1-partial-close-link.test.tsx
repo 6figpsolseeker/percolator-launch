@@ -34,7 +34,7 @@ describe("SC-1 follow-up: opens / adds / margin use the same visible link with t
 const swordcat = { assetIndex: 0, lotExp: 4, band: { enabled: true, minLegNotionalAtoms: 100_000_000n }, price: { markE6: 32_116_513n } } as unknown as BandRentView;
 describe("MIN-1: the real minimum on a lot market", () => {
   it("100 USDC min at 32.12 USDC per lot is 4 lots = 128.47 USDC, not 100", () => {
-    expect(bandMinLeg(swordcat)).toEqual({ lots: 4n, minQ: 4_000_000n, notionalAtoms: 128_466_052n });
+    expect(bandMinLeg(swordcat)).toEqual({ lots: 4n, minQ: 4_000_000n, notionalAtoms: 128_466_052n, wholeLots: true });
   });
   it("a 120 USDC order is 3 whole lots (96.35) and is below it; 4 lots is not; a full close is fine; adding to a leg counts the total", () => {
     expect(legBelowBandMin(swordcat, 0n, 3_000_000n)).toBe(true);

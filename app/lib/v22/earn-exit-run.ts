@@ -26,6 +26,7 @@ import {
 import { buildExitPlan, type ExitContext } from "./earn-exit";
 import { earnRequestFloorAtoms } from "@/lib/limits/earn-ixs";
 import {
+  EXIT_LINES,
   EXIT_MAX_COMPUTE_UNITS,
   classifyExitError,
   defaultExitSleep,
@@ -114,19 +115,27 @@ export function withExitBudget(ixs: readonly TransactionInstruction[], units: nu
   return [...computeBudgetPrelude(units), ...ixs];
 }
 
+/**
+ * #3605: a simulated refusal as the user-message mapper reads it (`parseFailure`: name SimulationRefusal + code, the
+ * failing program from the logs), with the plain line as its message for a code the mapper has no copy for.
+ */
+function unpricedRefusal(code: number | undefined, logs: readonly string[]): Error {
+  return Object.assign(new Error(EXIT_LINES.unpriced), { name: "SimulationRefusal", code: code ?? null, logs: [...logs] });
+}
+
 async function simulateOnce(
   input: ExitRunInput,
   deps: ExitRunDeps,
   plan: EarnExitPlanV22,
   units: number,
   prefix: readonly TransactionInstruction[] = [],
-): Promise<{ outcome: ReturnType<typeof classifyRedemptionSimulationV22>; payout: bigint | null }> {
+): Promise<{ outcome: ReturnType<typeof classifyRedemptionSimulationV22>; payout: bigint | null; logs?: readonly string[] }> {
   const { ctx, mode } = input;
   const before = await deps.readDestBalance();
   const req = mode === "pair" ? [buildRequestRedeemLpSharesIxV22(ctx.market, ctx.redeemer, ctx.redeemerLpAta, ctx.shares, 1n, ctx.keeperOk === true)] : [];
   const sim = await deps.simulate([...prefix, ...req, plan.simulationIx], units);
   const outcome = classifyRedemptionSimulationV22({ err: sim.err, logs: sim.logs });
-  if (outcome.kind !== "ok") return { outcome, payout: null };
+  if (outcome.kind !== "ok") return { outcome, payout: null, logs: sim.logs };
   if (sim.destAfter === null) return { outcome: { kind: "other" }, payout: null };
   try {
     return { outcome, payout: payoutFromBalancesV22(before, sim.destAfter) };
@@ -142,7 +151,7 @@ export async function quoteExit(input: ExitRunInput, deps: ExitRunDeps): Promise
   if (mode === "request") {
     // A request cannot be simulated until its cooldown has passed: the floor rides on the 76 from the par estimate.
     const est = input.estimateAtoms ?? 0n;
-    if (est <= 0n) return { status: "failed", error: new Error("no estimate for the request") };
+    if (est <= 0n) return { status: "failed", error: new Error(EXIT_LINES.unpriced) };
     return {
       status: "quoted",
       quote: { mode, quote: est, minPayout: earnRequestFloorAtoms(est), staleCount: 0, refreshSelected: 0, refreshDeferred: 0, computeUnits: COMPUTE_PRESETS_V22.requestRedeem.units, estimate: true },
@@ -166,7 +175,7 @@ export async function quoteExit(input: ExitRunInput, deps: ExitRunDeps): Promise
       rescan = false;
       const plan = buildExitPlan(ctx, stale);
       const u = units ?? plan.computeUnits;
-      const { outcome, payout } = await simulateOnce(input, deps, plan, u, harvest ? [harvest] : []);
+      const { outcome, payout, logs } = await simulateOnce(input, deps, plan, u, harvest ? [harvest] : []);
       if (!harvestTried && outcome.kind === "other" && outcome.code === ERR_HARVEST_PENDING && !harvest && deps.harvestIx) {
         harvestTried = true;
         harvest = await deps.harvestIx();
@@ -176,7 +185,7 @@ export async function quoteExit(input: ExitRunInput, deps: ExitRunDeps): Promise
         harvest = null; // harvested by someone else since: 77 alone again (an 84 now would not re-add it)
         continue;
       }
-      const step = nextExitStep(state, outcome.kind === "ok" ? { kind: "ok" } : outcome.kind === "other" ? { kind: "other", error: new Error("The exit could not be priced right now. Try again shortly.") } : { kind: outcome.kind });
+      const step = nextExitStep(state, outcome.kind === "ok" ? { kind: "ok" } : outcome.kind === "other" ? { kind: "other", error: unpricedRefusal(outcome.code, logs ?? []) } : { kind: outcome.kind });
       if (step.action === "proceed" && payout !== null) {
         setRefreshing(false);
         const f = plan.finalize(payout);
@@ -216,7 +225,7 @@ export async function quoteExit(input: ExitRunInput, deps: ExitRunDeps): Promise
       if (step.action === "wait-for-sweep") return { status: "wait-for-sweep", staleCount: stale.length };
       if (step.action === "ask-user") {
         // F9: on a claim (execute) the floor was stored at request time and cannot be lowered: say what happened.
-        return { status: "failed", error: new Error(mode === "execute" ? V22_COPY.earnExit.floorStuck : "The exit price keeps moving. Try again shortly.") };
+        return { status: "failed", error: new Error(mode === "execute" ? V22_COPY.earnExit.floorStuck : EXIT_LINES.moving) };
       }
       return { status: "failed", error: step.action === "fail" ? step.error : undefined };
     }

@@ -18,6 +18,13 @@ export const EXIT_MAX_REQUOTES = 2;
 /** Hard ceiling (the transaction limit). */
 export const EXIT_MAX_COMPUTE_UNITS = 1_400_000;
 
+/** #3605: the exit's own plain lines. The Earn exit shows these verbatim; any other unmapped failure gets the generic line. */
+export const EXIT_LINES = {
+  unpriced: "The exit could not be priced right now. Try again shortly.",
+  moving: "The exit price keeps moving. Try again shortly.",
+  compute: "The exit needs more compute than one transaction allows. Try a smaller amount.",
+} as const;
+
 export type ExitAttemptOutcome =
   | { kind: "ok" }
   | { kind: "notLossCurrent" }
@@ -57,7 +64,7 @@ export function nextExitStep(state: ExitRetryState, outcome: ExitAttemptOutcome,
       return { action: "requote", state: { ...state, requotes: state.requotes + 1 } };
     case "computeBudgetExceeded":
       // Never 118: a CU overrun aborts the transaction and is not a program error. Raise the limit once.
-      if (state.unitsRaised) return { action: "fail", error: new Error("The exit needs more compute than one transaction allows. Try a smaller amount.") };
+      if (state.unitsRaised) return { action: "fail", error: new Error(EXIT_LINES.compute) };
       return { action: "raise-units", state: { ...state, unitsRaised: true } };
     case "other":
       return { action: "fail", error: outcome.error };

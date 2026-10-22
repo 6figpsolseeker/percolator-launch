@@ -10,7 +10,7 @@ import { PublicKey, Transaction, VersionedTransaction, type Connection, type Tra
 import { getAssociatedTokenAddress } from '@solana/spl-token';
 import { useWalletCompat, useConnectionCompat } from '@/hooks/useWalletCompat';
 import { sendUserBundle } from '@/lib/tx-v1/user-bundle';
-import { parseFailure, resolveUserMessage } from '@/lib/limits/user-message';
+import { keepAppMessage, parseFailure, plainMessage } from '@/lib/limits/user-message';
 import { readEarnP3Context } from '@/lib/limits/earn-p3-read';
 import { deriveVaultAuthority, deriveInsuranceLpMint } from '@percolatorct/sdk';
 import { portfolioScanFilters } from '@/lib/v22/layout';
@@ -26,6 +26,7 @@ import {
   type SimResult,
 } from '@/lib/v22/earn-exit-run';
 import { V22_COPY } from '@/lib/v22/copy';
+import { EXIT_LINES } from '@/lib/v22/exit-retry';
 import { buildLpCrankIx } from '@/lib/pre-resolve';
 import { fetchMarketTailsV22 } from '@/lib/v22/market-tails';
 import { makeStaleReader } from '@/lib/v22/stale-scan';
@@ -62,6 +63,7 @@ export interface EarnExitState {
 }
 
 const IDLE: EarnExitState = { phase: 'idle', quote: null, requoted: false, message: null, signature: null, bound: null };
+const RUNNER_LINES = new Set<string>([...Object.values(EXIT_LINES), V22_COPY.earnExit.floorStuck]);
 
 /** The runner's own floor-stuck failure (lib/v22/earn-exit-run.ts, execute mode, 117 on every quote). */
 const isFloorStuck = (e: unknown): boolean => e instanceof Error && e.message === V22_COPY.earnExit.floorStuck;
@@ -193,9 +195,9 @@ export function useEarnExitV22(p: EarnExitParams) {
     return { input: { ctx, mode: p.mode, estimateAtoms: p.estimateAtoms }, deps };
   }, [wallet, connection, p.market, p.programId, p.collateralMint, p.sourceDomain, p.shares, p.mode, p.estimateAtoms]);
 
+  // #3605: a mapped refusal gets its line; of the rest only the runner's own lines are shown (raw RPC / JS text never is).
   const failMessage = (e: unknown): string => {
-    const m = resolveUserMessage(e, { surface: 'earn-withdraw' });
-    return m.body;
+    return plainMessage(e, { surface: 'earn-withdraw' }, (raw) => (RUNNER_LINES.has(raw) ? raw : keepAppMessage('')));
   };
 
   const getQuote = useCallback(async () => {

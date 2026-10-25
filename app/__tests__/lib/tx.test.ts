@@ -23,6 +23,8 @@ vi.mock("@/lib/config", () => ({
 import { TransactionExpiredBlockheightExceededError } from "@solana/web3.js";
 import { sendTx, broadcastSignedTx, sendMayHaveBroadcast, timedOutSignature, CONFIRMATION_POLL, AMBIGUOUS_OUTCOME_WAIT, awaitAmbiguousOutcome, estimateFees, getClockDriftWarning, isBlockhashExpiredError, isConfirmationTimeoutError, checkSignatureLanded, extractTxErrorMessage, TxCancelledError, isTxCancelledError } from "@/lib/tx";
 import type { SendTxParams, FeeEstimate } from "@/lib/tx";
+import { resolveUserMessage } from "@/lib/limits/user-message";
+import { isTransientError } from "@/lib/errorMessages";
 
 describe("sendTx", () => {
   afterEach(() => {
@@ -328,6 +330,44 @@ describe("sendTx atomic signAndSendTransaction path — error detail preservatio
     expect(err.message).toContain("custom program error: 0x13");
     // Original wallet error preserved for debugging.
     expect(err.cause).toBe(privyErr);
+  });
+
+  describe("ambiguous atomic send (no signature to confirm): never 'nothing was sent'", () => {
+    const run = async (sendErr: unknown) => {
+      const wallet = makeWallet(sendErr);
+      const err = (await sendTx({ connection: makeConn(), wallet, instructions: [] }).catch((e: unknown) => e)) as Error;
+      return { err, wallet };
+    };
+    it.each([
+      ["opaque Privy 'Unexpected error'", new Error("Unexpected error")],
+      ["network drop", new TypeError("Failed to fetch")],
+      ["timeout", new Error("Request timed out")],
+      ["proxy upstream failure", new Error("Upstream RPC request failed")],
+      ["blockhash expiry after the wallet may have sent", new Error("Blockhash not found")],
+      ["5xx", new Error("504 Gateway Timeout: upstream")],
+    ])("%s: the 'may still land' class, one send, no rebuild", async (_n, e) => {
+      const { err, wallet } = await run(e);
+      expect(isConfirmationTimeoutError(err)).toBe(true);
+      expect(err.message).toMatch(/may still land/);
+      expect(err.cause).toBe(e);
+      expect(wallet.signAndSendTransaction).toHaveBeenCalledTimes(1);
+    });
+    it("is read by the ticket as still-confirming, never transient (no auto resend)", async () => {
+      const { err } = await run(new Error("Unexpected error"));
+      expect(resolveUserMessage(err, { surface: "trade" } as never).kind).toBe("still-confirming");
+      expect(isTransientError(err.message)).toBe(false);
+    });
+    it.each([
+      ["user declined", new Error("User rejected the request")],
+      ["popup closed", new Error("User closed the wallet popup")],
+      ["wallet pre-broadcast simulation refusal", new Error("Transaction simulation failed: Error processing Instruction 1: custom program error: 0x13")],
+      ["4xx refusal", new Error("400 Bad Request: invalid params")],
+      ["insufficient funds", new Error("Attempt to debit an account but found no record of a prior credit")],
+    ])("control: %s is a provable refusal and keeps its own message", async (_n, e) => {
+      const { err } = await run(e);
+      expect(isConfirmationTimeoutError(err)).toBe(false);
+      expect(err.message).toBe(e.message);
+    });
   });
 
   it("does NOT show the wallet-security message for a PASSING Lighthouse assertion + unrelated 0x31 failure", async () => {

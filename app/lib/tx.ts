@@ -1087,6 +1087,16 @@ export async function sendTx({
               { cause: sendErr }
             );
           }
+          // The wallet signs AND broadcasts, and gives no signature on error (Privy's error carries none), so this cannot
+          // be confirmed by signature. An error that does not prove the tx never left (a timeout, a network drop, an
+          // opaque "Unexpected error", a blockhash expiry) must not read "nothing was sent": a retry would send it
+          // twice. Surface the "may still land" class every caller already guards its retry with.
+          if (atomicSendMayHaveBroadcast(sendErr, sendMsg)) {
+            throw new Error(
+              "Confirmation timeout: your wallet did not say whether this transaction was sent, so it may still land. Check your wallet activity or balance before trying again.",
+              { cause: sendErr },
+            );
+          }
           // Throw the EXTRACTED message: wallets (notably Privy) wrap program
           // failures in a generic "Unexpected error" whose real detail lives
           // in nested cause/logs — rethrowing sendErr verbatim discarded it.
@@ -1287,6 +1297,21 @@ export function sendMayHaveBroadcast(err: unknown): boolean {
   if (isBlockhashExpiredError(err)) return false; // sendTx's #3570 branch owns the skipPreflight case
   if (err instanceof SendTransactionError) return !NODE_REFUSAL.test(msg);
   return !/^4(?!08)\d\d\b/.test(msg); // web3.js's non-2xx text is "<status> <statusText>: <body>"
+}
+
+/**
+ * The wallet-atomic send (signAndSendTransaction) failed: false only when the error proves nothing was broadcast.
+ * That is a user decline, the wallet's own pre-broadcast simulation / program refusal, a node refusal text, or a 4xx.
+ * Anything else, including a blockhash expiry (the wallet may have sent it first), counts as maybe sent.
+ */
+const ATOMIC_REFUSAL =
+  /simulation failed|custom program error|instructionerror|insufficient (funds|lamports)|attempt to debit|signature verification|invalid (params|transaction|request)|too large|failed to deserialize|account not found|user (rejected|declined|denied|cancel)|\b(rejected|declined|denied|cancell?ed|canceled|dismissed)\b|closed (the )?(wallet|popup|window|modal)|user_exited|not approved/i;
+export function atomicSendMayHaveBroadcast(err: unknown, extractedMsg: string = errorText(err)): boolean {
+  const msg = `${extractedMsg} ${errorText(err)}`;
+  if (/already been processed/i.test(msg)) return true;
+  if (ATOMIC_REFUSAL.test(msg)) return false;
+  if (/^\s*4(?!08)\d\d\b/.test(extractedMsg)) return false;
+  return true;
 }
 
 /** Test seam for {@link awaitAmbiguousOutcome}'s cadence. */

@@ -395,7 +395,14 @@ describe("v1 transport through the /api/rpc proxy (SDK-3 port)", () => {
     const r2 = deps();
     const { sendV1: _s2, simulateV1: _m2, ...rest2 } = r2.d;
     const c2 = new Connection(PROXY, { fetch: offline as unknown as typeof fetch });
-    await expect(sendUserBundle({ connection: c2, wallet, groups: BYTE_BOUND, mode: "auto", deps: rest2 })).rejects.toBeInstanceOf(V1TransportError);
+    // A network failure may have left the bytes on the wire: it is confirmed by the tx's own signature (here the
+    // poll never sees it), so the user gets "may still land" with the signature, not "nothing was sent".
+    const confirm = vi.fn(async (sig: string) => {
+      throw new Error(`Confirmation timeout (90s) — tx may still land. Check explorer: ${sig}`);
+    });
+    const err = await sendUserBundle({ connection: c2, wallet, groups: BYTE_BOUND, mode: "auto", deps: { ...rest2, confirm } }).catch((x: unknown) => x);
+    expect((err as Error).message).toMatch(/may still land/);
+    expect(confirm).toHaveBeenCalledTimes(1);
     expect(sendCalls).toEqual(["sendTransaction"]); // one attempt, no resend
     expect(r2.signLegacy).not.toHaveBeenCalled(); // no fallback, no second prompt
   });

@@ -137,3 +137,54 @@ describe("SlabProvider keeps the live price on the chain mark when the feed is s
     expect(getLivePriceSnapshot(SLAB).priceE6).toBe(7_000_000n);
   });
 });
+
+describe("SlabProvider: feed silence and market switches", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("feed ticked, then went silent while the mark did not change: the mark is followed once the tick is 10 s old", async () => {
+    mount();
+    await waitFor(() => expect(getLivePriceSnapshot(SLAB).priceE6).toBe(1_000_000n));
+    for (const l of h.feed) l({ type: "price", slab: SLAB, price: 1.5 });
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(getLivePriceSnapshot(SLAB).priceE6).toBe(1_500_000n);
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(t0 + 5_000);
+    push(1_000_000n, 1); // new bytes, same mark: a live tick 5 s old still wins
+    expect(getLivePriceSnapshot(SLAB).priceE6).toBe(1_500_000n);
+    now.mockReturnValue(t0 + 11_000);
+    // identical bytes (the steady backup poll): the byte-equality skip must not hide the mark
+    await act(async () => {
+      h.onChange!({ data: changed(1), owner: OWNER });
+    });
+    expect(getLivePriceSnapshot(SLAB).priceE6).toBe(1_000_000n);
+    expect(seen.at(-1)).toBe(1_000_000n); // and the ticket re-rendered to read it
+  });
+
+  it("feed resumes after a silent spell: the tick wins again over the chain mark", async () => {
+    mount();
+    await waitFor(() => expect(getLivePriceSnapshot(SLAB).priceE6).toBe(1_000_000n));
+    push(2_000_000n, 1);
+    expect(getLivePriceSnapshot(SLAB).priceE6).toBe(2_000_000n);
+    for (const l of h.feed) l({ type: "price", slab: SLAB, price: 2.5 });
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(getLivePriceSnapshot(SLAB).priceE6).toBe(2_500_000n);
+    push(3_000_000n, 2);
+    expect(getLivePriceSnapshot(SLAB).priceE6).toBe(2_500_000n);
+  });
+
+  it("a market switch never carries one market's price into the other", async () => {
+    const A = SLAB;
+    const view = mount();
+    await waitFor(() => expect(getLivePriceSnapshot(A).priceE6).toBe(1_000_000n));
+    push(2_000_000n, 1);
+    const B = Keypair.generate().publicKey.toBase58();
+    h.mark = 5_000_000n;
+    getAccountInfo.mockImplementationOnce(() => new Promise(() => {})); // B's first read has not landed
+    view.rerender(<SlabProvider slabAddress={B}><Reader /></SlabProvider>);
+    await act(async () => {});
+    expect(getLivePriceSnapshot(B).priceE6).toBeNull();
+    expect(getLivePriceSnapshot(A).priceE6).toBe(2_000_000n);
+    // A late update for A's subscription cannot reach B
+    expect(getLivePriceSnapshot(B).priceE6).toBeNull();
+  });
+});

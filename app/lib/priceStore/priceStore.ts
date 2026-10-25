@@ -459,20 +459,22 @@ const LIVE_TICK_STALE_MS = 10_000;
  * one: it applies only when the slab has no live WS tick in the last
  * `LIVE_TICK_STALE_MS`, so a streaming feed always outranks the poll and
  * the flicker-to-stale-price bug `seedFromDbIfEmpty`'s doc describes can't
- * come back through this path.
+ * come back through this path. Returns whether the stored price changed.
  *
  * Expects an already-sanitized post-invert e6 price (callers read
  * `wrapperConfigV17.markEwmaE6` via `sanitizePriceE6`, exactly the value
  * `usePortfolio` publishes as `oraclePriceE6`).
  */
-export function applyOnChainPoll(slab: string, onChainE6: bigint): void {
-  if (onChainE6 <= 0n) return;
+export function applyOnChainPoll(slab: string, onChainE6: bigint): boolean {
+  if (onChainE6 <= 0n) return false;
   const entry = getOrCreateEntry(slab);
-  if (entry.source === "live" && Date.now() - entry.lastLiveTickAt < LIVE_TICK_STALE_MS) return;
+  if (entry.source === "live" && Date.now() - entry.lastLiveTickAt < LIVE_TICK_STALE_MS) return false;
+  const before = entry.snapshot.priceE6;
   const usd = Number(onChainE6) / 1_000_000;
   // The chain value now owns the entry: a DB seed's invert / lotExp retro-correction must not rewrite over it.
   entry.source = "seed-onchain";
   applyPatch(entry, { price: usd, priceUsd: usd, priceE6: onChainE6, loading: false });
+  return before !== onChainE6;
 }
 
 /** On-chain oracle fallback — only-if-empty, same semantics as the pre-refactor hook. */

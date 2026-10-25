@@ -212,6 +212,9 @@ export const SlabProvider: FC<{ children: ReactNode; slabAddress: string }> = ({
     // Whether the last processed bytes came from a fresh read: identical bytes from the network after a seed-cache parse
     // must still reach the price store.
     let lastParseFresh = false;
+    // The last fresh mark written to the price store. Identical bytes carry the same mark, but the feed may have gone
+    // silent since (its tick aged past 10 s): the mark must be re-offered so the store can fall back to it.
+    let lastMarkE6 = 0n;
     // Tracks whether the last committed state update carries a non-null `error`.
     // The byte-equality short-circuit below must NOT fire while an error is
     // outstanding — otherwise a byte-identical successful poll that follows a
@@ -236,7 +239,9 @@ export const SlabProvider: FC<{ children: ReactNode; slabAddress: string }> = ({
       ) {
         // Identical bytes (and owner) to the last processed update, and no
         // outstanding error to clear — nothing changed on-chain, skip the
-        // parse + setState entirely.
+        // parse + setState entirely. Except the mark: a feed that went silent since the last write lets it back in, and
+        // the ticket (which reads the store during render) needs one render to pick the new price up.
+        if (fresh && lastMarkE6 > 0n && applyOnChainPoll(slabAddress, lastMarkE6)) setState((s) => ({ ...s }));
         return;
       }
       lastRawData = data;
@@ -397,7 +402,10 @@ export const SlabProvider: FC<{ children: ReactNode; slabAddress: string }> = ({
           // from it. Same value PositionsBar writes; a live tick under 10 s old still wins. Written before setState so a
           // reader of getLivePriceSnapshot sees it in the render these bytes trigger.
           const markE6 = sanitizePriceE6(wrapperConfigV17.markEwmaE6);
-          if (fresh && markE6 > 0n) applyOnChainPoll(slabAddress, markE6);
+          if (fresh && markE6 > 0n) {
+            lastMarkE6 = markE6;
+            applyOnChainPoll(slabAddress, markE6);
+          }
           lastHadError = false;
           setState((s) => ({
             slabAddress,

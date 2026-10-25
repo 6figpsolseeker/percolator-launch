@@ -226,3 +226,16 @@ describe("withTransientRetry", () => {
     expect(fn).toHaveBeenCalledTimes(2); // initial + 1 retry
   });
 });
+
+describe("humanizeError: the no-signature atomic 'may still land' (nothing watches it)", () => {
+  const raw = "Confirmation timeout: your wallet did not say whether this transaction was sent, so it may still land. Check your wallet activity or balance before trying again.";
+  it("never promises an update; says to check first", () => {
+    const out = humanizeError(raw);
+    expect(out).toMatch(/may still have gone through/i);
+    expect(out).toMatch(/check your wallet activity or positions before trying again/i);
+    expect(out).not.toMatch(/update this|when it lands/i);
+  });
+  it("a signature-bearing timeout keeps the watching line", () => {
+    expect(humanizeError("Confirmation timeout (90s) — tx may still land. Check explorer: 5abc")).toMatch(/update this when it lands/i);
+  });
+});

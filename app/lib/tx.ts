@@ -1335,6 +1335,13 @@ export function atomicSendMayHaveBroadcast(err: unknown, extractedMsg: string = 
   // A decline by CODE or NAME (EIP-1193 4001, Privy exited_*), which can carry no wording. Never by loose words: "aborted",
   // "cancelled" and "rejected" also read in a fetch abort, a socket hang-up or an RPC timeout, where the tx may have gone.
   if (isUserDeclineByCode(err)) return false;
+  // Privy 3.41 rejects a closed modal with Error("User exited the modal before submitting the transaction") as the CAUSE of a
+  // PrivyClientError("Failed to connect to wallet", ..., "transaction_failure"); it only throws that before submit. Solflare's
+  // "Transaction cancelled" is a decline or an expired popup, which cannot land. Both are matched exactly, along the cause chain.
+  for (let cur: unknown = err, depth = 0; cur && typeof cur === "object" && depth < 5; cur = (cur as { cause?: unknown; error?: unknown }).cause ?? (cur as { error?: unknown }).error, depth++) {
+    const m = String((cur as { message?: unknown }).message ?? "").trim();
+    if (/^user exited the modal before submitting the transaction\.?$/i.test(m) || /^transaction cancell?ed\.?$/i.test(m)) return false;
+  }
   if (/^\s*4(?!08)\d\d\b/.test(extractedMsg)) return false;
   return true;
 }

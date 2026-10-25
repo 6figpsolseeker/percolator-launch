@@ -374,11 +374,31 @@ describe("sendTx atomic signAndSendTransaction path — error detail preservatio
       expect(err.message).toMatch(/may still land/);
       expect(wallet.signAndSendTransaction).toHaveBeenCalledTimes(1);
     });
+    // Real Privy 3.41 shapes (StandardSignAndSendTransactionScreen / useWallets in node_modules): a closed modal is
+    // Error("User exited the modal before submitting the transaction"), the CAUSE of
+    // PrivyClientError("Failed to connect to wallet", cause, "transaction_failure"). Solflare: { message: "Transaction cancelled" }.
+    const privyClosed = () => Object.assign(new Error("Failed to connect to wallet", { cause: new Error("User exited the modal before submitting the transaction") }), { name: "PrivyClientError", privyErrorCode: "transaction_failure" });
+    it.each([
+      ["Privy modal closed (PrivyClientError with cause chain)", privyClosed()],
+      ["Privy modal closed, bare", new Error("User exited the modal before submitting the transaction")],
+      ["Solflare 'Transaction cancelled' (no code)", Object.assign(new Error("Transaction cancelled"), {})],
+      ["Solflare 'Transaction cancelled' code -32603", Object.assign(new Error("Transaction cancelled"), { code: -32603 })],
+    ])("control: %s is a decline, never 'may still land'", async (_n, e) => {
+      const { err } = await run(e);
+      expect(isConfirmationTimeoutError(err)).toBe(false);
+      expect(err.message).not.toMatch(/may still land/);
+    });
+    it("a Privy wrapper whose cause is NOT the modal exit stays 'may still land'", async () => {
+      const e = Object.assign(new Error("Failed to connect to wallet", { cause: new Error("socket hang up") }), { name: "PrivyClientError", privyErrorCode: "transaction_failure" });
+      const { err } = await run(e);
+      expect(isConfirmationTimeoutError(err)).toBe(true);
+    });
     it("the no-signature 'may still land' is honest: no 'we'll update you', no auto retry", async () => {
       const { err } = await run(new Error("Unexpected error"));
       const u = resolveUserMessage(err, { surface: "trade" } as never);
       expect(u.kind).toBe("still-confirming");
       expect(u.autoRetry).toBeFalsy();
+      expect(u.variant).not.toBe("wait"); // nothing is in progress: no pulsing StatusLine
       expect(u.body).toMatch(/may still have gone through/i);
       expect(u.body).toMatch(/check your wallet activity or positions before trying again/i);
       expect(u.body).not.toMatch(/update this|when it lands/i);

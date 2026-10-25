@@ -586,6 +586,10 @@ export function humanizeError(rawMsg: string, context?: "trade"): string {
   if (rawMsg.includes("TokenTransferHookAccountNotFound")) {
     return "Transfer-hook metadata account missing. This NFT was minted before a recent hook-fix upgrade; open a support ticket so we can run RepairExtraAccountMetas on it.";
   }
+  // lib/tx.ts: the wallet sent atomically and gave no signature, so nothing can watch it: never promise an update.
+  if (/did not say whether this transaction was sent/i.test(rawMsg)) {
+    return NO_SIGNATURE_MAYBE_SENT_MESSAGE;
+  }
   if (rawMsg.includes("timeout") || rawMsg.includes("Timeout")) {
     return CONFIRMING_MESSAGE;
   }
@@ -623,6 +627,7 @@ export function userFacingMessage(e: unknown): string | null {
   return name === "WalletRequestClosedError" ? WALLET_REQUEST_CLOSED_COPY : name === "WalletBusyError" ? WALLET_BUSY_COPY : null;
 }
 /** §5.3 "confirmation timeout" (never "check your wallet"). */
+export const NO_SIGNATURE_MAYBE_SENT_MESSAGE = "This may still have gone through. Check your wallet activity or positions before trying again.";
 export const CONFIRMING_MESSAGE = "Still confirming. We'll update this when it lands.";
 
 // Lets a caller-recognized transient code widen withTransientRetry's own

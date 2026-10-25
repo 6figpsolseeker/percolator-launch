@@ -363,6 +363,30 @@ describe("sendTx atomic signAndSendTransaction path — error detail preservatio
       expect(err.message).toMatch(/^Unexpected error/);
       expect(err.message).not.toMatch(/may still land/);
     });
+    it.each([
+      ["fetch AbortError wording", new Error("The user aborted a request.")],
+      ["abort wording", new Error("This operation was aborted")],
+      ["rejected by the RPC after a timeout", new Error("Transaction was rejected by the RPC: timeout")],
+      ["cancelled by a socket hang-up", new Error("Request cancelled: socket hang up")],
+    ])("%s is NOT a proven refusal: the 'may still land' class, one send", async (_n, e) => {
+      const { err, wallet } = await run(e);
+      expect(isConfirmationTimeoutError(err)).toBe(true);
+      expect(err.message).toMatch(/may still land/);
+      expect(wallet.signAndSendTransaction).toHaveBeenCalledTimes(1);
+    });
+    it("the no-signature 'may still land' is honest: no 'we'll update you', no auto retry", async () => {
+      const { err } = await run(new Error("Unexpected error"));
+      const u = resolveUserMessage(err, { surface: "trade" } as never);
+      expect(u.kind).toBe("still-confirming");
+      expect(u.autoRetry).toBeFalsy();
+      expect(u.body).toMatch(/may still have gone through/i);
+      expect(u.body).toMatch(/check your wallet activity or positions before trying again/i);
+      expect(u.body).not.toMatch(/update this|when it lands/i);
+    });
+    it("a signature-bearing timeout keeps the watching copy", () => {
+      const u = resolveUserMessage(new Error("Confirmation timeout (90s) — tx may still land. Check explorer: 5abc"), { surface: "trade" } as never);
+      expect(u.body).toMatch(/update this when it lands/i);
+    });
     it("is read by the ticket as still-confirming, never transient (no auto resend)", async () => {
       const { err } = await run(new Error("Unexpected error"));
       expect(resolveUserMessage(err, { surface: "trade" } as never).kind).toBe("still-confirming");

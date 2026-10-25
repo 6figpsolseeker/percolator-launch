@@ -241,6 +241,15 @@ function linkIsDecline(l: ErrorLink): boolean {
 }
 
 /**
+ * A decline proven by CODE or NAME only (4001, Privy `exited_*`, an explicit wallet-decline name), anywhere in the
+ * wrapped chain; never by wording. For callers where a wrong "declined" would say "nothing was sent" about a send that
+ * may have landed (the atomic wallet send), where free text such as "aborted" or "cancelled" is also a timeout.
+ */
+export function isUserDeclineByCode(err: unknown): boolean {
+  return errorChain(err).some(linkIsDecline);
+}
+
+/**
  * Wallet "user said no". Codes and names first (4001, Privy/MWA shapes, anywhere in the wrapped chain), then
  * the decline wording as a fallback. Never retried, never fallen back.
  */

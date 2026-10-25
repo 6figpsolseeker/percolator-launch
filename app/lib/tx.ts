@@ -27,7 +27,7 @@ import { withMarketTailsV22 } from "@/lib/v22/market-tails";
 import type { SelfHealResult } from "@/lib/self-heal";
 import { getMaintenanceConfig, MaintenanceError } from "@/lib/maintenance";
 import { readU64LE } from "@/lib/u64le";
-import { isUserRejection } from "@/lib/tx-v1/wallet-raw-signer";
+import { isUserDeclineByCode } from "@/lib/tx-v1/wallet-raw-signer";
 
 /**
  * PERC-8388: Lighthouse v2 program ID — Blowfish/Phantom wallet middleware injects
@@ -1327,12 +1327,14 @@ export function isNotBroadcast(e: unknown): boolean {
  * Anything else, including a blockhash expiry (the wallet may have sent it first), counts as maybe sent.
  */
 const ATOMIC_REFUSAL =
-  /transaction simulation failed|custom program error|instructionerror|insufficient (funds|lamports)|attempt to debit|signature verification|invalid (params|transaction|request)|too large|failed to deserialize|account not found|user (rejected|declined|denied|cancel)|\b(rejected|declined|denied|cancell?ed|canceled|dismissed)\b|closed (the )?(wallet|popup|window|modal)|user_exited|not approved/i;
+  /transaction simulation failed|custom program error|instructionerror|insufficient (funds|lamports)|attempt to debit|signature verification|invalid (params|transaction|request)|too large|failed to deserialize|account not found|user (rejected|declined|denied|cancell?ed|canceled) (the )?(request|transaction|signature|approval)|rejected by the user|user closed (the )?(wallet|popup|pop-up|window|modal)|user_exited|not approved by (the )?user/i;
 export function atomicSendMayHaveBroadcast(err: unknown, extractedMsg: string = errorText(err)): boolean {
   const msg = `${extractedMsg} ${errorText(err)}`;
   if (/already been processed|upstream rpc request failed/i.test(msg)) return true; // the proxy's -32603 may have forwarded it, even inside "Simulation failed. Message: ..."
   if (ATOMIC_REFUSAL.test(msg)) return false;
-  if (isUserRejection(err)) return false; // a decline by code / name (EIP-1193 4001, Privy exited_*), which can carry no wording
+  // A decline by CODE or NAME (EIP-1193 4001, Privy exited_*), which can carry no wording. Never by loose words: "aborted",
+  // "cancelled" and "rejected" also read in a fetch abort, a socket hang-up or an RPC timeout, where the tx may have gone.
+  if (isUserDeclineByCode(err)) return false;
   if (/^\s*4(?!08)\d\d\b/.test(extractedMsg)) return false;
   return true;
 }

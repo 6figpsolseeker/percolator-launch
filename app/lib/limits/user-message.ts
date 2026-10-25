@@ -358,6 +358,11 @@ function resolveUserMessageInner(err: unknown, ctx: MessageContext): UserMessage
       action: { id: "try-again", label: "Try again" },
     });
   }
+  // The wallet sent atomically and gave no signature (lib/tx.ts, signAndSendTransaction failed ambiguously): nothing can
+  // watch it, so never promise an update and never auto-retry. Tell the user to check before trying again.
+  if (/did not say whether this transaction was sent/i.test(lower)) {
+    return m("still-confirming", "wait", "Check before retrying", "This may still have gone through. Check your wallet activity or positions before trying again.");
+  }
   if (/confirmation timeout|was not confirmed in|timed out waiting for confirmation/i.test(lower)) {
     return m("still-confirming", "wait", "Still confirming", "Still confirming. We'll update this when it lands.", { autoRetry: true });
   }

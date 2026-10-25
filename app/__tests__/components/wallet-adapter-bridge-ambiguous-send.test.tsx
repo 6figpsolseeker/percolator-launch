@@ -92,6 +92,17 @@ describe("bridge send stage", () => {
     expect(isConfirmationTimeoutError(err)).toBe(false);
     expect(err.message).toMatch(/custom program error: 0x13/);
   });
+  it("a node refusal the atomic classifier cannot recognise is still 'not sent' because the bridge marks it (markNotBroadcast)", async () => {
+    // "Node is behind" is a provable refusal by sendMayHaveBroadcast, but atomicSendMayHaveBroadcast has no pattern for it:
+    // only the bridge's own mark keeps it from reading "may still land".
+    vi.spyOn(Connection.prototype, "sendRawTransaction").mockRejectedValue(
+      new SendTransactionError({ action: "simulate", signature: "", transactionMessage: "Node is behind by 42 slots", logs: [] }),
+    );
+    const err = await run();
+    expect(isConfirmationTimeoutError(err)).toBe(false);
+    expect(err.message).toMatch(/Node is behind by 42 slots/);
+    expect(err.message).not.toMatch(/may still land/);
+  });
   it("a dropped fetch after the send was attempted is confirmed by the signed tx's signature (never 'nothing was sent')", async () => {
     const send = vi.spyOn(Connection.prototype, "sendRawTransaction").mockRejectedValue(new TypeError("Failed to fetch"));
     const conn = makeConn();

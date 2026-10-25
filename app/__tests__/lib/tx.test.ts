@@ -353,6 +353,16 @@ describe("sendTx atomic signAndSendTransaction path — error detail preservatio
       expect(err.cause).toBe(e);
       expect(wallet.signAndSendTransaction).toHaveBeenCalledTimes(1);
     });
+    it.each([
+      ["EIP-1193 4001 with no wording", Object.assign(new Error("Unexpected error"), { code: 4001 })],
+      ["Privy exited_* code with no wording", Object.assign(new Error("Unexpected error"), { privyErrorCode: "exited_auth_flow" })],
+      ["decline wrapped in cause", new Error("Unexpected error", { cause: Object.assign(new Error("x"), { code: 4001 }) })],
+    ])("control: %s is a user decline, keeps its own message (not 'may still land')", async (_n, e) => {
+      const { err } = await run(e);
+      expect(isConfirmationTimeoutError(err)).toBe(false);
+      expect(err.message).toMatch(/^Unexpected error/);
+      expect(err.message).not.toMatch(/may still land/);
+    });
     it("is read by the ticket as still-confirming, never transient (no auto resend)", async () => {
       const { err } = await run(new Error("Unexpected error"));
       expect(resolveUserMessage(err, { surface: "trade" } as never).kind).toBe("still-confirming");

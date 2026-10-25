@@ -381,6 +381,12 @@ describe("sendUserBundle", () => {
       expect(v1SendMayHaveBroadcast(new V1RpcError("sendTransaction", -32002, "x"))).toBe(false);
       expect(v1SendMayHaveBroadcast(new V1RpcError("sendTransaction", -32002, "Transaction simulation failed: This transaction has already been processed"))).toBe(true);
       expect(v1SendMayHaveBroadcast(new Error("RPC sendTransaction failed: -32002 Transaction simulation failed"))).toBe(false);
+      // The proxy's HTTP refusals (web3.js text "<status> <statusText>: <body>", wrapped by V1TransportError) never forwarded.
+      expect(v1SendMayHaveBroadcast(new V1TransportError("sendTransaction", new Error("429 Too Many Requests: {}")))).toBe(false);
+      expect(v1SendMayHaveBroadcast(new V1TransportError("sendTransaction", new Error("403 Forbidden: {}")))).toBe(false);
+      expect(v1SendMayHaveBroadcast(new Error("400 Bad Request: x"))).toBe(false);
+      expect(v1SendMayHaveBroadcast(new V1TransportError("sendTransaction", new Error("408 Request Timeout: x")))).toBe(true);
+      expect(v1SendMayHaveBroadcast(new V1TransportError("sendTransaction", new Error("504 Gateway Timeout: x")))).toBe(true);
     });
   });
 

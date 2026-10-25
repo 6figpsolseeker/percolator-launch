@@ -27,6 +27,7 @@ import { withMarketTailsV22 } from "@/lib/v22/market-tails";
 import type { SelfHealResult } from "@/lib/self-heal";
 import { getMaintenanceConfig, MaintenanceError } from "@/lib/maintenance";
 import { readU64LE } from "@/lib/u64le";
+import { isUserRejection } from "@/lib/tx-v1/wallet-raw-signer";
 
 /**
  * PERC-8388: Lighthouse v2 program ID — Blowfish/Phantom wallet middleware injects
@@ -1331,6 +1332,7 @@ export function atomicSendMayHaveBroadcast(err: unknown, extractedMsg: string = 
   const msg = `${extractedMsg} ${errorText(err)}`;
   if (/already been processed|upstream rpc request failed/i.test(msg)) return true; // the proxy's -32603 may have forwarded it, even inside "Simulation failed. Message: ..."
   if (ATOMIC_REFUSAL.test(msg)) return false;
+  if (isUserRejection(err)) return false; // a decline by code / name (EIP-1193 4001, Privy exited_*), which can carry no wording
   if (/^\s*4(?!08)\d\d\b/.test(extractedMsg)) return false;
   return true;
 }

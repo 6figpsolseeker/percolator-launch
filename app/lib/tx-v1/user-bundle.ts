@@ -545,6 +545,10 @@ export function v1SendMayHaveBroadcast(err: unknown): boolean {
   if (/already been processed/i.test(msg)) return true; // it WAS sent (a -32002 by code, but it is on chain)
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === "number") return !V1_REFUSAL_CODES.has(code);
+  // web3.js's non-2xx text is "<status> <statusText>: <body>" (V1TransportError prefixes it): a 4xx except 408 is the
+  // proxy refusing BEFORE it forwards (403 forbidden, 429 rate limit), so it fails fast like a coded refusal.
+  const text = msg.replace(/^RPC \S+ transport failed:\s*/, "").trim();
+  if (/^4(?!08)\d\d\b/.test(text)) return false;
   return !/-32002|Transaction simulation failed/i.test(msg);
 }
 

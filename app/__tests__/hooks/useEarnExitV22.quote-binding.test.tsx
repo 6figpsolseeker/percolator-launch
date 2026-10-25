@@ -242,4 +242,23 @@ describe("an edit while the send is with the wallet", () => {
     await act(async () => void (await result.current.getQuote()));
     expect(quoteExit).toHaveBeenCalledTimes(2);
   });
+
+  it("two confirm() calls in the same tick (before any re-render) send once", async () => {
+    const d = pending();
+    sendExit.mockImplementation(() => d.p);
+    const { result } = renderHook(() => useEarnExitV22({ ...base, shares: 100n }));
+    await act(async () => void (await result.current.getQuote()));
+    const confirm = result.current.confirm; // both calls hold the same closure: state.phase is still 'quoted' for each
+    let both!: Promise<unknown>;
+    await act(async () => {
+      both = Promise.all([confirm(), confirm()]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      d.resolve({ status: "sent", quote: q(1n), signature: "sigC" });
+      await both;
+    });
+    expect(sendExit).toHaveBeenCalledTimes(1);
+  });
 });

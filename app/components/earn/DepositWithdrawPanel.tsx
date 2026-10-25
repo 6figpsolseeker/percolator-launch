@@ -141,7 +141,6 @@ interface DepositWithdrawPanelProps {
   onExitSent?: () => void;
 }
 
-/** v2.2 quote-first exit (own component so the v2.1 render path has no extra hook). */
 /** A v2.2 exit landed (phase 'sent', after confirmation): call `onSent` once per landed signature, as the legacy path's awaited refresh did. */
 function useOnSent(state: { phase: string; signature: string | null }, onSent?: () => void) {
   const cb = useRef(onSent);
@@ -152,6 +151,7 @@ function useOnSent(state: { phase: string; signature: string | null }, onSent?: 
   }, [sent]);
 }
 
+/** v2.2 quote-first exit (own component so the v2.1 render path has no extra hook). */
 function ExitV22Step({ ex, shares, estimate, flow, decimals, symbol, valid, onSent }: { ex: NonNullable<DepositWithdrawPanelProps['exitV22']>; shares: bigint; estimate: bigint; flow: 'one-tx' | 'two-step'; decimals: number; symbol: string; valid: boolean; onSent?: () => void }) {
   const exit = useEarnExitV22({ ...ex, shares, mode: flow === 'one-tx' ? 'pair' : 'request', estimateAtoms: estimate });
   useOnSent(exit.state, onSent);

@@ -207,4 +207,39 @@ describe("an edit while the send is with the wallet", () => {
     expect(result.current.state.signature).toBe("sigA");
     expect(sendExit).toHaveBeenCalledTimes(1);
   });
+
+  it("118 refresh retry (phase 'refreshing' / 'quoting', loop still running): an edit does not reset, and no second send starts", async () => {
+    const d = pending();
+    let deps!: { onRefreshing: (on: boolean) => void };
+    sendExit.mockImplementation((_i: unknown, _q: unknown, dd: typeof deps) => {
+      deps = dd;
+      return d.p;
+    });
+    const { result, rerender } = renderHook((p: { shares: bigint }) => useEarnExitV22({ ...base, shares: p.shares }), { initialProps: { shares: 100n } });
+    await act(async () => void (await result.current.getQuote()));
+    let sending!: Promise<void>;
+    await act(async () => {
+      sending = result.current.confirm();
+    });
+    await act(async () => deps.onRefreshing(true));
+    expect(result.current.state.phase).toBe("refreshing");
+    await act(async () => deps.onRefreshing(false));
+    expect(result.current.state.phase).toBe("quoting");
+    rerender({ shares: 1000n });
+    expect(result.current.state.phase).toBe("quoting"); // not idle
+    await act(async () => {
+      await result.current.getQuote(); // refused while the send loop runs
+      await result.current.confirm(); // a second confirm is refused too
+    });
+    expect(sendExit).toHaveBeenCalledTimes(1);
+    expect(quoteExit).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      d.resolve({ status: "sent", quote: q(1n), signature: "sigB" });
+      await sending;
+    });
+    expect(result.current.state.signature).toBe("sigB");
+    // the flag clears: a later exit can be quoted again
+    await act(async () => void (await result.current.getQuote()));
+    expect(quoteExit).toHaveBeenCalledTimes(2);
+  });
 });

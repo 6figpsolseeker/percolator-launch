@@ -89,7 +89,8 @@ beforeEach(() => {
   h.onChange = null;
   h.feed.length = 0;
   seen.length = 0;
-  getAccountInfo.mockClear();
+  getAccountInfo.mockReset();
+  getAccountInfo.mockImplementation(async () => ({ data: BYTES, owner: OWNER }));
   unsubscribe = subscribeSlab(SLAB, () => {});
 });
 afterEach(() => {
@@ -144,6 +145,7 @@ describe("SlabProvider: feed silence and market switches", () => {
   it("feed ticked, then went silent while the mark did not change: the mark is followed once the tick is 10 s old", async () => {
     mount();
     await waitFor(() => expect(getLivePriceSnapshot(SLAB).priceE6).toBe(1_000_000n));
+    getAccountInfo.mockImplementation(async () => ({ data: changed(1), owner: OWNER })); // the re-poll the tab-visible event triggers
     for (const l of h.feed) l({ type: "price", slab: SLAB, price: 1.5 });
     document.dispatchEvent(new Event("visibilitychange"));
     expect(getLivePriceSnapshot(SLAB).priceE6).toBe(1_500_000n);

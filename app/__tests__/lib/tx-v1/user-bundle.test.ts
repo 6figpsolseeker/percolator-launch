@@ -17,11 +17,13 @@ import {
   sendUserBundle,
   splitV1Wire,
   txV1ModeFromEnv,
+  v1SendMayHaveBroadcast,
   WalletAlteredMessageError,
   type UserBundleDeps,
   type PackGroup,
   type TxV1Mode,
 } from "@/lib/tx-v1/user-bundle";
+import { V1TransportError } from "@/lib/tx-v1/rpc";
 import type { RawTxSigner } from "@/lib/tx-v1/wallet-raw-signer";
 import { SimulationRefusal, buildBatchTx } from "@/lib/tx";
 import { TX_LEGACY_MAX_BYTES, TX_V1_MAX_BYTES, V1RpcError, compileV1Message } from "@/lib/v21/sdk";
@@ -313,6 +315,72 @@ describe("sendUserBundle", () => {
     expect((err as PartialBundleError).signatures).toHaveLength(1);
     expect(r.signLegacy).not.toHaveBeenCalled();
     expect(r.sentLegacy).toHaveLength(0);
+  });
+
+  describe("ambiguous v1 send (may have reached Solana): confirmed by signature, never 'nothing was sent', never resent", () => {
+    const ambiguous: [string, () => unknown][] = [
+      ["proxy -32603 Upstream RPC request failed", () => new V1RpcError("sendTransaction", -32603, "Upstream RPC request failed")],
+      ["dropped fetch (V1TransportError)", () => new V1TransportError("sendTransaction", new TypeError("Failed to fetch"))],
+    ];
+    it.each(ambiguous)("first send, %s: confirms the tx's own signature and returns it (one send, no fallback)", async (_n, mk) => {
+      const sendV1 = vi.fn(async () => {
+        throw mk();
+      });
+      const confirm = vi.fn(async () => {});
+      const r = recorder(v1Signer(), { sendV1, confirm });
+      const out = await sendUserBundle({ connection: conn, wallet, groups: BYTE_BOUND, mode: "auto", deps: r.deps });
+      expect(sendV1).toHaveBeenCalledTimes(1);
+      expect(r.signLegacy).not.toHaveBeenCalled();
+      const wire = sendV1.mock.calls[0]![0] as unknown as Uint8Array;
+      const expectedSig = bs58.encode(splitV1Wire(wire).signatures[0]!);
+      expect(out.signatures).toEqual([expectedSig]);
+      expect(confirm).toHaveBeenCalledWith(expectedSig);
+    });
+    it("first send ambiguous and the tx failed on chain: the confirm error surfaces with the signature", async () => {
+      const sendV1 = vi.fn(async () => {
+        throw new V1TransportError("sendTransaction", new Error("socket hang up"));
+      });
+      const confirm = vi.fn(async () => {
+        throw new Error('Transaction failed: {"InstructionError":[1,{"Custom":21}]}');
+      });
+      const r = recorder(v1Signer(), { sendV1, confirm });
+      const err = (await sendUserBundle({ connection: conn, wallet, groups: BYTE_BOUND, mode: "auto", deps: r.deps }).catch((e: unknown) => e)) as Error & { signature?: string };
+      expect(err.message).toMatch(/Transaction failed/);
+      expect(typeof err.signature).toBe("string");
+      expect(sendV1).toHaveBeenCalledTimes(1);
+    });
+    it("a LATER send that is ambiguous is confirmed too (not reported as failed)", async () => {
+      const groups = Array.from({ length: 12 }, (_, k) => ({ instructions: [ix(100 + k, 8, 24)], computeUnits: 20_000 }));
+      let n = 0;
+      const sendV1 = vi.fn(async (w: Uint8Array) => {
+        if (n++ === 0) return bs58.encode(splitV1Wire(w).signatures[0]!);
+        throw new V1RpcError("sendTransaction", -32603, "Upstream RPC request failed");
+      });
+      const r = recorder(v1Signer(), { sendV1 });
+      const out = await sendUserBundle({ connection: conn, wallet, groups, mode: "auto", deps: r.deps });
+      expect(out.signatures).toHaveLength(2);
+      expect(sendV1).toHaveBeenCalledTimes(2);
+    });
+    it.each([
+      ["preflight -32002", new V1RpcError("sendTransaction", -32002, "Transaction simulation failed: custom program error: 0x15")],
+      ["proxy rate limit -32005", new V1RpcError("sendTransaction", -32005, "rate limited")],
+      ["proxy forbidden -32600", new V1RpcError("sendTransaction", -32600, "forbidden")],
+    ])("control: a coded refusal (%s) throws at once, with no confirm", async (_n, refusal) => {
+      const sendV1 = vi.fn(async () => {
+        throw refusal;
+      });
+      const confirm = vi.fn(async () => {});
+      const r = recorder(v1Signer(), { sendV1, confirm });
+      await expect(sendUserBundle({ connection: conn, wallet, groups: BYTE_BOUND, mode: "auto", deps: r.deps })).rejects.toBe(refusal);
+      expect(confirm).not.toHaveBeenCalled();
+    });
+    it("v1SendMayHaveBroadcast table", () => {
+      expect(v1SendMayHaveBroadcast(new V1RpcError("sendTransaction", -32603, "x"))).toBe(true);
+      expect(v1SendMayHaveBroadcast(new V1TransportError("sendTransaction", new Error("x")))).toBe(true);
+      expect(v1SendMayHaveBroadcast(new Error("something unknown"))).toBe(true);
+      expect(v1SendMayHaveBroadcast(new V1RpcError("sendTransaction", -32002, "x"))).toBe(false);
+      expect(v1SendMayHaveBroadcast(new Error("RPC sendTransaction failed: -32002 Transaction simulation failed"))).toBe(false);
+    });
   });
 
   it("wallet that alters the v1 message: refused before sending, falls back", async () => {

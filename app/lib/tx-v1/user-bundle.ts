@@ -49,6 +49,7 @@ import {
   type TxFormat,
   type TxV1Mode,
   type V1SimulationResult,
+  v1TransactionSignature,
 } from "@/lib/v21/sdk";
 import {
   SimulationRefusal,
@@ -521,6 +522,31 @@ async function sendLegacyPlan<T>(txs: readonly PackedTx<T>[], c: SendCtx): Promi
   return sigs;
 }
 
+/** JSON-RPC codes the node or the proxy answers BEFORE it forwards a transaction: it provably never left. */
+const V1_REFUSAL_CODES: ReadonlySet<number> = new Set([
+  -32002, // preflight simulation failed
+  -32003, // signature verification failure
+  -32005, // node unhealthy / proxy rate limit (every upstream refused)
+  -32015, // version not supported
+  -32016, // minimum context slot not reached
+  -32600, // proxy: forbidden / invalid request
+  -32601, // method not found
+  -32602, // invalid params
+  -32700, // parse error
+]);
+
+/**
+ * False only when a v1 send error PROVES the tx never left (a coded refusal above). A transport failure
+ * (V1TransportError), the proxy's -32603 "Upstream RPC request failed" (it may have forwarded, then failed) and any
+ * other shape count as maybe sent: an unknown shape costs a confirmation wait, never a double send.
+ */
+export function v1SendMayHaveBroadcast(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === "number") return !V1_REFUSAL_CODES.has(code);
+  const msg = err instanceof Error ? err.message : String(err);
+  return !/-32002|Transaction simulation failed/i.test(msg);
+}
+
 async function sendV1Plan<T>(txs: readonly PackedTx<T>[], c: SendCtx & { rawSigner: RawTxSigner }): Promise<string[]> {
   const blockhash = await c.d.getBlockhash();
   const compiled = txs.map((t) => {
@@ -576,8 +602,15 @@ async function sendV1Plan<T>(txs: readonly PackedTx<T>[], c: SendCtx & { rawSign
     } catch (e) {
       // Only the FIRST send may fall back, and only on a format rejection: nothing has landed.
       if (k === 0 && isTxV1FormatRejection(e)) throw new V1Fallback("rpc-rejected-v1-format", e);
-      if (k === 0) throw e;
-      throw new PartialBundleError(`Transaction ${k + 1} of ${wires.length} failed after ${k} landed`, sigs, k, e);
+      if (v1SendMayHaveBroadcast(e)) {
+        // The bytes may be on the wire (proxy failed after forwarding, dropped fetch, 5xx): confirm the tx's own
+        // signature like a sent one (it lands, fails on chain, or times out "may still land"). Never "nothing was
+        // sent", never a resend.
+        sig = v1TransactionSignature(wires[k]!);
+      } else {
+        if (k === 0) throw e;
+        throw new PartialBundleError(`Transaction ${k + 1} of ${wires.length} failed after ${k} landed`, sigs, k, e);
+      }
     }
     try {
       await c.d.confirm(sig);

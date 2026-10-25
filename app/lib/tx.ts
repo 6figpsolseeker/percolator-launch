@@ -1091,7 +1091,7 @@ export async function sendTx({
           // be confirmed by signature. An error that does not prove the tx never left (a timeout, a network drop, an
           // opaque "Unexpected error", a blockhash expiry) must not read "nothing was sent": a retry would send it
           // twice. Surface the "may still land" class every caller already guards its retry with.
-          if (atomicSendMayHaveBroadcast(sendErr, sendMsg)) {
+          if (!isNotBroadcast(sendErr) && atomicSendMayHaveBroadcast(sendErr, sendMsg)) {
             throw new Error(
               "Confirmation timeout: your wallet did not say whether this transaction was sent, so it may still land. Check your wallet activity or balance before trying again.",
               { cause: sendErr },
@@ -1203,7 +1203,7 @@ export async function sendTx({
         );
       }
 
-      if (isBlockhashExpired && attempt < maxRetries) {
+      if (isBlockhashExpired) {
         // R2-S7: Before retrying, check if the original tx actually landed
         const landedCheckSig = preSendSignature ?? lastSignature;
         if (landedCheckSig) {
@@ -1242,6 +1242,9 @@ export async function sendTx({
           }
           if (outcome !== "not-landed") throw lastError; // no signature to confirm
         }
+
+        // The landed / ambiguous-outcome checks above also run on the last attempt; only a re-sign needs one left.
+        if (attempt >= maxRetries) throw lastError;
 
         // SAFETY: If the wallet used signAndSendTransaction (atomic sign+broadcast),
         // do NOT rebuild and re-send — the first tx may still land on-chain, and
@@ -1299,16 +1302,34 @@ export function sendMayHaveBroadcast(err: unknown): boolean {
   return !/^4(?!08)\d\d\b/.test(msg); // web3.js's non-2xx text is "<status> <statusText>: <body>"
 }
 
+const NOT_BROADCAST = Symbol.for("percolator.notBroadcast");
+/**
+ * Marks a wallet-bridge failure as provably BEFORE the broadcast (signing stage, serialize, a definite refusal), so
+ * sendTx reports the original message ("nothing was sent") instead of running the ambiguity classifier on it.
+ * Returns the same Error object (a non-Error is wrapped), so the message and type are unchanged.
+ */
+export function markNotBroadcast(e: unknown): Error {
+  const err = e instanceof Error ? e : new Error(typeof e === "string" ? e : errorText(e));
+  Object.defineProperty(err, NOT_BROADCAST, { value: true, enumerable: false });
+  return err;
+}
+export function isNotBroadcast(e: unknown): boolean {
+  for (let cur: unknown = e, depth = 0; cur instanceof Error && depth < 4; cur = (cur as { cause?: unknown }).cause, depth++) {
+    if ((cur as unknown as Record<symbol, unknown>)[NOT_BROADCAST] === true) return true;
+  }
+  return false;
+}
+
 /**
  * The wallet-atomic send (signAndSendTransaction) failed: false only when the error proves nothing was broadcast.
  * That is a user decline, the wallet's own pre-broadcast simulation / program refusal, a node refusal text, or a 4xx.
  * Anything else, including a blockhash expiry (the wallet may have sent it first), counts as maybe sent.
  */
 const ATOMIC_REFUSAL =
-  /simulation failed|custom program error|instructionerror|insufficient (funds|lamports)|attempt to debit|signature verification|invalid (params|transaction|request)|too large|failed to deserialize|account not found|user (rejected|declined|denied|cancel)|\b(rejected|declined|denied|cancell?ed|canceled|dismissed)\b|closed (the )?(wallet|popup|window|modal)|user_exited|not approved/i;
+  /transaction simulation failed|custom program error|instructionerror|insufficient (funds|lamports)|attempt to debit|signature verification|invalid (params|transaction|request)|too large|failed to deserialize|account not found|user (rejected|declined|denied|cancel)|\b(rejected|declined|denied|cancell?ed|canceled|dismissed)\b|closed (the )?(wallet|popup|window|modal)|user_exited|not approved/i;
 export function atomicSendMayHaveBroadcast(err: unknown, extractedMsg: string = errorText(err)): boolean {
   const msg = `${extractedMsg} ${errorText(err)}`;
-  if (/already been processed/i.test(msg)) return true;
+  if (/already been processed|upstream rpc request failed/i.test(msg)) return true; // the proxy's -32603 may have forwarded it, even inside "Simulation failed. Message: ..."
   if (ATOMIC_REFUSAL.test(msg)) return false;
   if (/^\s*4(?!08)\d\d\b/.test(extractedMsg)) return false;
   return true;

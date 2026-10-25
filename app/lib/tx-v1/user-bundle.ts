@@ -541,9 +541,10 @@ const V1_REFUSAL_CODES: ReadonlySet<number> = new Set([
  * other shape count as maybe sent: an unknown shape costs a confirmation wait, never a double send.
  */
 export function v1SendMayHaveBroadcast(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/already been processed/i.test(msg)) return true; // it WAS sent (a -32002 by code, but it is on chain)
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === "number") return !V1_REFUSAL_CODES.has(code);
-  const msg = err instanceof Error ? err.message : String(err);
   return !/-32002|Transaction simulation failed/i.test(msg);
 }
 

@@ -28,7 +28,7 @@ import { WalletApiContext, type WalletApi } from "@/hooks/walletApiContext";
 import { useConnectionCompat } from "@/hooks/useWalletCompat";
 import { isDevnetV22Enabled } from "@/lib/v22/flag";
 import { guardSign, noteBlockhash, SIGN_CHAIN_DEVNET } from "@/lib/v22/sign-guard";
-import { sendMayHaveBroadcast } from "@/lib/tx";
+import { markNotBroadcast, sendMayHaveBroadcast } from "@/lib/tx";
 import { chainSignerNote, standardDevnetSigner } from "@/lib/v22/standard-sign";
 
 const bs58 = _bs58 as { decode(str: string): Uint8Array };
@@ -126,23 +126,34 @@ const AdapterWalletApiBridge: FC<{ children: ReactNode }> = ({ children }) => {
   const signAndSendTransaction = useMemo(() => {
     if (!adapterSignTx || !publicKey) return undefined;
     return async (tx: Transaction): Promise<Uint8Array> => {
-      const conn = new Connection(cfg.rpcUrl, "confirmed");
-      if (!tx.recentBlockhash) {
-        const { blockhash } = await conn.getLatestBlockhash("confirmed");
-        tx.recentBlockhash = blockhash;
-        noteBlockhash(blockhash, "wallet bridge signAndSendTransaction (tx arrived without a blockhash)", conn);
+      let signed: Transaction;
+      let wire: Uint8Array;
+      let conn: Connection;
+      try {
+        conn = new Connection(cfg.rpcUrl, "confirmed");
+        if (!tx.recentBlockhash) {
+          const { blockhash } = await conn.getLatestBlockhash("confirmed");
+          tx.recentBlockhash = blockhash;
+          noteBlockhash(blockhash, "wallet bridge signAndSendTransaction (tx arrived without a blockhash)", conn);
+        }
+        if (!tx.feePayer) {
+          tx.feePayer = publicKey;
+        }
+        const d = decideChain();
+        signed = await guarded("adapter signAndSendTransaction", [tx], d, async () => (d.chainSigner ? (await d.chainSigner([tx]))[0] : adapterSignTx(tx)));
+        wire = signed.serialize();
+      } catch (e) {
+        // Everything up to here is the signing stage: nothing has been sent, whatever the wallet's wording
+        // ("Unexpected error", a locked device, a closed popup). sendTx reports the original message.
+        throw markNotBroadcast(e);
       }
-      if (!tx.feePayer) {
-        tx.feePayer = publicKey;
-      }
-      const d = decideChain();
-      const signed = await guarded("adapter signAndSendTransaction", [tx], d, async () => (d.chainSigner ? (await d.chainSigner([tx]))[0] : adapterSignTx(tx)));
-      const wire = signed.serialize(); // a serialize error never left the browser
       try {
         return bs58.decode(await conn.sendRawTransaction(wire));
       } catch (e) {
         // The bytes may be on the wire: hand back the signature so sendTx confirms it instead of reporting "nothing was sent".
         if (signed.signature && sendMayHaveBroadcast(e)) return new Uint8Array(signed.signature);
+        // A definite refusal (preflight, 4xx): the node never forwarded it.
+        if (signed.signature && !sendMayHaveBroadcast(e)) throw markNotBroadcast(e);
         throw e;
       }
     };

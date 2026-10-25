@@ -345,6 +345,7 @@ describe("sendTx atomic signAndSendTransaction path — error detail preservatio
       ["proxy upstream failure", new Error("Upstream RPC request failed")],
       ["blockhash expiry after the wallet may have sent", new Error("Blockhash not found")],
       ["5xx", new Error("504 Gateway Timeout: upstream")],
+      ["SendTransactionError wrapping the proxy -32603", new Error("Simulation failed. Message: Upstream RPC request failed")],
     ])("%s: the 'may still land' class, one send, no rebuild", async (_n, e) => {
       const { err, wallet } = await run(e);
       expect(isConfirmationTimeoutError(err)).toBe(true);
@@ -935,5 +936,29 @@ describe("sendMayHaveBroadcast", () => {
     ["plain blockhash", new Error("Blockhash not found"), false],
   ])("%s -> %s", (_n, err, expected) => {
     expect(sendMayHaveBroadcast(err)).toBe(expected);
+  });
+});
+
+describe("#3570 ambiguity branch also runs on the LAST attempt", () => {
+  it("a skipPreflight send that hit expiry text on the final attempt still confirms by signature, never raw 'nothing was sent'", async () => {
+    const kp = Keypair.generate();
+    const conn = {
+      rpcEndpoint: "https://api.devnet.solana.com",
+      getRecentPrioritizationFees: vi.fn().mockResolvedValue([]),
+      getBalance: vi.fn().mockResolvedValue(1_000_000_000),
+      getLatestBlockhash: vi.fn().mockResolvedValue({ blockhash: "11111111111111111111111111111111", lastValidBlockHeight: 123 }),
+      simulateTransaction: vi.fn().mockResolvedValue({ value: { err: null, logs: [] } }),
+      sendRawTransaction: vi.fn().mockRejectedValue(new Error("Blockhash not found")),
+      getSignatureStatuses: vi.fn().mockResolvedValue({ value: [{ err: null, confirmationStatus: "confirmed" }] }),
+    } as any;
+    const wallet = { publicKey: kp.publicKey, signTransaction: vi.fn(async (t: Transaction) => { t.partialSign(kp); return t; }) };
+    netState.network = "devnet";
+    try {
+      const sig = await sendTx({ connection: conn, wallet, instructions: [], skipPreflight: true, maxRetries: 0 } as never);
+      expect(typeof sig).toBe("string");
+      expect(conn.sendRawTransaction).toHaveBeenCalledTimes(1);
+    } finally {
+      netState.network = "mainnet";
+    }
   });
 });

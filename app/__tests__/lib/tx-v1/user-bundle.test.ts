@@ -379,6 +379,7 @@ describe("sendUserBundle", () => {
       expect(v1SendMayHaveBroadcast(new V1TransportError("sendTransaction", new Error("x")))).toBe(true);
       expect(v1SendMayHaveBroadcast(new Error("something unknown"))).toBe(true);
       expect(v1SendMayHaveBroadcast(new V1RpcError("sendTransaction", -32002, "x"))).toBe(false);
+      expect(v1SendMayHaveBroadcast(new V1RpcError("sendTransaction", -32002, "Transaction simulation failed: This transaction has already been processed"))).toBe(true);
       expect(v1SendMayHaveBroadcast(new Error("RPC sendTransaction failed: -32002 Transaction simulation failed"))).toBe(false);
     });
   });

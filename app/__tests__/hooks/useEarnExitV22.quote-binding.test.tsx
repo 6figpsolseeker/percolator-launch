@@ -180,3 +180,31 @@ describe("floor-stuck failure is flagged", () => {
     expect(result.current.state.floorStuck).toBeFalsy();
   });
 });
+
+describe("an edit while the send is with the wallet", () => {
+  const pending = () => {
+    let resolve!: (v: unknown) => void;
+    const p = new Promise((r) => (resolve = r));
+    return { p, resolve };
+  };
+  it("keeps the in-flight send (no second send is possible) and still reports it landing", async () => {
+    const d = pending();
+    sendExit.mockImplementation(() => d.p);
+    const { result, rerender } = renderHook((p: { shares: bigint }) => useEarnExitV22({ ...base, shares: p.shares }), { initialProps: { shares: 100n } });
+    await act(async () => void (await result.current.getQuote()));
+    let sending!: Promise<void>;
+    await act(async () => {
+      sending = result.current.confirm();
+    });
+    expect(result.current.state.phase).toBe("sending");
+    rerender({ shares: 1000n }); // typed into the amount while signing
+    expect(result.current.state.phase).toBe("sending"); // not idle: Get quote stays disabled
+    await act(async () => {
+      d.resolve({ status: "sent", quote: q(1n), signature: "sigA" });
+      await sending;
+    });
+    expect(result.current.state.phase).toBe("sent");
+    expect(result.current.state.signature).toBe("sigA");
+    expect(sendExit).toHaveBeenCalledTimes(1);
+  });
+});

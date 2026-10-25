@@ -136,6 +136,8 @@ export function useEarnExitV22(p: EarnExitParams) {
   const currentKey = exitQuoteKey({ market: p.market?.toBase58() ?? null, programId: p.programId?.toBase58() ?? null, collateralMint: p.collateralMint?.toBase58() ?? null, sourceDomain: p.sourceDomain, shares: p.shares, mode: p.mode, redeemer: wallet.publicKey?.toBase58() ?? null });
   const keyRef = useRef(currentKey);
   keyRef.current = currentKey;
+  const phaseRef = useRef<ExitPhase>('idle');
+  phaseRef.current = state.phase;
 
   const build = useCallback(async (): Promise<{ input: ExitRunInput; deps: ExitRunDeps } | null> => {
     const payer = wallet.publicKey;
@@ -265,6 +267,9 @@ export function useEarnExitV22(p: EarnExitParams) {
   useEffect(() => {
     if (prevKey.current === currentKey) return;
     prevKey.current = currentKey;
+    // A send already handed to the wallet is not undone by an edit: dropping it re-enables Get quote -> Withdraw while it
+    // may still land (a second send), and loses its result. The edited inputs hide any later quote through `view`.
+    if (phaseRef.current === 'sending') return;
     runId.current++;
     setState((s) => (s.phase === 'sent' ? s : IDLE));
   }, [currentKey]);
